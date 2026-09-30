@@ -42,6 +42,7 @@ The canonical foundation includes:
 - Security/Privacy;
 - UX direction;
 - Roadmap;
+- Delivery Order;
 - Foundation Decisions;
 - Implementation Plan;
 - Governance;
@@ -57,7 +58,11 @@ The canonical foundation includes:
 - Engineering Standards for typed configuration, i18n, domain constants, APIs, errors, observability and no-magic-value rules;
 - `TapJob` adopted as the working product identity and the GitHub repository has been renamed to `ricardoo081/tapjob`;
 - eight foundation topics resolved in `FOUNDATION_DECISIONS.md`: user journey, infrastructure/auth, design/performance, privacy/security, job-source ordering, monetization/entitlements, analytics/operations and engineering governance;
-- product positioning locked: candidate-side job-search execution, not a LinkedIn/social-network clone; AIApply is primary reference, Huntr/Simplify are complementary references, and the 10 audited repos remain implementation accelerators.
+- product positioning locked: candidate-side job-search execution, not a LinkedIn/social-network clone; AIApply is primary reference, Huntr/Simplify are complementary references, and the 10 audited repos remain implementation accelerators;
+- customer-surface order locked: Foundation -> Minimum Career Core -> WhatsApp -> Mobile App -> Browser Extension;
+- WhatsApp may operate independently of the app over the shared Career Core;
+- Evolution API approved as initial channel transport behind `MessagingChannel`, with official Cloud API migration path;
+- n8n limited to auxiliary bridge/orchestration/ops and EasyPanel limited to deployment/operations convenience.
 
 ## 2. Not implemented
 

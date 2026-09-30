@@ -174,7 +174,17 @@ No implementation assumptions before dedicated research.
 ## 11. WhatsApp
 
 ### Target
-Official WhatsApp Business Platform adapter for production.
+Provider-neutral WhatsApp channel with a deliberate migration path to the official WhatsApp Business Platform.
+
+### Initial provider
+The owner's existing Evolution API deployment is approved for development and controlled early validation to reduce cost and accelerate the WhatsApp-first vertical slice.
+
+Evolution must sit behind `MessagingChannel`. TapJob domain models cannot depend on Evolution/Baileys-specific webhook or session semantics.
+
+Evolution API supports both Baileys-based WhatsApp Web connectivity and the official WhatsApp Cloud API, which helps preserve a provider transition path.
+
+### Broad commercial scale
+Re-evaluate and migrate the transport to the official WhatsApp Cloud API when scale, reliability, account/policy or commercial requirements justify it.
 
 Capabilities:
 - inbound commands;
@@ -192,7 +202,13 @@ Capabilities:
 - sendInteractive;
 - delivery status.
 
-A self-hosted adapter such as Evolution API may be used for controlled development experiments, but production strategy must remain compatible with official platform requirements.
+Initial implementation uses Evolution API under the adapter boundary. The channel contract, tests and normalized events must make the later Cloud API transport swap possible without changing Career Core business logic.
+
+### n8n
+n8n may be used for auxiliary bridges, operational workflows, prototyping and non-critical integration glue. It must not own TapJob canonical state, authorization, application transitions, matching, idempotency or Career Agent policy.
+
+### EasyPanel
+EasyPanel may operate TapJob Docker services on the existing Linux server, but repository/container configuration remains reproducible without hidden EasyPanel-only business configuration.
 
 ## 12. Calendar
 

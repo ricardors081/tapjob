@@ -41,6 +41,11 @@ This is the current high-level decision register. Structural decisions may later
 | D-035 | TapJob is a candidate-side job-search execution platform, not a LinkedIn-style social network; job feed means opportunity feed and networking means private contacts/outreach/follow-up | Accepted | 2026-09-30 |
 | D-036 | AIApply is the primary product archetype; Huntr and Simplify are complementary product references; the 10 audited repositories are implementation accelerators/code donors rather than product-direction authorities | Accepted | 2026-09-30 |
 | D-037 | Initial geographic/product focus is Brazil; architecture/i18n/integration boundaries must support later Latin America and broader international expansion without changing the core product thesis | Accepted | 2026-09-30 |
+| D-038 | Customer-surface delivery order is Foundation -> Minimum Career Core -> WhatsApp -> Mobile App -> Browser Extension; this changes sequencing only, not approved product scope | Accepted | 2026-09-30 |
+| D-039 | WhatsApp is an independent first-class channel over the same Career Core and does not depend on the mobile app; channel identities link to one internal User | Accepted | 2026-09-30 |
+| D-040 | Existing Evolution API is the initial WhatsApp transport for development/controlled early validation behind the provider-neutral MessagingChannel adapter; official WhatsApp Cloud API remains the migration target for broad commercial scale | Accepted | 2026-09-30 |
+| D-041 | n8n is allowed only as auxiliary bridge/orchestration/ops tooling; it cannot own canonical user state, domain rules, authorization, idempotency, agent policy or application state | Accepted | 2026-09-30 |
+| D-042 | EasyPanel may be used as a deployment/operations UI on the existing Linux server but is not an architectural dependency or hidden source of runtime configuration | Accepted | 2026-09-30 |
 
 ## Pending decisions
 

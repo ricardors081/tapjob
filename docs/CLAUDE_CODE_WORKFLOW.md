@@ -6,7 +6,33 @@ Use Claude Code as an implementation agent without letting session context becom
 
 GitHub documentation, ADRs, work packages, tests and PR evidence remain authoritative.
 
-## 2. Recommended skill/tool stack
+## 2. Recommended Windows execution
+
+For the owner's current Windows workflow, use **Claude Code CLI launched from PowerShell in the local TapJob clone**.
+
+Requirements:
+- Windows 10+;
+- Git for Windows;
+- Claude Code installed and authenticated;
+- project opened at the repository root.
+
+Claude Code supports native Windows when Git for Windows/Git Bash is available. If discovery of Git Bash fails, configure `CLAUDE_CODE_GIT_BASH_PATH` in PowerShell.
+
+WSL2 remains a valid fallback for Linux parity, but it is not required for the initial TapJob workflow.
+
+Preferred daily pattern:
+
+```powershell
+cd C:\Projetos\tapjob
+git status
+git switch main
+git pull
+claude
+```
+
+Claude works on a scoped branch. Deployment/operations on the Linux server happen through Git/CI/SSH/EasyPanel rather than developing directly in production.
+
+## 3. Recommended skill/tool stack
 
 ### A. grill-me — requirements/design gate
 Use before a work package or expensive architectural choice.
@@ -52,7 +78,21 @@ Purpose:
 Official plugin reference:
 https://github.com/anthropics/claude-plugins-official/tree/main/plugins/code-review
 
-### D. Anthropic frontend-design
+### D. Anthropic security-guidance — baseline security guard
+Use from the first implementation PR.
+
+Purpose:
+- warn about dangerous code patterns during edits;
+- review diffs for high-severity vulnerabilities;
+- review commits for cross-file security issues;
+- catch classes such as injection, SSRF, hardcoded secrets, IDOR/auth bypass and unsafe deserialization.
+
+It is an assistive guard, not a replacement for CI scanning or independent review.
+
+Official plugin reference:
+https://github.com/anthropics/claude-plugins-official/tree/main/plugins/security-guidance
+
+### E. Anthropic frontend-design — install when mobile UI work starts
 Use when implementing or reshaping UI.
 
 Purpose:
@@ -65,7 +105,7 @@ It does not override TapJob design tokens or product UX rules.
 Official plugin reference:
 https://github.com/anthropics/claude-plugins-official/tree/main/plugins/frontend-design
 
-### E. Expo official skills
+### F. Expo official skills — install when mobile work starts
 Use for every Expo/EAS implementation task.
 
 Install/use official Expo agent skills rather than relying on stale generic React Native knowledge.
@@ -73,23 +113,10 @@ Install/use official Expo agent skills rather than relying on stale generic Reac
 Reference:
 https://github.com/expo/skills
 
-### F. repo-security-review
-Use:
-- before adopting a large upstream module;
-- before security-sensitive PRs;
-- before release.
+### G. Superpowers — optional, not baseline
+Superpowers provides planning, TDD, debugging and verification workflows.
 
-Reference:
-https://github.com/Consensys/repo-security-review
-
-### G. Superpowers — optional engineering discipline
-Useful subskills:
-- writing plans;
-- test-driven development;
-- systematic debugging;
-- verification before completion.
-
-Avoid running overlapping planning frameworks blindly. TapJob's `AGENTS.md` and governance win if a skill conflicts with repository policy.
+Do not enable it by default together with overlapping planning workflows unless a concrete gap appears. TapJob already has repository governance plus `grill-me` and `feature-dev`. If installed later, repository documentation always wins on conflicts.
 
 Reference:
 https://github.com/obra/superpowers
@@ -98,21 +125,29 @@ https://github.com/obra/superpowers
 
 Use the official Anthropic marketplace for Anthropic-authored plugins. Exact CLI behavior can change, so verify with `claude plugin marketplace list` / `/plugins` if a command differs in the installed Claude Code version.
 
-Suggested baseline:
+### Baseline now — Foundation / Career Core / WhatsApp
 
-```bash
-claude plugin marketplace add anthropics/claude-plugins-official
-claude plugin install feature-dev@claude-plugins-official
-claude plugin install code-review@claude-plugins-official
-claude plugin install frontend-design@claude-plugins-official
-claude plugin install expo@claude-plugins-official
+Inside Claude Code:
+
+```text
+/plugin marketplace add anthropics/claude-plugins-official
+/plugin install feature-dev@claude-plugins-official
+/plugin install code-review@claude-plugins-official
+/plugin install security-guidance@claude-plugins-official
 ```
 
-Install `grill-me` and `repo-security-review` from their repositories following their own installation instructions.
+Keep the existing `grill-me` skill installed.
 
-Do not install a large overlapping skill pack just because it exists. Start with this baseline; add optional skills only when a concrete workflow gap appears.
+### Add later — Mobile App stage
 
-## 3. Standard Claude Code cycle
+```text
+/plugin install frontend-design@claude-plugins-official
+/plugin install expo@claude-plugins-official
+```
+
+Do not install a large overlapping skill pack just because it exists. Add a plugin when it closes a concrete workflow gap.
+
+## 4. Standard Claude Code cycle
 
 ```text
 Read AGENTS + PROJECT_STATE
@@ -146,7 +181,7 @@ CI green at latest HEAD
 Merge
 ```
 
-## 4. Prompt to start a new Claude Code session
+## 5. Prompt to start a new Claude Code session
 
 Use this structure:
 
@@ -173,7 +208,7 @@ Before editing, show:
 5. upstream source code you intend to reuse, with repo/SHA/path.
 ```
 
-## 5. Upstream code rule
+## 6. Upstream code rule
 
 Claude must never be told simply:
 
@@ -190,7 +225,7 @@ Instead it must receive:
 
 This prevents architecture drift.
 
-## 6. Checkpoint size
+## 7. Checkpoint size
 
 Prefer checkpoints that can be independently reviewed.
 
@@ -203,7 +238,7 @@ Examples:
 
 Do not ask Claude to implement an entire phase in one unreviewable PR.
 
-## 7. Multi-agent usage
+## 8. Multi-agent usage
 
 Useful roles:
 - Architect;
@@ -218,7 +253,7 @@ One agent can implement; a different agent should review.
 
 Avoid multiple implementation agents editing the same module simultaneously.
 
-## 8. Definition of completion for Claude
+## 9. Definition of completion for Claude
 
 Claude may only report a checkpoint as complete when:
 - working tree/diff inspected;

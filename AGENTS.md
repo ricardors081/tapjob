@@ -42,16 +42,17 @@ Antes de propor ou alterar código:
 13. `docs/UX_DESIGN.md`
 14. `docs/DESIGN_SYSTEM.md`
 15. `docs/FOUNDATION_DECISIONS.md`
-16. `docs/ROADMAP.md`
-17. `docs/IMPLEMENTATION_PLAN.md`
-18. `docs/SOURCE_REUSE_BLUEPRINT.md`
-19. `docs/SOURCE_REUSE_LEDGER.md`
-20. `docs/CLAUDE_CODE_WORKFLOW.md`
-21. `docs/PROJECT_STATE.md`
-22. `docs/GOVERNANCE.md`
-23. `docs/DECISIONS.md`
-24. `docs/REFERENCES.md`
-25. `docs/OPEN_QUESTIONS.md`
+16. `docs/DELIVERY_ORDER.md`
+17. `docs/ROADMAP.md`
+18. `docs/IMPLEMENTATION_PLAN.md`
+19. `docs/SOURCE_REUSE_BLUEPRINT.md`
+20. `docs/SOURCE_REUSE_LEDGER.md`
+21. `docs/CLAUDE_CODE_WORKFLOW.md`
+22. `docs/PROJECT_STATE.md`
+23. `docs/GOVERNANCE.md`
+24. `docs/DECISIONS.md`
+25. `docs/REFERENCES.md`
+26. `docs/OPEN_QUESTIONS.md`
 
 ## 3. Fonte de verdade
 

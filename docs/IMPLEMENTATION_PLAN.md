@@ -2,9 +2,19 @@
 
 This file translates roadmap into executable work packages.
 
+## Delivery sequence
+
+Customer-surface priority is defined in `DELIVERY_ORDER.md`:
+
+```text
+Foundation -> Minimum Career Core -> WhatsApp -> Mobile App -> Browser Extension
+```
+
+Existing domain work packages remain authoritative for scope. After WP0.1/WP0.2, checkpoints must be sliced to reach the minimum WhatsApp vertical journey before building the full mobile customer experience.
+
 ## Rules
 
-- Work packages are sequential unless explicitly marked parallel-safe.
+- Work packages are sequential unless explicitly marked parallel-safe or the delivery-order document defines an approved minimal vertical slice.
 - Each WP must have its own branch/PR or a tightly scoped PR series.
 - Do not start a downstream WP while dependencies are unverified.
 - Update `PROJECT_STATE.md` after each accepted WP.
@@ -112,9 +122,9 @@ Resolve pending foundational ADRs.
 - work authorization answers;
 - salary/location preferences.
 
-### Mobile
-- onboarding;
-- profile review/edit.
+### Channel-first
+- API/use cases must support WhatsApp onboarding first;
+- full mobile onboarding/profile editing is implemented in the later Mobile App surface stage.
 
 ### Reuse plan
 - PORT source-backed profile/evidence concepts from career-ops.
@@ -196,12 +206,8 @@ Deterministic tests + AI evals.
 
 ## WP2.3 — Job Feed & Alerts
 
-### Mobile
-- feed;
-- detail;
-- filters;
-- save/dismiss;
-- watchlists.
+### Surface sequencing
+The underlying feed/search/filter APIs can be built before the app. The full visual mobile feed/detail/filter experience is delivered after the WhatsApp-first vertical slice.
 
 ### Backend
 - relevance ordering;
@@ -311,7 +317,13 @@ No generated fact without Professional Truth Store evidence.
 
 ---
 
-## WP4.3 — WhatsApp Adapter
+## WP4.3 — WhatsApp-first Product Surface
+
+### Initial transport
+- Evolution API behind `MessagingChannel`;
+- normalize provider events immediately;
+- no domain code depends on Evolution/Baileys webhook shapes;
+- preserve migration path to official WhatsApp Cloud API.
 
 ### Deliver
 - inbound webhook;
@@ -328,7 +340,7 @@ No generated fact without Professional Truth Store evidence.
 - Do not import WAHA or browser-session assumptions into the production adapter.
 
 ### Constraint
-Production adapter must align with official WhatsApp Business Platform requirements.
+Evolution is an initial transport for development/controlled early validation. Broad commercial scale must re-evaluate/migrate to the official WhatsApp Cloud API as documented in `DELIVERY_ORDER.md`.
 
 ---
 

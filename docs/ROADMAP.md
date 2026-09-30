@@ -2,6 +2,20 @@
 
 Roadmap is capability-based, not calendar promise.
 
+## Delivery priority overlay
+
+The canonical customer-surface order is defined in `DELIVERY_ORDER.md`:
+
+```text
+Foundation
+  -> Minimum Career Core
+  -> WhatsApp
+  -> Mobile App
+  -> Browser Extension
+```
+
+The capability phases below remain valid. Their implementation checkpoints must be sliced so the WhatsApp vertical journey is reached before the full mobile surface, without weakening domain/security/test requirements.
+
 ## Phase 0 — Foundation
 
 Goal: make repository safe for multi-agent execution.
@@ -32,7 +46,8 @@ Deliver:
 - resume import;
 - preferences;
 - canonical database;
-- basic mobile shell.
+- channel-ready contracts and identity model;
+- only the minimal mobile workspace/shell required by repository foundation; full customer mobile experience comes after WhatsApp.
 
 Exit journey:
 user creates/imports profile and sees confirmed structured facts.
@@ -69,21 +84,37 @@ Deliver:
 Exit:
 user opens a job and gets a faithful application kit.
 
-## Phase 4 — Tracking & Agent
+## Phase 4 — Agent, Tracking & WhatsApp-first Surface
 
 Deliver:
 - applications pipeline;
 - timeline/tasks;
-- Career Agent mobile;
-- core tools;
+- core Career Agent tools;
 - confirmation policies;
-- WhatsApp adapter;
-- deep links.
+- minimal application tracking/timeline;
+- WhatsApp adapter and channel identity;
+- WhatsApp onboarding/commands/documents/alerts;
+- deep links ready for later mobile handoff.
 
 Exit:
-same job/application can be managed in mobile and WhatsApp.
+a user can obtain meaningful TapJob value end-to-end through WhatsApp without requiring the mobile app.
 
-## Phase 5 — Assisted Apply
+## Phase 5 — Mobile App
+
+Deliver:
+- polished Home;
+- job feed/search/filter;
+- Resume Studio;
+- applications/Kanban/timeline;
+- agent chat;
+- profile/settings;
+- interview/document/analytics surfaces as approved;
+- deep-link handoff from WhatsApp.
+
+Exit:
+the same Career Core becomes a premium visual control plane on mobile.
+
+## Phase 6 — Assisted Apply
 
 Deliver:
 - Apply Engine capability registry;
@@ -97,7 +128,7 @@ Deliver:
 Exit:
 user can complete unsupported portal applications with substantially less repetitive work.
 
-## Phase 6 — Inbox Intelligence
+## Phase 7 — Inbox Intelligence
 
 Deliver:
 - Gmail OAuth;
@@ -112,7 +143,7 @@ Deliver:
 Exit:
 common hiring e-mails update pipeline accurately with review path for ambiguity.
 
-## Phase 7 — Interviews & Analytics
+## Phase 8 — Interviews & Analytics
 
 Deliver:
 - interview scheduler/internal calendar;
@@ -126,7 +157,7 @@ Deliver:
 Exit:
 user can understand and improve the whole search funnel.
 
-## Phase 8 — Brazil official integrations
+## Phase 9 — Brazil official integrations
 
 Priority:
 - Gupy partnership/integration exploration;
@@ -137,7 +168,7 @@ Priority:
 Exit:
 at least one meaningful official application integration beyond hosted ATS discovery.
 
-## Phase 9 — Expansion
+## Phase 10 — Expansion
 
 - Outlook/Calendar;
 - voice interview practice;
@@ -163,7 +194,7 @@ Always active:
 
 The MVP is not "all roadmap phases".
 
-Commercial beta target comprises Phases 0–4 with selected Phase 5 capabilities.
+Commercial beta target is WhatsApp-first after the minimum Career Core, followed by the mobile app; selected Assisted Apply capabilities can enter once the profile/resume/application contracts are stable.
 
 Inbox Intelligence can enter beta behind feature flag depending on OAuth/security readiness.
 

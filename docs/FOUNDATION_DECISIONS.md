@@ -7,6 +7,20 @@
 
 This document resolves the eight foundation topics that must be clear before runtime implementation starts.
 
+## Delivery sequence
+
+The product-surface order is:
+
+```text
+1. Engineering Foundation
+2. Minimum Career Core
+3. WhatsApp
+4. Mobile App
+5. Browser Extension
+```
+
+This does not change the approved feature scope. See `DELIVERY_ORDER.md` for channel responsibilities, identity linking and provider boundaries.
+
 ## Product positioning guardrail
 
 TapJob is a candidate-side job-search execution platform, not a LinkedIn replacement.

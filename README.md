@@ -47,6 +47,7 @@ Se você é um agente ou desenvolvedor novo:
 - [UX & Design](docs/UX_DESIGN.md)
 - [Design System & Tokens](docs/DESIGN_SYSTEM.md)
 - [Engineering Standards](docs/ENGINEERING_STANDARDS.md)
+- [Delivery Order](docs/DELIVERY_ORDER.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Foundation Decisions](docs/FOUNDATION_DECISIONS.md)
 - [Implementation Plan](docs/IMPLEMENTATION_PLAN.md)
