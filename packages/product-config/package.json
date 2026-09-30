@@ -1,0 +1,14 @@
+{
+  "name": "@tapjob/product-config",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Canonical product identity (product.json) with typed TypeScript access.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./product.json": "./product.json"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

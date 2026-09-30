@@ -1,0 +1,99 @@
+# Local development stack. Usage (from the repository root):
+#   cp infra/.env.example infra/.env
+#   docker compose -f infra/compose.yaml up --build
+#
+# All configuration comes from infra/.env; required variables fail fast when missing.
+# Production topology (Cloudflare Tunnel, backups, secrets management) is defined in a later work
+# package and must stay reproducible from this repository (no EasyPanel-only state).
+
+name: tapjob
+
+x-backend: &backend
+  build:
+    context: ..
+    dockerfile: infra/docker/backend.Dockerfile
+  image: tapjob-backend:local
+  restart: unless-stopped
+
+x-database-env: &database-env
+  APP_ENV: ${APP_ENV:?set APP_ENV in infra/.env}
+  LOG_LEVEL: ${LOG_LEVEL:?set LOG_LEVEL in infra/.env}
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:?}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in infra/.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in infra/.env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in infra/.env}
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:?}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:?}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    <<: *backend
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *database-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *backend
+    environment:
+      <<: *database-env
+    ports:
+      - "127.0.0.1:${API_HOST_PORT:?}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  worker:
+    <<: *backend
+    command: ["celery", "-A", "tapjob_worker.main:app", "worker", "--loglevel", "${LOG_LEVEL:?}"]
+    environment:
+      APP_ENV: ${APP_ENV:?}
+      LOG_LEVEL: ${LOG_LEVEL:?}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A tapjob_worker.main:app inspect ping --destination celery@$$HOSTNAME --timeout 5"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  postgres-data:

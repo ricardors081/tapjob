@@ -1,0 +1,13 @@
+{
+  "productName": "TapJob",
+  "shortName": "TapJob",
+  "legalName": null,
+  "defaultLocale": "pt-BR",
+  "defaultCurrency": "BRL",
+  "deepLinkScheme": "tapjob",
+  "supportEmail": null,
+  "domains": {
+    "web": null,
+    "api": null
+  }
+}

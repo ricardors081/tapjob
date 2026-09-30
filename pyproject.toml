@@ -1,0 +1,82 @@
+# Virtual uv workspace root: holds shared Python tooling configuration and the single lockfile.
+# It is not an installable package itself.
+
+[tool.uv.workspace]
+members = ["services/api", "services/worker", "packages/product-config"]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "mypy>=2.3.1",
+    "pip-audit>=2.10.1",
+    "pytest>=9.1.1",
+    "ruff>=0.16.9",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["node_modules"]
+
+[tool.ruff.lint]
+select = [
+  "E",     # pycodestyle
+  "W",
+  "F",     # pyflakes
+  "I",     # isort
+  "N",     # pep8-naming
+  "UP",    # pyupgrade
+  "B",     # bugbear
+  "S",     # bandit security checks
+  "SIM",
+  "RUF",
+  "PTH",
+  "DTZ",   # naive datetimes (timestamps must be timezone-aware UTC)
+  "T20",   # no print() in runtime code
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["tapjob_api", "tapjob_worker", "tapjob_product_config"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S101"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+files = [
+  "services/api/src",
+  "services/api/tests",
+  "services/worker/src",
+  "services/worker/tests",
+  "packages/product-config/src",
+  "packages/product-config/tests",
+]
+explicit_package_bases = true
+mypy_path = [
+  "services/api/src",
+  "services/worker/src",
+  "packages/product-config/src",
+]
+
+[[tool.mypy.overrides]]
+# Celery ships without type information.
+module = ["celery", "celery.*"]
+ignore_missing_imports = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+[tool.pytest.ini_options]
+testpaths = [
+  "services/api/tests",
+  "services/worker/tests",
+  "packages/product-config/tests",
+]
+addopts = ["--strict-markers", "--import-mode=importlib", "-m", "not integration"]
+markers = [
+  "integration: requires real infrastructure (PostgreSQL); run with `pytest -m integration`",
+]

@@ -46,6 +46,7 @@ This is the current high-level decision register. Structural decisions may later
 | D-040 | Existing Evolution API is the initial WhatsApp transport for development/controlled early validation behind the provider-neutral MessagingChannel adapter; official WhatsApp Cloud API remains the migration target for broad commercial scale | Accepted | 2026-09-30 |
 | D-041 | n8n is allowed only as auxiliary bridge/orchestration/ops tooling; it cannot own canonical user state, domain rules, authorization, idempotency, agent policy or application state | Accepted | 2026-09-30 |
 | D-042 | EasyPanel may be used as a deployment/operations UI on the existing Linux server but is not an architectural dependency or hidden source of runtime configuration | Accepted | 2026-09-30 |
+| D-043 | WP0.1 foundation tooling: uv workspace (single lockfile) for Python, npm workspaces for JS, one backend image for api/worker/migrate, dependency-free DTCG token generator, WP0.1 split into checkpoints A/B — see `docs/adr/0001-monorepo-foundation-tooling.md` | Accepted | 2026-09-30 |
 
 ## Pending decisions
 

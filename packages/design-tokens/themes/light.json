@@ -1,0 +1,46 @@
+{
+  "$schema": "https://www.designtokens.org/schemas/2025.10/format.json",
+  "$description": "Light theme semantic colors. Values alias primitives from tokens.json.",
+  "color": {
+    "$type": "color",
+    "background": {
+      "canvas": { "$value": "{primitive.color.slate.50}" },
+      "surface": { "$value": "{primitive.color.white}" }
+    },
+    "text": {
+      "primary": { "$value": "{primitive.color.slate.900}" },
+      "secondary": { "$value": "{primitive.color.slate.600}" },
+      "inverse": { "$value": "{primitive.color.white}" }
+    },
+    "border": {
+      "default": { "$value": "{primitive.color.slate.200}" }
+    },
+    "brand": {
+      "accent": { "$value": "{primitive.color.orange.500}" }
+    },
+    "action": {
+      "primary": {
+        "background": { "$value": "{primitive.color.blue.600}" },
+        "pressed": {
+          "$description": "Primary strong: pressed (native) / hover (web) state.",
+          "$value": "{primitive.color.blue.700}"
+        },
+        "foreground": { "$value": "{primitive.color.white}" }
+      }
+    },
+    "feedback": {
+      "success": {
+        "foreground": { "$value": "{primitive.color.green.600}" }
+      },
+      "warning": {
+        "foreground": { "$value": "{primitive.color.amber.600}" }
+      },
+      "error": {
+        "foreground": { "$value": "{primitive.color.red.600}" }
+      },
+      "info": {
+        "foreground": { "$value": "{primitive.color.sky.600}" }
+      }
+    }
+  }
+}

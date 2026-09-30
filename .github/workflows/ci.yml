@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Third-party actions are pinned to full commit SHAs (Dependabot keeps them current).
+permissions:
+  contents: read
+
+env:
+  # Same uv release as infra/docker/backend.Dockerfile; bump both together.
+  UV_VERSION: "0.12.21"
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (lint, types, unit tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          version: ${{ env.UV_VERSION }}
+      - run: uv sync --locked --all-packages
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - run: uv run pytest
+
+  backend-integration:
+    name: Backend integration (PostgreSQL migrations)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: tapjob
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: tapjob_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tapjob -d tapjob_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      APP_ENV: development
+      DATABASE_URL: postgresql+psycopg://tapjob:ci-only-password@localhost:5432/tapjob_ci
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          version: ${{ env.UV_VERSION }}
+      - run: uv sync --locked --all-packages
+      - run: uv run pytest -m integration
+
+  packages:
+    name: Shared packages (tokens, product config)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run tokens:check
+      - run: npm run typecheck
+      - run: npm test
+
+  docker:
+    name: Docker build and compose smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Prepare local environment file
+        run: cp infra/.env.example infra/.env
+      - name: Build images
+        run: docker compose -f infra/compose.yaml build
+      - name: Start stack
+        run: docker compose -f infra/compose.yaml up --detach --wait --wait-timeout 180 postgres redis api worker
+      - name: Health check through published port
+        run: |
+          set -a; . infra/.env; set +a
+          curl --fail --silent --show-error "http://127.0.0.1:${API_HOST_PORT}/health"
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose -f infra/compose.yaml logs --no-color
+      - name: Tear down
+        if: always()
+        run: docker compose -f infra/compose.yaml down --volumes
+
+  security:
+    name: Secret scan and dependency audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # gitleaks-action lists the pull request's commits to scan them.
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv sync --locked --all-packages
+      - name: Python dependency audit (pip-audit pinned in uv.lock)
+        # The export is fully pinned, so pip-audit audits it as-is (--no-deps --disable-pip) instead
+        # of re-resolving with pip.
+        run: |
+          uv export --locked --all-packages --no-emit-workspace --no-hashes --format requirements-txt > "$RUNNER_TEMP/requirements.txt"
+          uv run --locked pip-audit --strict --no-deps --disable-pip --requirement "$RUNNER_TEMP/requirements.txt"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      - name: npm dependency audit
+        run: npm audit --audit-level=high

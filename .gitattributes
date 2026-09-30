@@ -1,0 +1,6 @@
+# Normalize line endings so Windows clones and Linux/Docker builds see identical files.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary

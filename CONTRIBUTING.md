@@ -13,7 +13,19 @@ Read [AGENTS.md](AGENTS.md) and [docs/GOVERNANCE.md](docs/GOVERNANCE.md) before 
 7. Resolve review findings.
 8. Merge only with green CI and verified latest HEAD.
 
-Before WP0.1 establishes CI, the only allowed exception is the documented pre-CI bootstrap exception in `docs/GOVERNANCE.md`. It does not apply to feature/runtime code.
+Before WP0.1 establishes CI, the only allowed exception is the documented pre-CI bootstrap exception in `docs/GOVERNANCE.md`. It does not apply to feature/runtime code. Once `.github/workflows/ci.yml` is on `main`, the exception no longer applies.
+
+## Local checks
+
+Run before pushing (same gates as CI, except the Docker, integration and security jobs):
+
+```bash
+uv sync --locked --all-packages
+npm ci
+npm run check
+```
+
+After editing `packages/design-tokens/tokens.json` or `themes/*.json`, run `npm run tokens:build` and commit the regenerated file.
 
 ## Commit guidance
 

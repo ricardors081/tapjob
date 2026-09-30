@@ -3,7 +3,7 @@
 **As of:** 2026-09-30  
 **Repository:** `ricardoo081/tapjob`  
 **Phase:** 0 — Foundation  
-**Code status:** NOT STARTED
+**Code status:** WP0.1-A IMPLEMENTED (repository/monorepo foundation, no product features). WP0.1 overall: IN PROGRESS.
 
 This file must reflect reality only.
 
@@ -64,14 +64,29 @@ The canonical foundation includes:
 - Evolution API approved as initial channel transport behind `MessagingChannel`, with official Cloud API migration path;
 - n8n limited to auxiliary bridge/orchestration/ops and EasyPanel limited to deployment/operations convenience.
 
+### Engineering foundation — WP0.1-A
+See `docs/adr/0001-monorepo-foundation-tooling.md` (D-043).
+- monorepo layout: `services/api`, `services/worker`, `packages/{product-config,design-tokens,contracts}`, `apps/mobile` (placeholder), `infra/`;
+- uv Python workspace (single `uv.lock`) and npm workspaces;
+- `packages/product-config`: canonical `product.json`, validated Python loader, typed TS access;
+- `packages/design-tokens`: DTCG `tokens.json` + light theme, dependency-free generator, generated `native.ts`;
+- `services/api`: FastAPI app factory, typed fail-fast settings, `/health` liveness endpoint, JSON logs with request IDs, SQLAlchemy base with naming conventions, Alembic with an **empty** baseline migration;
+- `services/worker`: Celery app skeleton (JSON-only payloads, late ack), no product tasks;
+- `infra/`: backend Dockerfile (non-root) and local Docker Compose stack (postgres, redis, migrate, api, worker) configured only via `infra/.env`;
+- GitHub Actions CI: ruff, mypy strict, pytest, PostgreSQL migration test, token checks, Docker/Compose smoke test, gitleaks, pip-audit, npm audit; Dependabot.
+
+When this CI workflow is on `main`, the pre-CI bootstrap exception in `GOVERNANCE.md` no longer applies.
+
 ## 2. Not implemented
 
-No production functionality exists yet.
+No production functionality exists yet. Backend code is limited to the WP0.1-A skeleton above.
 
 Specifically NOT implemented:
-- backend;
-- database;
-- mobile app;
+- any domain model, table or business endpoint (database schema is an empty baseline);
+- readiness checks against PostgreSQL/Redis;
+- Sentry / metrics wiring;
+- i18n layer;
+- mobile app (not even the shell: WP0.1-B);
 - web app;
 - browser extension;
 - WhatsApp integration;
@@ -85,8 +100,7 @@ Specifically NOT implemented:
 - apply engine;
 - Gmail integration;
 - notifications;
-- CI/CD;
-- deployment;
+- CD / deployment (CI exists; nothing is deployed);
 - monitoring.
 
 ## 3. Current risks
@@ -129,9 +143,13 @@ WP0.1 still installs CI and the team follows the documented PR/latest-HEAD revie
 
 ## 4. Immediate next work package
 
-### WP0.1 — Repository & Engineering Foundation
+### WP0.1 — Repository & Engineering Foundation (IN PROGRESS)
 
-Deliverables:
+Checkpoints:
+- **WP0.1-A — IMPLEMENTED:** repository/monorepo foundation (section 1).
+- **WP0.1-B — next:** minimal Expo mobile shell consuming design tokens/product config with a typed public config; ESLint/Prettier for TypeScript; `pt-BR` i18n foundation; readiness checks; Sentry wiring; magic-value lint strategy; CODEOWNERS if a team exists.
+
+Original WP0.1 deliverables:
 - project monorepo/scaffold decision;
 - backend skeleton;
 - mobile skeleton;
@@ -209,6 +227,6 @@ On every significant PR:
 
 ## 7. Current authoritative conclusion
 
-TapJob has a defined product and architecture baseline but **no application code yet**.
+TapJob has a defined product and architecture baseline and a repository/engineering skeleton (WP0.1-A), but **no product functionality yet**.
 
-The correct next action is engineering foundation, not feature implementation.
+The correct next action is to finish engineering foundation (WP0.1-B), not feature implementation.

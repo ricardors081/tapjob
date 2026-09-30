@@ -2,7 +2,7 @@
 
 > Plataforma pessoal de carreira para descobrir vagas, preparar candidaturas, aplicar com o nível de automação permitido, acompanhar processos e evoluir até a contratação.
 
-**Status atual:** Foundation / documentação canônica.  
+**Status atual:** Foundation: documentação canônica + fundação do monorepo (WP0.1-A). Sem funcionalidades de produto.  
 **Mercado inicial:** Brasil.  
 **Aplicação em produção:** ainda não existe.
 
@@ -69,6 +69,45 @@ Cada candidatura usa um dos modos:
 `OFFICIAL_API -> ASSISTED_EXTENSION -> DEEP_LINK -> MANUAL -> DISABLED`
 
 A IA nunca deve inventar experiência, skill, formação ou resposta legal. O **Professional Truth Store** é a fonte de verdade para materiais profissionais.
+
+## Estrutura do repositório
+
+```text
+apps/mobile/              app Expo (placeholder; shell em WP0.1-B)
+services/api/             backend FastAPI (Career Core), settings tipados, Alembic
+services/worker/          worker Celery (mesmo código do backend)
+packages/product-config/  identidade do produto (product.json)
+packages/design-tokens/   tokens DTCG + saída gerada
+packages/contracts/       contratos de API (decisão em WP0.2)
+infra/                    Dockerfile e Docker Compose local
+docs/                     documentação canônica e ADRs
+```
+
+## Desenvolvimento local
+
+Pré-requisitos: Git, [Node.js](https://nodejs.org) (versão em `.nvmrc`), [uv](https://docs.astral.sh/uv/) e Docker (Docker Desktop no Windows). Funciona no Windows (PowerShell) e no Linux.
+
+```bash
+# dependências (lockfiles obrigatórios)
+uv sync --locked --all-packages
+npm ci
+
+# todas as checagens locais (lint, format, tipos, testes, tokens)
+npm run check
+
+# stack local: postgres, redis, migrate, api, worker
+cp infra/.env.example infra/.env        # PowerShell: Copy-Item infra/.env.example infra/.env
+docker compose -f infra/compose.yaml up --build
+curl http://127.0.0.1:8000/health
+```
+
+Outros comandos:
+
+- `npm run tokens:build`: regenera `packages/design-tokens/generated/native.ts` depois de editar os tokens;
+- `uv run pytest -m integration`: teste de migrações contra PostgreSQL real (exige `APP_ENV` e `DATABASE_URL`);
+- o worker Celery roda via Docker (Celery não suporta Windows nativamente).
+
+Toda configuração vem de variáveis de ambiente validadas na inicialização. Só arquivos `*.env.example` são versionados, e nunca contêm segredos.
 
 ## Estado
 
