@@ -173,7 +173,7 @@ Purpose: reduce application friction on desktop.
 - attach chosen resume;
 - surface generated answers;
 - mark unresolved questions;
-- sync application result back to Tap Vaga after user confirmation.
+- sync application result back to TapJob after user confirmation.
 
 ### Non-goals
 - silently apply to unlimited jobs;
@@ -184,11 +184,11 @@ Purpose: reduce application friction on desktop.
 ## 6. Deep linking
 
 Canonical links:
-- tapvaga://jobs/{id}
-- tapvaga://applications/{id}
-- tapvaga://resumes/{id}
-- tapvaga://interviews/{id}
-- tapvaga://agent?context=...
+- tapjob://jobs/{id}
+- tapjob://applications/{id}
+- tapjob://resumes/{id}
+- tapjob://interviews/{id}
+- tapjob://agent?context=...
 
 All external notifications should deep-link to the relevant entity.
 

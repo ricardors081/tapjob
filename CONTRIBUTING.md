@@ -1,4 +1,4 @@
-# Contributing to Tap Vaga
+# Contributing to TapJob
 
 Read [AGENTS.md](AGENTS.md) and [docs/GOVERNANCE.md](docs/GOVERNANCE.md) before making changes.
 
@@ -32,7 +32,7 @@ Keep PRs reviewable. Do not combine unrelated architecture, features and cleanup
 
 For external integrations include official documentation links and last verification date.
 
-For source reuse include original repository and commit SHA.
+For source reuse, first read [docs/SOURCE_REUSE_BLUEPRINT.md](docs/SOURCE_REUSE_BLUEPRINT.md). Any imported/ported code, prompt, test, fixture, SQL or asset must pin the original repository + full commit SHA + path and update [docs/SOURCE_REUSE_LEDGER.md](docs/SOURCE_REUSE_LEDGER.md) in the same PR.
 
 ## Security
 

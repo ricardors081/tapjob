@@ -1,4 +1,4 @@
-# Implementation Plan — Tap Vaga
+# Implementation Plan — TapJob
 
 This file translates roadmap into executable work packages.
 
@@ -8,6 +8,8 @@ This file translates roadmap into executable work packages.
 - Each WP must have its own branch/PR or a tightly scoped PR series.
 - Do not start a downstream WP while dependencies are unverified.
 - Update `PROJECT_STATE.md` after each accepted WP.
+- Before reusing upstream artifacts, follow `SOURCE_REUSE_BLUEPRINT.md` and update `SOURCE_REUSE_LEDGER.md`.
+- One primary donor/runtime implementation per capability; secondary donors provide tests, edge cases or reference behavior.
 
 ---
 
@@ -27,9 +29,15 @@ Create reproducible repository and CI baseline.
 - lint/typecheck/test;
 - env templates;
 - GitHub Actions;
+- branch protection/ruleset configuration when supported by the active GitHub plan, otherwise documented manual enforcement of the same merge gates;
 - secret scan;
 - health checks;
-- structured logging.
+- structured logging;
+- `packages/design-tokens` scaffold;
+- `packages/product-config` scaffold;
+- typed backend/public configuration modules;
+- initial i18n foundation (`pt-BR`);
+- lint/check strategy against new raw visual magic values once tokens exist.
 
 ### Acceptance
 - fresh clone -> documented local boot;
@@ -37,7 +45,10 @@ Create reproducible repository and CI baseline.
 - mobile shell boots;
 - DB migration applies;
 - tests run in CI;
-- no hardcoded secrets.
+- latest-HEAD CI gate is demonstrably enforced either technically by GitHub protections or procedurally by review/merge evidence;
+- no hardcoded secrets;
+- demo mobile shell consumes semantic tokens/product config rather than hardcoded brand values;
+- changing the configured product name or a primary semantic token does not require editing feature screens.
 
 ---
 
@@ -46,13 +57,18 @@ Create reproducible repository and CI baseline.
 ### Objective
 Resolve pending foundational ADRs.
 
+### Already decided
+- auth: Firebase Authentication;
+- worker: Celery + Redis;
+- object storage: Cloudflare R2;
+- initial hosting: owner's Linux server + Docker Compose behind Cloudflare;
+- product analytics: Firebase Analytics;
+- technical observability: Sentry.
+
 ### Decide
-- auth;
-- worker;
-- object storage;
-- hosting;
 - OpenAPI/client generation;
-- AI gateway abstraction.
+- AI gateway abstraction;
+- canonical interfaces required before upstream code enters runtime: `JobSource`, `MatchingEngine`, `ResumeParser`, `ResumeRenderer`, `AiGateway`, `MessagingChannel`, `ApplyConnector`, `InboxConnector`.
 
 ### Deliver
 - ADRs;
@@ -100,6 +116,11 @@ Resolve pending foundational ADRs.
 - onboarding;
 - profile review/edit.
 
+### Reuse plan
+- PORT source-backed profile/evidence concepts from career-ops.
+- ADAPT Appliable's source-of-truth discipline and resume preferences workflow.
+- TapJob PostgreSQL model remains canonical.
+
 ### Acceptance
 All facts used by AI have provenance/confirmation metadata.
 
@@ -114,6 +135,11 @@ All facts used by AI have provenance/confirmation metadata.
 - review before save;
 - file storage;
 - master resume creation.
+
+### Reuse plan
+- PORT JobSync resume-import prompts/evals.
+- IMPORT/ADAPT AutoApply parser helpers where format coverage is useful.
+- Use Resumint only for mobile resume/profile editing UX, not backend parsing.
 
 ### AI eval
 Golden dataset for extraction correctness.
@@ -131,6 +157,11 @@ Golden dataset for extraction correctness.
 - ingestion;
 - dedupe;
 - source health.
+
+### Reuse plan
+- IMPORT/ADAPT JobBot's Python `JobSource` contract, normalization utilities and Greenhouse/Lever/Ashby adapters as primary implementation.
+- PORT JobSync timeout/pagination/rate-limit edge cases and connector tests.
+- Use Appliable dedupe cases as supplemental fixtures, not a second ingestion stack.
 
 ### First adapters
 - Greenhouse;
@@ -151,6 +182,12 @@ Golden dataset for extraction correctness.
 - blockers;
 - missing requirements;
 - caching/versioning.
+
+### Reuse plan
+- IMPORT/ADAPT JobBot hard-filter gate and matching pipeline.
+- IMPORT/ADAPT AutoApply lexical/TF-IDF resume/job scoring helpers.
+- PORT career-ops job reasoning and evidence discipline.
+- PORT JobSync job-match evals as a regression gate.
 
 ### Acceptance
 Deterministic tests + AI evals.
@@ -184,8 +221,13 @@ Deterministic tests + AI evals.
 - preview;
 - resume library.
 
+### Reuse plan
+- IMPORT/ADAPT Resumint Expo resume list/editor/preview components and local draft-state patterns.
+- IMPORT/ADAPT AutoApply backend resume assembly/rendering helpers.
+- Resumint AI provider calls must be replaced by TapJob backend AI Gateway.
+
 ### Mobile
-Use Resumint-style flows as a reference, rebuilt behind backend contracts.
+Resumint is the primary code donor for Resume Studio UI, rebuilt behind TapJob API contracts.
 
 ---
 
@@ -198,6 +240,12 @@ Use Resumint-style flows as a reference, rebuilt behind backend contracts.
 - fact grounding;
 - diff;
 - per-job resume.
+
+### Reuse plan
+- PORT Appliable `customize-resume` truth/approval workflow.
+- PORT career-ops CV fact allowlist, retracted-claim and writing guardrails.
+- Reuse AutoApply scoring/assembly where compatible.
+- Reuse JobSync evaluation fixtures.
 
 ### Blocking rule
 No generated fact without Professional Truth Store evidence.
@@ -227,6 +275,11 @@ No generated fact without Professional Truth Store evidence.
 - application documents;
 - analytics counters.
 
+### Reuse plan
+- IMPORT/ADAPT Basafy application list/detail, timeline and update UX as primary mobile donor.
+- IMPORT selected CareerTrack search/filter/reminder/document-capture components.
+- PORT JobSync application/interview/contact/task behavior where it improves the canonical model.
+
 ### Mobile
 - Kanban/list;
 - detail/timeline.
@@ -244,6 +297,12 @@ No generated fact without Professional Truth Store evidence.
 - prompt injection defense;
 - AI gateway;
 - cost/latency telemetry.
+
+### Reuse plan
+- PORT JobSync tool registry/schema, approval cards and turn-metrics concepts.
+- IMPORT/PORT career-ops prompt/playbook assets and golden evals.
+- ADAPT Appliable conversational orchestration patterns.
+- TapJob confirmation/policy layer remains authoritative.
 
 ### Eval
 - tool selection;
@@ -263,12 +322,22 @@ No generated fact without Professional Truth Store evidence.
 - interactive confirmations;
 - deep links.
 
+### Reuse plan
+- PORT Appliable's WhatsApp interaction/reporting UX.
+- Use JobBot multi-channel alert separation as a transport-design reference.
+- Do not import WAHA or browser-session assumptions into the production adapter.
+
 ### Constraint
 Production adapter must align with official WhatsApp Business Platform requirements.
 
 ---
 
 ## WP5.1 — Apply Engine
+
+### Reuse plan
+- IMPORT/ADAPT AutoApply `BaseApplier` concepts, form-field mapping, ATS selectors, upload handling and failure detection.
+- PORT career-ops knock-out pre-scan and human-submit policy.
+- Do not carry upstream silent final-submit behavior into the initial TapJob modes.
 
 ### Deliver
 - capability resolver;
@@ -317,8 +386,8 @@ No silent final submission in initial release.
 
 ## WP6.2 — Inbox Intelligence
 
-### Reuse opportunity
-Basafy is primary logic reference.
+### Reuse plan
+Basafy is the primary implementation donor. PORT its query buckets, staged fetch, parsers, entity normalization, match resolver/adjudicator, dedupe, observability, rate limits, timeline models and tests from Supabase/Deno into Python/PostgreSQL workers. IMPORT/ADAPT compatible Expo Gmail sync/onboarding/push UX. JobBot IMAP logic is secondary reference only.
 
 ### Deliver
 - query buckets;
@@ -336,6 +405,10 @@ Basafy is primary logic reference.
 
 ## WP7.1 — Interview Hub
 
+### Reuse plan
+- IMPORT/PORT career-ops interview plan/practice/debrief prompt assets, story-bank and question-bank patterns.
+- PORT JobSync interview/contact/task domain behavior only where it fits canonical entities.
+
 ### Deliver
 - interview entity;
 - reminders;
@@ -349,6 +422,10 @@ Basafy is primary logic reference.
 ---
 
 ## WP7.2 — Analytics
+
+### Reuse plan
+- PORT Basafy funnel/insights semantics as primary analytics reference.
+- Cross-check JobSync/JobBot metrics and tests for additional edge cases.
 
 ### Deliver
 - funnel;

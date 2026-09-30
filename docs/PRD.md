@@ -1,8 +1,15 @@
-# Product Requirements Document — Tap Vaga
+# Product Requirements Document — TapJob
 
 ## 1. Objetivo
 
-Entregar uma plataforma de carreira omnichannel que reduz o trabalho operacional da busca de emprego e aumenta a qualidade das candidaturas.
+Entregar uma plataforma de carreira omnichannel focada na **execução da busca de emprego do candidato**: encontrar vagas, melhorar materiais, candidatar, automatizar o que for realisticamente possível, acompanhar processos, receber alertas e se preparar para entrevistas.
+
+TapJob is not a professional social network. Public posting, likes, followers, social feeds, creator content and social-graph mechanics are outside the initial product thesis.
+
+Reference priority:
+- AIApply: primary execution/automation reference;
+- Huntr: organization/tracking/resume reference;
+- Simplify: discovery/autofill/application-assistance reference.
 
 ## 2. Personas
 

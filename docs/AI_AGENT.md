@@ -1,4 +1,4 @@
-# Career Agent — Tap Vaga
+# Career Agent — TapJob
 
 ## 1. Role
 

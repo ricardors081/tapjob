@@ -1,214 +1,114 @@
-# Reference Products & Source Projects — Tap Vaga
+# Reference Products & Source Projects — TapJob
+
+**Latest source audit:** 2026-09-30
+
+This file records the external products and repositories used as references. The exact reuse decision by capability is authoritative in [SOURCE_REUSE_BLUEPRINT.md](SOURCE_REUSE_BLUEPRINT.md). Any code-bearing reuse must be recorded in [SOURCE_REUSE_LEDGER.md](SOURCE_REUSE_LEDGER.md).
 
 ## 1. Commercial product references
 
-These are product/UX references only.
+Product/UX references only:
 
-### AIApply
-Reference opportunity:
-- application execution;
-- tailored documents;
-- application automation concepts;
-- interview tools.
+- **AIApply:** application execution, tailored documents, automation concepts and interview tools.
+- **Huntr:** career workspace, application tracking, resume management, contacts and analytics.
+- **Simplify:** job discovery, autofill/application-friction reduction, extension-first workflows and tracking.
 
-### Huntr
-Reference opportunity:
-- career workspace;
-- application tracking;
-- resume management;
-- contacts;
-- analytics.
+TapJob must not copy proprietary implementation or branding from commercial products.
 
-### Simplify
-Reference opportunity:
-- job discovery;
-- autofill/application friction reduction;
-- extension-first workflows;
-- tracking.
+## 2. Audited source repositories
 
-Tap Vaga must not copy branding or proprietary implementation.
+| Repository | Audited SHA | License observed | Canonical TapJob use |
+|---|---|---|---|
+| `Gsync/jobsync` | `ef3d7eec5c9aebaa1c6e03fc3ddd62d7dca8e37f` | MIT | ATS discovery edge cases/tests, agent tools, prompts/evals, domain behavior |
+| `roysahar11/appliable` | `2a900e892420039d228ceeb63f03b0480eb72fe4` | MIT | Claude workflows, resume truth discipline, WhatsApp/job orchestration UX |
+| `AbhishekMandapmalvi/AutoApply` | `053071ba1bba5733b522d78c3d645002d817e55a` | MIT | Python resume modules and assisted-apply field/selector logic |
+| `career-ops-hq/career-ops` | `d6a6c12db6d579ae0f3e6875d247409f6b8c9806` | MIT | career intelligence, source-backed profile, application/interview playbooks and evals |
+| `wardoep/jobbot` | `5932b3782412aeda4ed492df7c788b1248121ecb` | no root LICENSE observed | primary Python donor for job ingestion, filters, matching and alerts |
+| `codeharsh27/Career-OS` | `28efc4d9d71f390d746241f9d6e85153b88078a3` | no root LICENSE observed | product/mobile flow reference only; Flutter code is not part of TapJob runtime |
+| `Talia04/Basafy` | `e11c0e69a968d1325e0ab3662c0e6fce875c7ea9` | no root LICENSE observed | primary Gmail intelligence reference; Expo application/inbox/push UI donor |
+| `prataps9/Resumint` | `cfc581a7e429122e362ffdaf0162978b3ed1865c` | no root LICENSE observed | primary Expo Resume Studio UI donor |
+| `KaveenDK/CareerTrack-Mobile-App` | `2ea6cdc28b8c2dc73febbf5588d70f396759bb4e` | no root LICENSE observed | Expo tracker, reminders, camera/document components |
+| `akashpd390/HireHub` | `17d9d7283f406e6cfb3ca18a32649fb57dd2edc0` | MIT | recruiter/realtime/bookmark UX reference; Flutter code is not imported directly |
 
-## 2. Assistant/backend source references
+Repositories:
+- https://github.com/Gsync/jobsync
+- https://github.com/roysahar11/appliable
+- https://github.com/AbhishekMandapmalvi/AutoApply
+- https://github.com/career-ops-hq/career-ops
+- https://github.com/wardoep/jobbot
+- https://github.com/codeharsh27/Career-OS
+- https://github.com/Talia04/Basafy
+- https://github.com/prataps9/Resumint
+- https://github.com/KaveenDK/CareerTrack-Mobile-App
+- https://github.com/akashpd390/HireHub
 
-### Gsync/jobsync
-https://github.com/Gsync/jobsync
+## 3. Permission basis
 
-Use for:
-- application tracker;
-- resume import/export;
-- AI assistant tool calling;
-- contacts/companies/interviews/tasks;
-- Greenhouse/Lever/Ashby discovery;
-- MCP patterns;
-- automated matching;
-- tests/evals.
+The TapJob project owner reports that all 10 repository owners were contacted and that authorization for reuse was formalized and retained by e-mail.
 
-Verified license: MIT.
+The private correspondence is not committed to this repository. For repositories without a visible LICENSE file, reuse PRs must record the basis as:
 
-### roysahar11/appliable
-https://github.com/roysahar11/appliable
+`owner authorization — evidence retained privately`
 
-Use for:
-- personal career-agent model;
-- guided profile setup;
-- multi-source job pipeline;
-- resume tailoring;
-- WhatsApp delivery concepts;
-- batch orchestration.
+and must still pin the upstream SHA/path in the Source Reuse Ledger.
 
-Verified license: MIT.
+## 4. Important audit findings
 
-### AbhishekMandapmalvi/AutoApply
-https://github.com/AbhishekMandapmalvi/AutoApply
+### JobSync
+Strong source for tests/evals, ATS connector edge cases, resume-import prompts, agent tool architecture, contacts/interviews/tasks and dedupe. Do not import the Next.js/Prisma/SQLite application wholesale.
 
-Use for:
-- application pipeline;
-- knowledge base;
-- resume assembly;
-- per-ATS adapter architecture;
-- Playwright form handling;
-- review mode;
-- scoring/lifecycle.
+### Appliable
+Strong source for Claude Code skills/agents, two-pass job evaluation, tailored-resume source-of-truth discipline and WhatsApp reporting. Browser automation/WAHA and filesystem state are not production architecture.
 
-Verified license: MIT.
+### AutoApply
+Strongest direct Python donor for resume parser/scorer/assembler/renderer and ATS form mechanics. Final-submit automation, CAPTCHA behavior and sensitive question handling must be replaced by TapJob policy.
 
-Important:
-browser automation is research/reference; production use must follow Tap Vaga Apply Engine policy.
+### career-ops
+Strongest career-intelligence donor. Preserve source-backed facts, application-answer discipline, interview plan/practice/debrief, story banks, prompt-injection treatment and eval fixtures. Port data persistence to PostgreSQL.
 
-### career-ops-hq/career-ops
-https://github.com/career-ops-hq/career-ops
+### JobBot
+Primary Python donor for the job-source contract, Greenhouse/Lever/Ashby adapters, normalization, hard filters, scorer pipeline and alert isolation. Do not adopt its ORM/auth/IMAP-password model wholesale.
 
-Use for:
-- career reasoning;
-- ATS CV generation;
-- job evaluation;
-- interview prep;
-- story bank;
-- rejection-pattern analytics;
-- negotiation;
-- company/job discovery.
+### CareerOS
+Useful for Discover → Match → Track → Prepare UX, cold-start matching and skill-gap concepts. Flutter is incompatible with the canonical Expo stack. Hardcoded job API credentials were observed; never reuse them.
 
-Verified license: MIT.
+### Basafy
+Highest-value Gmail donor: query buckets, staged fetch, parsers, entity normalization, application resolution/adjudication, dedupe, observability, push and mobile sync UX. Port backend logic from Supabase/Deno to Python workers/PostgreSQL.
 
-### wardoep/jobbot
-https://github.com/wardoep/jobbot
+### Resumint
+Primary Resume Studio mobile donor: editor, score presentation, job tailoring, preview/templates and Zustand draft-state patterns. Direct client-side AI calls/keys must not be carried into TapJob.
 
-Use for:
-- ingestion -> normalize -> dedupe -> filter -> score -> alert architecture;
-- inbox watcher;
-- Telegram;
-- multi-channel notification separation;
-- application kits;
-- FastAPI patterns.
+### CareerTrack
+Useful Expo donor for tracking screens, search/filter UI, camera/document capture and interview reminders. Replace Firebase/data services with TapJob API and canonical states/tokens.
 
-Repository currently has no LICENSE file observed during audit.
-Project owner reports author permission was granted. Archive evidence before code import.
+### HireHub
+Useful future UX reference for realtime recruiter chat, bookmarks and resume selection. Direct Flutter import is excluded.
 
-## 3. Mobile source references
+## 5. Reuse protocol
 
-### codeharsh27/Career-OS
-https://github.com/codeharsh27/Career-OS
+Before importing code, prompt assets, SQL, tests, fixtures or other source artifacts:
 
-Use for:
-- mobile information architecture;
-- application flow;
-- career guidance concepts;
-- resume/job feature organization.
+1. consult `SOURCE_REUSE_BLUEPRINT.md`;
+2. pin source repository + audited/re-audited commit SHA;
+3. identify exact upstream paths/functions;
+4. choose IMPORT / ADAPT / PORT;
+5. record permission/license basis;
+6. scan for secrets and unsafe source assumptions;
+7. fit the code behind TapJob canonical interfaces;
+8. port/create tests and evals;
+9. add a row to `SOURCE_REUSE_LEDGER.md`;
+10. preserve attribution/notices where applicable.
 
-Audit warning:
-hardcoded API credentials were observed in source. Never copy secrets. Rotate/replace if any code is imported.
+A copied artifact without provenance is a merge blocker.
 
-No LICENSE file observed during audit.
-Owner permission reported; archive evidence.
+## 6. Anti-Frankenstein rule
 
-### Talia04/Basafy
-https://github.com/Talia04/Basafy
+TapJob has one canonical:
+- data model;
+- application state machine;
+- source/connector contract per capability;
+- AI Gateway;
+- Apply Engine;
+- notification abstraction;
+- mobile stack.
 
-High-value reference for:
-- Gmail OAuth;
-- staged inbox retrieval;
-- heuristic + LLM classification;
-- application/event linking;
-- dedupe;
-- push;
-- Supabase Edge Function patterns;
-- timeline/insights.
-
-No LICENSE file observed during audit.
-Owner permission reported; archive evidence.
-
-### prataps9/Resumint
-https://github.com/prataps9/Resumint
-
-Use for:
-- Expo resume UX;
-- builder/editor/preview;
-- ATS score UI;
-- job tailoring;
-- cover letter;
-- PDF/export;
-- AI suggestion components.
-
-Audit warning:
-example code calls AI providers from mobile using public Expo environment values. Tap Vaga must move provider secrets/calls to backend.
-
-No LICENSE file observed during audit.
-Owner permission reported; archive evidence.
-
-### KaveenDK/CareerTrack-Mobile-App
-https://github.com/KaveenDK/CareerTrack-Mobile-App
-
-Use for:
-- Expo tracker;
-- push/local reminders;
-- dashboard;
-- camera/document capture;
-- follow-up composer.
-
-README states MIT, but no root LICENSE file was observed during audit.
-Owner permission reported; archive evidence.
-
-### akashpd390/HireHub
-https://github.com/akashpd390/HireHub
-
-Use for:
-- Supabase realtime chat;
-- job feed;
-- bookmarks;
-- application status;
-- resume upload.
-
-Verified license: MIT.
-
-## 4. Reuse protocol
-
-Before importing code from any source:
-
-1. pin source repository and commit SHA;
-2. identify exact files/functions;
-3. confirm permission/license evidence;
-4. record modifications;
-5. remove secrets and source-specific configuration;
-6. run security review;
-7. add tests;
-8. attribute when required;
-9. document imported module in PR.
-
-## 5. Permission note
-
-The Tap Vaga project owner reports that all referenced repository owners were contacted and authorized reuse for this project.
-
-This documentation records that report but is not itself legal evidence. Screenshots/e-mails/messages or other proof of approval should be archived privately and, when appropriate, summarized in repository documentation without exposing personal data.
-
-## 6. Do not create a Frankenstein
-
-Reuse is selective.
-
-Preferred order:
-1. adopt domain insight;
-2. reuse isolated tested component;
-3. adapt behind Tap Vaga interface;
-4. add canonical tests;
-5. discard source-specific coupling.
-
-Tap Vaga's architecture remains authoritative.
+When two upstream projects solve the same problem, the blueprint selects a primary donor. Secondary repositories contribute tests, edge cases or ideas rather than a second competing runtime implementation.

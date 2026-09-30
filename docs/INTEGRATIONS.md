@@ -1,4 +1,4 @@
-# Integrations & External Platforms — Tap Vaga
+# Integrations & External Platforms — TapJob
 
 **Research baseline:** 2026-09-29.  
 Platform policies and APIs can change. Revalidate before implementation or launch.
@@ -29,7 +29,7 @@ However, Gupy API access requires a Bearer token generated within a customer acc
 ### Product position
 - Priority strategic partnership/integration.
 - Build `GupyConnector` abstraction from day one.
-- Do not assume Tap Vaga can submit to every public Gupy job without a partnership/customer token.
+- Do not assume TapJob can submit to every public Gupy job without a partnership/customer token.
 - Until official route is available, use assisted/deep-link flow.
 
 ### Official references
@@ -84,7 +84,7 @@ References:
 Greenhouse Job Board GET endpoints are public and require no authentication.
 
 ### Submission
-The Job Board application POST endpoint requires Basic Auth using the employer's Job Board API key. This means Tap Vaga cannot assume universal submission rights.
+The Job Board application POST endpoint requires Basic Auth using the employer's Job Board API key. This means TapJob cannot assume universal submission rights.
 
 ### Strategy
 - discovery: V1;

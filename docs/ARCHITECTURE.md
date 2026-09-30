@@ -1,4 +1,4 @@
-# Architecture — Tap Vaga
+# Architecture — TapJob
 
 ## 1. Architectural style
 
@@ -66,7 +66,7 @@ Rationale: strongest reuse opportunity from Basafy, Resumint and CareerTrack, fa
 - Alembic
 - PostgreSQL
 - Redis
-- task worker: Celery/RQ/Arq to be selected by ADR before implementation
+- task worker: Celery + Redis
 
 Rationale: ecosystem of JobBot, AutoApply, JobSpy, Resume Matcher and AI tooling.
 
@@ -81,8 +81,24 @@ Rationale: ecosystem of JobBot, AutoApply, JobSpy, Resume Matcher and AI tooling
 - comunicação assinada com backend
 - nenhuma chave sensível embutida
 
+### Shared configuration packages
+Target monorepo direction:
+- `packages/design-tokens`: DTCG-compatible token source + generated native/web outputs;
+- `packages/product-config`: product/brand identity and public stable defaults;
+- `packages/contracts`: generated/shared API contracts when selected.
+
+Feature code must not become the owner of cross-cutting configuration.
+
+### Identity
+Firebase Authentication is the initial identity provider for Google, Apple and e-mail login. TapJob keeps an internal User UUID and maps external Firebase UID separately.
+
+### Push / analytics / observability
+- Firebase Cloud Messaging: mobile push;
+- Firebase Analytics: product/mobile analytics;
+- Sentry: technical errors, tracing, performance and AI/agent observability.
+
 ### Storage
-S3-compatible object storage with signed URLs.
+Cloudflare R2 is the initial S3-compatible private object storage with signed URLs.
 
 ## 4. Modules
 
@@ -214,8 +230,31 @@ Semantic matching:
 
 Do not add a separate vector database without measured need.
 
-## 11. Environments
+## 11. Initial deployment topology
 
+Initial production/staging compute runs on the owner's Linux server with Docker Compose.
+
+Target containers:
+- api;
+- worker;
+- postgres;
+- redis;
+- cloudflared.
+
+Cloudflare Tunnel is the preferred public ingress path so API services do not require public inbound ports.
+
+No Kubernetes in the initial architecture. AWS remains a migration/scale option rather than an initial dependency.
+
+## 12. Configuration & environments
+
+Configuration follows `docs/ENGINEERING_STANDARDS.md`:
+- product config is versioned;
+- environment values are typed/validated at startup;
+- secrets are server-side secret configuration;
+- feature flags handle staged/operational switching;
+- mobile does not read secrets, and `EXPO_PUBLIC_*` is treated as public.
+
+Environments:
 - local
 - development
 - staging
@@ -223,7 +262,7 @@ Do not add a separate vector database without measured need.
 
 No production secret in repository.
 
-## 12. Testing pyramid
+## 13. Testing pyramid
 
 ### Unit
 Scoring, normalization, status transitions, parsing, policies.
@@ -250,11 +289,11 @@ Golden datasets for:
 - email classification;
 - application answer grounding.
 
-## 13. Deployment baseline
+## 14. Deployment baseline
 
-Containerized backend/worker, managed Postgres preferred initially, CI/CD through GitHub Actions, migrations before rollout with rollback plan.
+Containerized backend/worker on the existing Linux server initially, PostgreSQL/Redis isolated from public ingress, Cloudflare at the edge, R2 for object storage, CI/CD through GitHub Actions, migrations before rollout with rollback plan. Database migration to a managed PostgreSQL service is triggered by reliability/scale evidence rather than assumed on day one.
 
-## 14. Architecture constraints
+## 15. Architecture constraints
 
 - no hardcoded credentials;
 - no long-running work in request thread;

@@ -1,7 +1,7 @@
-# Project State — Tap Vaga
+# Project State — TapJob
 
-**As of:** 2026-09-29  
-**Repository:** `ricardoo081/tap_vaga`  
+**As of:** 2026-09-30  
+**Repository:** `ricardoo081/tapjob`  
 **Phase:** 0 — Foundation  
 **Code status:** NOT STARTED
 
@@ -15,6 +15,10 @@ This file must reflect reality only.
 - Mobile + WhatsApp + future web/extension direction accepted.
 - AIApply, Huntr and Simplify adopted as product references.
 - Ten public repositories analyzed as technical references.
+- Second-pass source audit completed against pinned upstream HEAD SHAs.
+- Selective code-reuse blueprint completed: primary donor chosen per capability; IMPORT / ADAPT / PORT / REFERENCE rules established.
+- Source reuse ledger and Claude Code workflow established.
+- Repository-owner reuse authorizations reported as formalized by e-mail and retained privately by the project owner.
 - Initial external-platform feasibility research completed for:
   - Gupy;
   - LinkedIn;
@@ -38,12 +42,22 @@ The canonical foundation includes:
 - Security/Privacy;
 - UX direction;
 - Roadmap;
+- Foundation Decisions;
 - Implementation Plan;
 - Governance;
 - Decisions;
 - References;
 - Open Questions;
-- Agent operating contract.
+- Agent operating contract;
+- Source Reuse Blueprint;
+- Source Reuse Ledger;
+- Claude Code Workflow;
+- Claude Code root entrypoint (`CLAUDE.md`);
+- Design System & Tokens standard;
+- Engineering Standards for typed configuration, i18n, domain constants, APIs, errors, observability and no-magic-value rules;
+- `TapJob` adopted as the working product identity and the GitHub repository has been renamed to `ricardoo081/tapjob`;
+- eight foundation topics resolved in `FOUNDATION_DECISIONS.md`: user journey, infrastructure/auth, design/performance, privacy/security, job-source ordering, monetization/entitlements, analytics/operations and engineering governance;
+- product positioning locked: candidate-side job-search execution, not a LinkedIn/social-network clone; AIApply is primary reference, Huntr/Simplify are complementary references, and the 10 audited repos remain implementation accelerators.
 
 ## 2. Not implemented
 
@@ -85,10 +99,10 @@ Mitigation:
 feature flag and compliance work before public release.
 
 ### R3 — Code reuse provenance
-Some reference repositories have MIT licenses; others do not expose a LICENSE file even though author permission was reported.
+Some reference repositories have MIT licenses; others do not expose a root LICENSE file. The project owner reports that authorization from all 10 owners is formalized by e-mail.
 
 Mitigation:
-record author approval evidence and source commit before importing code.
+keep private authorization evidence outside the repository; every code-bearing reuse PR must pin upstream repository/SHA/path and record its permission basis, adaptation and security review in `SOURCE_REUSE_LEDGER.md`.
 
 ### R4 — Scope size
 Vision is broad.
@@ -101,6 +115,12 @@ Career documents can be harmful if facts are fabricated.
 
 Mitigation:
 Professional Truth Store + grounded generation + evals.
+
+### R6 — GitHub enforcement capability
+Current repository state reports `main` as unprotected, and GitHub ruleset/branch-protection APIs indicate that the current private-repository plan does not expose the intended protection capability.
+
+Mitigation:
+WP0.1 still installs CI and the team follows the documented PR/latest-HEAD review process. If the GitHub plan permits branch protection later, enforce required PR/check/conversation rules in GitHub itself. Until then, the governance requirement remains procedural and auditable rather than falsely documented as technically enforced.
 
 ## 4. Immediate next work package
 
@@ -133,18 +153,23 @@ Acceptance:
 - mobile shell boots;
 - docs align with repository reality.
 
-### WP0.2 — Architecture proof
+### WP0.2 — Technical Contracts & Remaining Architecture Decisions
 
-Spike:
-- auth choice;
-- worker choice;
-- object storage;
-- LLM gateway interface;
-- connector interface;
-- deployment target.
+Already resolved:
+- auth: Firebase Authentication;
+- worker: Celery + Redis;
+- object storage: Cloudflare R2;
+- initial hosting: Linux + Docker Compose behind Cloudflare.
+
+Remaining:
+- OpenAPI/client generation strategy;
+- AI Gateway abstraction;
+- canonical connector/interfaces;
+- error/pagination/observability contracts;
+- exact deployment automation within the approved topology.
 
 Output:
-ADRs, not production feature claims.
+ADRs/contracts, not production feature claims.
 
 ## 5. Phase gates
 
@@ -179,6 +204,6 @@ On every significant PR:
 
 ## 7. Current authoritative conclusion
 
-Tap Vaga has a defined product and architecture baseline but **no application code yet**.
+TapJob has a defined product and architecture baseline but **no application code yet**.
 
 The correct next action is engineering foundation, not feature implementation.

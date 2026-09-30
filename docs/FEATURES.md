@@ -1,10 +1,26 @@
-# Feature Scope — Tap Vaga
+# Feature Scope — TapJob
 
 Legenda:
 - **V1**: escopo de lançamento.
 - **V1.x**: pós-lançamento próximo.
 - **V2**: expansão.
 - **Future**: não comprometer prazo inicial.
+
+## 0. Product-scope boundary
+
+The feature set is candidate-first and job-search execution focused.
+
+Not planned as core product:
+- public social feed;
+- user posts;
+- likes/comments/followers;
+- creator/influencer mechanics;
+- LinkedIn-style professional social graph;
+- recruiter-side ATS/marketplace as the initial business.
+
+The word "feed" in this document refers to job recommendations/opportunities.
+
+Networking features are private candidate tools: recruiter/contact records, outreach drafts, referrals and follow-ups.
 
 ## 1. Career Profile
 

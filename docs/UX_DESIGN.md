@@ -1,4 +1,4 @@
-# UX & Design System Direction — Tap Vaga
+# UX & Design System Direction — TapJob
 
 ## 1. Product UX principles
 
@@ -11,7 +11,13 @@
 7. **Mobile-native:** thumb reach, deep links, push, share, camera/files.
 8. **No "AI aesthetic":** avoid excessive gradients, magic sparkles and vague copy.
 
-## 2. Visual direction
+## 2. Implementation contract
+
+`docs/DESIGN_SYSTEM.md` is the canonical implementation contract for tokens, themes, typography, spacing, radius, motion, iconography and brand configuration.
+
+Feature screens must consume semantic tokens/components rather than raw hex colors, font sizes or arbitrary spacing values. A rebrand must primarily change tokens/config/assets, not dozens of screens.
+
+## 3. Visual direction
 
 Not yet brand-final.
 
@@ -33,7 +39,7 @@ Semantic roles:
 
 Do not encode application status by color alone.
 
-## 3. Core components
+## 4. Core components
 
 - AppShell / BottomTabs
 - JobCard
@@ -55,7 +61,7 @@ Do not encode application status by color alone.
 - ErrorState
 - ConsentDialog
 
-## 4. Match UX
+## 5. Match UX
 
 Never show only "91%".
 
@@ -68,7 +74,7 @@ Show:
 - confidence;
 - "como calculamos".
 
-## 5. AI generated artifact UX
+## 6. AI generated artifact UX
 
 For resume/cover letter/answers:
 - diff where relevant;
@@ -77,7 +83,7 @@ For resume/cover letter/answers:
 - accept/edit/regenerate;
 - version history.
 
-## 6. Apply UX
+## 7. Apply UX
 
 Primary CTA adapts to capability:
 - "Candidatar agora" — official API;
@@ -87,11 +93,11 @@ Primary CTA adapts to capability:
 
 The UI must never imply an application was sent when it was merely prepared.
 
-## 7. WhatsApp -> app handoff
+## 8. WhatsApp -> app handoff
 
 Notification/card should deep-link directly to entity/action, not home.
 
-## 8. Accessibility
+## 9. Accessibility
 
 - WCAG AA target for web;
 - native accessibility labels;
@@ -100,7 +106,7 @@ Notification/card should deep-link directly to entity/action, not home.
 - keyboard support on web;
 - reduce motion preference.
 
-## 9. Design documentation workflow
+## 10. Design documentation workflow
 
 Before large implementation:
 - information architecture;

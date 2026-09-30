@@ -1,14 +1,14 @@
-# Open Questions & Research Backlog — Tap Vaga
+# Open Questions & Research Backlog — TapJob
 
 Open does not mean blocked. Questions are resolved by ADR/research PR.
 
 ## Product
 
 ### OQ-001 Brand
-Is Tap Vaga final public brand or working name?
+Is TapJob final public brand or working name?
 
-### OQ-002 Pricing
-Free/Pro/Automation structure?
+### OQ-002 Pricing — PARTIALLY RESOLVED
+Free/Pro/Automation entitlement direction is approved; exact prices/quotas wait for beta usage data.
 
 ### OQ-003 Auto-apply policy
 What minimum safeguards are required before any OFFICIAL_API auto-submit without per-application review?
@@ -18,17 +18,17 @@ Ship web with beta or after mobile validation?
 
 ## Technical
 
-### OQ-010 Auth
-Select auth strategy.
+### OQ-010 Auth — RESOLVED
+Firebase Authentication: Google, Apple and e-mail initially.
 
-### OQ-011 Worker
-Select async queue/worker.
+### OQ-011 Worker — RESOLVED
+Celery + Redis.
 
-### OQ-012 Hosting
-Provider and region.
+### OQ-012 Hosting — RESOLVED FOR INITIAL DEPLOYMENT
+Existing Linux server + Docker Compose behind Cloudflare. Cloud migration only on evidence.
 
-### OQ-013 Object storage
-Provider.
+### OQ-013 Object storage — RESOLVED
+Cloudflare R2.
 
 ### OQ-014 Search
 When/if pgvector is necessary.
@@ -95,17 +95,14 @@ Privacy and recording model.
 
 ## Mobile/UX
 
-### OQ-050 Design system
-Finalize brand tokens, typography and iconography.
+### OQ-050 Design system — RESOLVED FOR INITIAL BASELINE
+Centralized semantic tokens; blue primary/orange accent; green success/red error; Inter; Lucide. Values remain rebrandable through tokens.
 
-### OQ-051 Onboarding
-How much information is mandatory before first value?
-
-Hypothesis:
-import resume -> confirm basics -> immediately show matches -> enrich later.
+### OQ-051 Onboarding — RESOLVED
+Sign in -> import/manual profile -> parse/confirm truth -> minimal career preferences -> first matches -> progressive enrichment.
 
 ### OQ-052 Notification strategy
-Default cadence without causing alert fatigue.
+Defaults/cadence still need UX testing, but delivery architecture is FCM + channel preferences + throttling.
 
 ## Commercial/Operations
 

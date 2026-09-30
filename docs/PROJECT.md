@@ -1,4 +1,4 @@
-# Tap Vaga — Project Charter
+# TapJob — Project Charter
 
 **Status:** Foundation / Product Definition  
 **Mercado inicial:** Brasil  
@@ -7,7 +7,7 @@
 
 ## 1. Visão
 
-Tap Vaga será um sistema operacional pessoal para a busca de emprego.
+TapJob será um sistema operacional pessoal para a busca de emprego.
 
 O usuário terá uma única identidade profissional que alimenta descoberta de vagas, matching, currículos, candidaturas, entrevistas, networking, acompanhamento e analytics. O mesmo histórico será acessível por app mobile, WhatsApp e, quando necessário, web/extensão de navegador.
 
@@ -32,7 +32,7 @@ Isso gera perda de vagas, currículos genéricos, candidaturas sem acompanhament
 
 ## 3. Proposta de valor
 
-Tap Vaga concentra essa jornada em cinco capacidades:
+TapJob concentra essa jornada em cinco capacidades:
 
 1. **Encontrar:** descobrir e priorizar oportunidades.
 2. **Preparar:** adaptar currículo, carta e respostas com verdade factual.
@@ -120,7 +120,38 @@ Pessoa candidata no Brasil que:
 - precisa organizar múltiplas candidaturas;
 - valoriza alertas e automação assistida.
 
-## 8. Fora de escopo inicial
+## 8. Product boundary: TapJob is not a social network
+
+TapJob is **not** being built as a LinkedIn clone, professional social network or recruiter marketplace.
+
+Initial product focus is the candidate's job-search workflow:
+- discover opportunities;
+- understand fit;
+- improve application materials;
+- tailor resume;
+- reduce repetitive form work;
+- apply with the safest available automation level;
+- track every application;
+- detect hiring-process updates;
+- prepare for interviews;
+- automate reminders/follow-ups;
+- learn what is working.
+
+The job feed is a **job-opportunity feed**, not a user-generated social feed.
+
+"Networking" in TapJob means a private career contact layer for recruiters, hiring managers, referrals, outreach and follow-up. It does not mean posts, likes, followers, creator content, public profiles or a social graph.
+
+### Product-reference priority
+
+1. **AIApply — primary product archetype:** application preparation/execution, tailoring, application kits and automation.
+2. **Huntr — complementary reference:** career organization, tracker, resume management, contacts, metrics and interview workflow.
+3. **Simplify — complementary reference:** job matching/discovery, browser-assisted application/autofill and automatic tracker updates.
+
+TapJob combines the strongest realistic opportunities from those three while adding its own Career Agent, WhatsApp surface, inbox intelligence and Brazil-first integrations.
+
+The 10 audited public repositories are implementation accelerators and logic/code donors. They do not override this product positioning.
+
+## 9. Fora de escopo inicial
 
 Não é objetivo de V1:
 - ser ATS completo para recrutadores;
@@ -131,7 +162,7 @@ Não é objetivo de V1:
 - fabricar informações profissionais;
 - operar recrutamento para empresas como produto principal.
 
-## 9. Diferencial
+## 10. Diferencial
 
 A tese é unir:
 
@@ -143,7 +174,7 @@ A tese é unir:
 - Career Intelligence estilo career-ops;
 - fundação SaaS/AI estilo JobSync.
 
-## 10. Critério de sucesso do produto
+## 11. Critério de sucesso do produto
 
 O usuário deve conseguir dizer:
 

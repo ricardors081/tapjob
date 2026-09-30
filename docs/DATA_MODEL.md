@@ -1,4 +1,4 @@
-# Domain & Data Model — Tap Vaga
+# Domain & Data Model — TapJob
 
 ## 1. Core entities
 

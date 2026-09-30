@@ -1,4 +1,4 @@
-# Apply Engine — Tap Vaga
+# Apply Engine — TapJob
 
 ## 1. Objective
 
@@ -7,7 +7,7 @@ Reduce friction in applications without building the product on brittle or unaut
 ## 2. Canonical modes
 
 ### OFFICIAL_API
-Use when Tap Vaga has documented right/capability to submit.
+Use when TapJob has documented right/capability to submit.
 
 Flow:
 1. fetch form/schema;

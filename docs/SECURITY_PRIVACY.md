@@ -1,8 +1,8 @@
-# Security, Privacy & Trust — Tap Vaga
+# Security, Privacy & Trust — TapJob
 
 ## 1. Security posture
 
-Tap Vaga processes highly personal career data and may connect to e-mail/accounts. Security is product scope, not a later hardening phase.
+TapJob processes highly personal career data and may connect to e-mail/accounts. Security is product scope, not a later hardening phase.
 
 ## 2. Baseline controls
 

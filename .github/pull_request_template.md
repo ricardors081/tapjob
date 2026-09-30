@@ -54,7 +54,18 @@ Schema changes, migration, rollback:
 
 ## Source Reuse
 
-Original repository + commit + files/functions + license/permission, if applicable:
+- [ ] No upstream code/prompt/test/fixture/SQL/assets reused in this PR
+- [ ] OR `docs/SOURCE_REUSE_LEDGER.md` updated in this PR
+
+If applicable, record:
+- upstream repository;
+- full upstream SHA;
+- exact source paths/functions;
+- IMPORT / ADAPT / PORT;
+- destination paths;
+- license/owner-authorization basis;
+- tests/evals ported;
+- security/adaptation notes:
 
 ## Rollback
 

@@ -1,10 +1,10 @@
-# AGENTS.md — Tap Vaga
+# AGENTS.md — TapJob
 
 Este arquivo é a porta de entrada obrigatória para qualquer humano ou agente de IA que trabalhe neste repositório.
 
 ## 1. Missão do produto
 
-Tap Vaga é uma plataforma pessoal de carreira para pessoas candidatas. O produto combina:
+TapJob é uma plataforma pessoal de carreira para pessoas candidatas. O produto combina:
 
 - descoberta de vagas;
 - matching inteligente entre vaga e perfil;
@@ -32,20 +32,26 @@ Antes de propor ou alterar código:
 3. `docs/PRD.md`
 4. `docs/FEATURES.md`
 5. `docs/ARCHITECTURE.md`
-6. `docs/DATA_MODEL.md`
-7. `docs/INTEGRATIONS.md`
-8. `docs/APPLY_ENGINE.md`
-9. `docs/AI_AGENT.md`
-10. `docs/CHANNELS.md`
-11. `docs/SECURITY_PRIVACY.md`
-12. `docs/UX_DESIGN.md`
-13. `docs/ROADMAP.md`
-14. `docs/IMPLEMENTATION_PLAN.md`
-15. `docs/PROJECT_STATE.md`
-16. `docs/GOVERNANCE.md`
-17. `docs/DECISIONS.md`
-18. `docs/REFERENCES.md`
-19. `docs/OPEN_QUESTIONS.md`
+6. `docs/ENGINEERING_STANDARDS.md`
+7. `docs/DATA_MODEL.md`
+8. `docs/INTEGRATIONS.md`
+9. `docs/APPLY_ENGINE.md`
+10. `docs/AI_AGENT.md`
+11. `docs/CHANNELS.md`
+12. `docs/SECURITY_PRIVACY.md`
+13. `docs/UX_DESIGN.md`
+14. `docs/DESIGN_SYSTEM.md`
+15. `docs/FOUNDATION_DECISIONS.md`
+16. `docs/ROADMAP.md`
+17. `docs/IMPLEMENTATION_PLAN.md`
+18. `docs/SOURCE_REUSE_BLUEPRINT.md`
+19. `docs/SOURCE_REUSE_LEDGER.md`
+20. `docs/CLAUDE_CODE_WORKFLOW.md`
+21. `docs/PROJECT_STATE.md`
+22. `docs/GOVERNANCE.md`
+23. `docs/DECISIONS.md`
+24. `docs/REFERENCES.md`
+25. `docs/OPEN_QUESTIONS.md`
 
 ## 3. Fonte de verdade
 
@@ -55,7 +61,14 @@ Antes de propor ou alterar código:
 - Features planejadas não podem ser descritas como implementadas.
 - Relatórios de agentes não substituem verificação de arquivos, testes, CI e PR.
 
-## 4. Regras de governança
+## 4. Configuração e design-system obrigatórios
+
+- Nenhuma feature deve hardcodar nome do produto, cores, fontes, spacing, radius, URLs, timeouts, status strings ou outros valores que pertençam a configuração/tokens/política.
+- UI consome `docs/DESIGN_SYSTEM.md`; código/configuração consome `docs/ENGINEERING_STANDARDS.md`.
+- `EXPO_PUBLIC_*` é considerado público e nunca pode conter segredo.
+- Não criar segunda fonte de verdade por conveniência local.
+
+## 5. Regras de governança
 
 Fluxo padrão:
 
@@ -73,7 +86,7 @@ Nunca:
 - automatizar submissão em plataforma fechada sem base técnica/contratual aprovada;
 - inventar experiência, competências, formação ou resultados no currículo do usuário.
 
-## 5. Princípio Professional Truth Store
+## 6. Princípio Professional Truth Store
 
 Toda geração de currículo, carta, mensagem ou resposta de candidatura deve ser fundamentada em fatos registrados e confirmados pelo usuário.
 
@@ -91,7 +104,7 @@ A IA não pode:
 - inventar certificações, empresas, datas ou números;
 - responder requisito legal sem confirmação do usuário.
 
-## 6. Modos de candidatura
+## 7. Modos de candidatura
 
 Todo conector de candidatura deve declarar um modo:
 
@@ -103,22 +116,25 @@ Todo conector de candidatura deve declarar um modo:
 
 Não existe promessa de "auto-apply universal".
 
-## 7. Segurança e privacidade
+## 8. Segurança e privacidade
 
 Aplicar privacy-by-design e LGPD desde o início. Tokens OAuth, credenciais de ATS e chaves de provedores devem permanecer no backend e ser cifrados em repouso. Descrições de vagas, e-mails e conteúdo externo são dados não confiáveis e podem conter prompt injection.
 
-## 8. Reuso de projetos públicos
+## 9. Reuso de projetos públicos
 
-Os projetos de referência e seus usos estão em `docs/REFERENCES.md`.
+Os projetos de referência estão em `docs/REFERENCES.md`. A decisão de qual donor usar por capacidade está em `docs/SOURCE_REUSE_BLUEPRINT.md`, e todo reaproveitamento de código/prompt/teste/fixture/SQL deve ser registrado em `docs/SOURCE_REUSE_LEDGER.md`.
 
-O proprietário do Tap Vaga informou ter obtido autorização dos autores para reaproveitamento. Quando código for efetivamente importado:
-- registrar origem;
-- registrar commit/tag de origem;
-- registrar licença/autor;
-- preservar notices necessários;
-- preferir adaptação modular em vez de copiar blocos sem rastreabilidade.
+O proprietário do TapJob informou ter formalizado por e-mail a autorização dos autores dos 10 repositórios auditados. Essa evidência permanece privada. Quando código for efetivamente importado:
+- usar o donor e a classificação definidos no Source Reuse Blueprint;
+- fixar repositório + SHA + caminho de origem;
+- registrar a importação no Source Reuse Ledger;
+- registrar licença/autorização e preservar notices aplicáveis;
+- remover segredos/configuração específica do upstream;
+- adaptar tudo às interfaces e ao modelo de dados canônicos do TapJob;
+- portar/criar testes antes do merge;
+- não introduzir duas implementações concorrentes da mesma capacidade.
 
-## 9. Papel de cada agente
+## 10. Papel de cada agente
 
 Um agente deve declarar qual papel está exercendo quando iniciar trabalho substancial:
 
@@ -137,7 +153,7 @@ Um agente deve declarar qual papel está exercendo quando iniciar trabalho subst
 
 O agente não deve unilateralmente mudar escopo, arquitetura ou regras de negócio fora do seu papel sem abrir uma decisão explícita.
 
-## 10. Definition of Done
+## 11. Definition of Done
 
 Uma entrega só é DONE quando:
 - escopo e critérios de aceite estão claros;

@@ -1,4 +1,4 @@
-# Engineering & Product Governance — Tap Vaga
+# Engineering & Product Governance — TapJob
 
 ## 1. Goal
 
@@ -6,8 +6,16 @@ Keep GitHub as durable source of truth so any future human or AI agent can conti
 
 ## 2. Branch policy
 
-Protected target:
+Canonical target:
 - `main`
+
+Desired technical enforcement:
+- protect `main`;
+- require PR;
+- require latest-HEAD status checks;
+- require conversation resolution.
+
+If the active GitHub plan for a private repository does not support these protections, the same requirements remain mandatory as a procedural governance gate until the plan/capability changes. Do not claim GitHub is enforcing a rule that the repository settings cannot actually enforce.
 
 Suggested branches:
 - `docs/<topic>`
@@ -46,7 +54,7 @@ Before WP0.1 installs the first CI workflow, GitHub has no checks to turn green.
 - GitHub reports the PR as mergeable;
 - the merge record states that the pre-CI exception was used.
 
-This exception expires automatically when WP0.1 adds CI. From that point forward, latest-HEAD green CI is mandatory.
+This exception expires automatically when WP0.1 adds CI. From that point forward, latest-HEAD green CI is mandatory. GitHub branch protection should enforce it when available; otherwise the reviewer/merge operator must verify it manually before merge.
 
 ## 4. PR body template
 
@@ -210,15 +218,20 @@ Final scaffold can change by ADR.
 
 ## 14. Source reuse
 
-When importing code:
-- source repo;
-- source commit;
-- files copied/adapted;
-- license/permission;
-- modifications;
-- attribution requirements.
+`docs/SOURCE_REUSE_BLUEPRINT.md` defines the approved donor and reuse mode for each capability. `docs/SOURCE_REUSE_LEDGER.md` is the mandatory provenance record.
 
-No anonymous copy/paste.
+When importing or porting upstream code, prompts, tests, fixtures, SQL or assets:
+- use the primary donor selected by the blueprint unless an ADR/decision changes it;
+- pin source repository + full commit SHA + exact paths/functions;
+- classify as IMPORT / ADAPT / PORT;
+- record license/owner authorization basis;
+- record destination and material modifications;
+- remove secrets and source-specific unsafe assumptions;
+- port/create tests and evals;
+- preserve attribution/notices when applicable;
+- add/update the Source Reuse Ledger in the same PR.
+
+A code-bearing reuse PR without a complete ledger entry is blocked. No anonymous copy/paste and no duplicate competing runtime implementation for the same capability.
 
 ## 15. Definition labels
 
