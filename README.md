@@ -2,7 +2,7 @@
 
 > Plataforma pessoal de carreira para descobrir vagas, preparar candidaturas, aplicar com o nível de automação permitido, acompanhar processos e evoluir até a contratação.
 
-**Status atual:** Foundation: documentação canônica, fundação do monorepo (WP0.1-A) e shell mobile/readiness/observabilidade (WP0.1-B, em revisão). Sem funcionalidades de produto.  
+**Status atual:** Foundation: WP0.1 verificado (monorepo, backend/worker skeletons, CI, Docker/Compose, shell Expo, readiness, observabilidade, i18n e design-token guards). WP0.2 é o próximo trabalho autorizado. Sem funcionalidades de produto.  
 **Mercado inicial:** Brasil.  
 **Aplicação em produção:** ainda não existe.
 

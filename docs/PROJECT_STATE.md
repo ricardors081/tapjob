@@ -3,7 +3,7 @@
 **As of:** 2026-10-01  
 **Repository:** `ricardoo081/tapjob`  
 **Phase:** 0 — Foundation  
-**Code status:** WP0.1-A IMPLEMENTED. WP0.1-B IMPLEMENTED / UNDER REVIEW (mobile shell, readiness, Sentry wiring, i18n, lint/format baseline). WP0.1 overall: IN PROGRESS pending review/CI/merge of WP0.1-B.
+**Code status:** WP0.1 VERIFIED. WP0.2 NOT STARTED.
 
 This file must reflect reality only.
 
@@ -77,8 +77,8 @@ See `docs/adr/0001-monorepo-foundation-tooling.md` (D-043).
 
 When this CI workflow is on `main`, the pre-CI bootstrap exception in `GOVERNANCE.md` no longer applies.
 
-### Mobile & readiness foundation — WP0.1-B (IMPLEMENTED, UNDER REVIEW)
-See `docs/adr/0002-mobile-foundation.md` (D-044). Not yet reviewed/merged; the WP0.1 acceptance criteria are not self-certified here.
+### Mobile & readiness foundation — WP0.1-B (VERIFIED)
+See `docs/adr/0002-mobile-foundation.md` (D-044). Independently reviewed and merged in PR #7; CI also passed on the post-merge `main` commit `f8d4bf1ea76b8da2e925ce92ef67f5137b33f04c`.
 - `apps/mobile`: Expo SDK 57 + Expo Router shell (two routes) consuming `@tapjob/design-tokens` and `@tapjob/product-config`; proves boot, routing, tokens, product config, i18n and typed public config together; no product screens;
 - typed public config (`src/config/public-config.ts`): fail-fast validation of `EXPO_PUBLIC_APP_ENV`/`EXPO_PUBLIC_API_BASE_URL`, optional `EXPO_PUBLIC_SENTRY_DSN`; the only module allowed to read `process.env` in the app;
 - i18n: `i18next`/`react-i18next`/`expo-localization`, `pt-BR` implemented, architecture ready for `es`/`en`; the default locale comes from `@tapjob/product-config`'s `defaultLocale` (not a second hardcoded value), fail-fast if it ever has no registered resource;
@@ -159,11 +159,11 @@ WP0.1 still installs CI and the team follows the documented PR/latest-HEAD revie
 
 ## 4. Immediate next work package
 
-### WP0.1 — Repository & Engineering Foundation (IN PROGRESS)
+### WP0.1 — Repository & Engineering Foundation (VERIFIED)
 
 Checkpoints:
-- **WP0.1-A — IMPLEMENTED:** repository/monorepo foundation (section 1).
-- **WP0.1-B — IMPLEMENTED / UNDER REVIEW:** minimal Expo mobile shell consuming design tokens/product config with a typed public config; ESLint/Prettier for TypeScript; `pt-BR` i18n foundation; readiness checks; Sentry wiring; magic-value lint strategy (see section 1). CODEOWNERS was not added: no team exists yet. Review, CI and merge are still pending; only that gate can mark WP0.1 itself as done.
+- **WP0.1-A — VERIFIED:** repository/monorepo foundation (section 1).
+- **WP0.1-B — VERIFIED:** minimal Expo mobile shell consuming design tokens/product config with a typed public config; ESLint/Prettier for TypeScript; `pt-BR` i18n foundation; readiness checks; Sentry wiring; magic-value lint strategy (see section 1). CODEOWNERS was not added because no team exists yet.
 
 Original WP0.1 deliverables:
 - project monorepo/scaffold decision;
@@ -192,7 +192,7 @@ Acceptance:
 - mobile shell boots;
 - docs align with repository reality.
 
-### WP0.2 — Technical Contracts & Remaining Architecture Decisions
+### WP0.2 — Technical Contracts & Remaining Architecture Decisions (NEXT / NOT STARTED)
 
 Already resolved:
 - auth: Firebase Authentication;
@@ -245,4 +245,4 @@ On every significant PR:
 
 TapJob has a defined product and architecture baseline and a repository/engineering skeleton, including a minimal mobile shell and backend readiness/observability wiring (WP0.1-A + WP0.1-B), but **no product functionality yet**.
 
-WP0.1-B is implemented and under review; it is not self-certified as merged or as closing WP0.1. The correct next action is independent review, green CI at the PR's latest HEAD and merge under `docs/GOVERNANCE.md` — not feature implementation.
+WP0.1 is independently reviewed, merged and verified with green CI on `main`. Gate 0 is satisfied. The next authorized work is WP0.2 — Technical Contracts & Remaining Architecture Decisions; product feature work must not start before WP0.2 is independently verified.

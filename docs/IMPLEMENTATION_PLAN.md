@@ -490,6 +490,6 @@ Can progress alongside WPs when they do not alter contracts:
 
 ## First authorized next step
 
-**WP0.1 only.**
+**WP0.2 only.**
 
-Feature work should not begin before repository foundation and CI are independently verified.
+WP0.1 is independently verified and merged. Product feature work should not begin before WP0.2 technical contracts are independently verified.
