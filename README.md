@@ -78,7 +78,7 @@ services/api/             backend FastAPI (Career Core), settings tipados, readi
 services/worker/          worker Celery (mesmo código do backend)
 packages/product-config/  identidade do produto (product.json)
 packages/design-tokens/   tokens DTCG + saída gerada
-packages/contracts/       contratos de API (decisão em WP0.2)
+packages/contracts/       cliente TypeScript gerado do contrato OpenAPI (WP0.2-A)
 infra/                    Dockerfile e Docker Compose local
 docs/                     documentação canônica e ADRs
 ```

@@ -18,11 +18,15 @@ from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import Engine, text
 
+from tapjob_api.http.errors import COMMON_OPERATIONAL_ERROR_RESPONSES
+
 READY_PATH = "/ready"
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["health"])
+# `responses` set once here (not per-route) so a future operational endpoint added to this router
+# inherits the documented 500/ErrorResponse case automatically instead of each route repeating it.
+router = APIRouter(tags=["health"], responses=COMMON_OPERATIONAL_ERROR_RESPONSES)
 
 
 class DependencyName(StrEnum):
@@ -81,7 +85,20 @@ async def _check_dependency(
     return name, DependencyStatus.OK
 
 
-@router.get(READY_PATH, response_model=ReadinessResponse)
+@router.get(
+    READY_PATH,
+    response_model=ReadinessResponse,
+    operation_id="getReadiness",
+    # Additive to the router-level 500/ErrorResponse default: the handler below also returns this
+    # same ReadinessResponse model, just with DEGRADED/UNAVAILABLE values, on 503 -- documenting
+    # that real, already-existing behavior (not a new case) rather than leaving it undocumented.
+    responses={
+        HTTPStatus.SERVICE_UNAVAILABLE: {
+            "model": ReadinessResponse,
+            "description": "Uma ou mais dependências estão indisponíveis.",
+        }
+    },
+)
 async def get_readiness(request: Request, response: Response) -> ReadinessResponse:
     settings = request.app.state.settings
     timeout_seconds = settings.readiness_timeout_seconds

@@ -3,7 +3,7 @@
 **As of:** 2026-10-01  
 **Repository:** `ricardoo081/tapjob`  
 **Phase:** 0 — Foundation  
-**Code status:** WP0.1 VERIFIED. WP0.2 NOT STARTED.
+**Code status:** WP0.1 VERIFIED. WP0.2-A IMPLEMENTED / UNDER REVIEW. WP0.2-B NOT STARTED.
 
 This file must reflect reality only.
 
@@ -94,6 +94,24 @@ Known local-environment limitations (do not block CI, see ADR-0002 Consequences)
 - `uv run ruff|mypy|pytest` initially could not run on this Windows development machine — endpoint security blocked execution of the `uv`-provisioned Python interpreter, even for a plain `--version` check. Backend verification was then actually run, using the system Python 3.14 already installed/approved on the machine instead of `uv`'s own interpreter (`pip install --user` of the project's pinned dependencies plus editable installs of the three workspace packages, removed again afterward): `ruff check` passed; `ruff format --check` passed after one formatting fix; `mypy --strict` passed after fixing two misplaced `# type: ignore` comments; the 45 non-integration tests passed. This ran Python 3.14, not the project's pinned 3.12. GitHub Actions (Python 3.12) remains the authoritative gate, and it is also the only place PostgreSQL/Redis integration tests and the real Docker build/up/health check run.
 - `expo-doctor`'s React Native Directory check failed locally with a network error (sandboxed environment); expected to pass in GitHub Actions, which has full internet access.
 - Docker Desktop/WSL remains unavailable on this Windows machine (pre-existing, unrelated to this checkpoint); `docker compose config` was used locally to validate the Compose changes, and the real Docker build/up/health check runs in GitHub Actions.
+
+### API contract & HTTP conventions — WP0.2-A (IMPLEMENTED / UNDER REVIEW)
+See `docs/adr/0003-api-contract-client-generation.md` (D-045) and `docs/adr/0004-http-errors-pagination-correlation-idempotency.md` (D-046). Not yet independently reviewed/merged; closes `OQ-015`.
+- deterministic, offline OpenAPI export (`tapjob_api.openapi_export`) to `packages/contracts/openapi.json`; structural contract rules (`tapjob_api.http.contract_rules`: explicit camelCase `operationId`, `/api/v1` scoping, non-2xx responses reference `ErrorResponse`) enforced at export time and unit-tested directly;
+- `/api/v1` business API root mounted (`tapjob_api.http.api_v1`), empty — no product route exists yet; `/health`/`/ready` stay unversioned and now additionally declare an explicit `operationId` and document their shared `500: ErrorResponse` case;
+- canonical `ErrorResponse` envelope and exception handlers (`tapjob_api.http.errors`) for `ApiError`/`RequestValidationError`/`StarletteHTTPException`/unhandled exceptions; `message` is safe-to-display but never a logic input, backend does not localize by `Accept-Language` at this stage;
+- a real bug found and fixed in the process: `RequestContextMiddleware` (WP0.1-B) could not attach `X-Request-ID`/`ErrorResponse.requestId` to a truly unhandled exception's response, because Starlette promotes a bare-`Exception`/500 handler to `ServerErrorMiddleware`, outside this middleware; fixed by having the middleware itself build/send that response (then re-raise for Sentry/observability), confirmed with a before/after reproduction;
+- cursor pagination codec (`tapjob_api.http.pagination`: `CursorPage`, `decode_cursor`/`encode_cursor`, `fingerprint_filters`), explicitly documented as not tamper-proof; no feed endpoint uses it yet (WP2.3 is the first consumer);
+- `Idempotency-Key` convention documented (ADR-0004 §4); no table/middleware yet, by design — added together once a route needs it;
+- TypeScript client: `@hey-api/openapi-ts` pinned exact (`0.99.0`), generating types + SDK functions + fetch client runtime into `packages/contracts/src/generated/**` (committed, excluded from Prettier/ESLint); consumed only through a `createApiClient`/`isApiError` facade (`packages/contracts/src/index.ts`) — `src/generated/**` is unreachable from outside the package (`exports` map, not just convention);
+- generator regression tests (`packages/contracts/test/generator-fixtures.test.mjs`) cover `$ref`, required/optional fields, `allOf` composition, a discriminated `oneOf` union and a non-2xx error schema, against small hand-built fixture documents independent of TapJob's own (currently minimal) schema;
+- `exactOptionalPropertyTypes: false` added, narrowly, to `packages/contracts/tsconfig.json` and `apps/mobile/tsconfig.json` only (not `tsconfig.base.json`): the generated fetch-client runtime does not satisfy that flag as of this Hey API version, and every consumer's own `tsc` re-checks those same generated files (no build/`.d.ts` boundary between workspace packages) — confirmed by reproducing the same errors in `apps/mobile`'s typecheck before the override and seeing them disappear after;
+- mobile: `@tapjob/contracts` added as a dependency and exercised only by a technical smoke test (`apps/mobile/__tests__/contracts-smoke.test.ts`, mocked fetch) — no screen/product code consumes it; Metro bundling was separately verified with a temporary, reverted side-effect import (module count rose from 1689 to 1702 modules), proving `package.json#exports` resolution works end to end, but this is not yet an automated CI check;
+- CI: new `contracts` job (export OpenAPI + diff check, generate TS client + diff check, typecheck, generator regression tests); a scoped `package.json` `overrides` entry fixes a high-severity `js-yaml` advisory pulled in transitively by `@hey-api/openapi-ts` (`npm audit --audit-level=high` is clean).
+
+Known local-environment limitations for this checkpoint (do not block CI):
+- same Windows/`uv` interpreter restriction as WP0.1-B; backend verification ran with the system Python 3.14 instead (`pip install --user` + editable installs, removed afterward): `mypy --strict` passed (40 source files) and `pytest` passed (94 tests: 45 pre-existing + 49 new, across the checkpoint and a follow-up round of fixes from an independent code review). `ruff check`/`ruff format --check` passed earlier in the same session on this exact code; partway through, this machine's endpoint security began blocking execution of the `ruff.exe` binary itself (`PermissionError: Acesso negado`, reproduced even against a freshly reinstalled copy in a throwaway venv -- the same class of issue ADR-0002 documents for `uv`'s own interpreter, now hitting a different tool) and it could not be re-run after that point; `pyflakes` (a pure-Python fallback covering unused imports/names) was run instead and found nothing. GitHub Actions (Linux) remains the authoritative, unaffected gate for all of these.
+- an independent code review (`/code-review --level high`) of this checkpoint's diff found and fixed, before this PR was marked ready: a path-prefix boundary bug in `contract_rules` (`/api/v1beta` would have wrongly matched the `/api/v1` scope check), `/ready`'s existing 503/`ReadinessResponse` case was undocumented in the OpenAPI schema (the generated client had no typed way to see it — now documented and present in `GetReadinessErrors`), an un-bounded cursor length in `decode_cursor` (DoS-amplification risk), two defensive/efficiency nits in `contract_rules` (OpenAPI 3.1 wildcard status keys, redundant schema traversal), and `COMMON_OPERATIONAL_ERROR_RESPONSES` moved from being repeated per-route to each router's own constructor. Not fixed, deliberately: the exception-handling logic being split across `errors.py`/`request_context.py` (inherent to the Starlette architecture issue both already document at length) and `exactOptionalPropertyTypes` being scoped per-consumer rather than per-file (TypeScript has no per-file override within one `tsc` invocation; already flagged in ADR-0003 for human review).
 
 ## 2. Not implemented
 
@@ -192,23 +210,20 @@ Acceptance:
 - mobile shell boots;
 - docs align with repository reality.
 
-### WP0.2 — Technical Contracts & Remaining Architecture Decisions (NEXT / NOT STARTED)
+### WP0.2 — Technical Contracts & Remaining Architecture Decisions
 
-Already resolved:
+Checkpoints:
+- **WP0.2-A — IMPLEMENTED / UNDER REVIEW:** OpenAPI/client generation strategy; `/api/v1` versioning convention; `ErrorResponse` envelope and exception handlers; cursor pagination codec; `Idempotency-Key` convention (documented, not yet implemented); contract CI gates. See `docs/adr/0003-api-contract-client-generation.md` and `docs/adr/0004-http-errors-pagination-correlation-idempotency.md` (section 1 above has the full checkpoint summary). Not yet independently reviewed, merged or CI-verified at latest HEAD.
+- **WP0.2-B — NOT STARTED:** canonical internal ports (`JobSource`, `MatchingEngine`, `ResumeParser`, `ResumeRenderer`, `AiGateway`, `MessagingChannel`, `ApplyConnector`, `InboxConnector`) as `Protocol`s with a capability model; worker-side request correlation; deployment/CD contract (not a real deploy).
+
+Already resolved (pre-WP0.2):
 - auth: Firebase Authentication;
 - worker: Celery + Redis;
 - object storage: Cloudflare R2;
 - initial hosting: Linux + Docker Compose behind Cloudflare.
 
-Remaining:
-- OpenAPI/client generation strategy;
-- AI Gateway abstraction;
-- canonical connector/interfaces;
-- error/pagination/observability contracts;
-- exact deployment automation within the approved topology.
-
 Output:
-ADRs/contracts, not production feature claims.
+ADRs/contracts, not production feature claims. Product feature work must not start before WP0.2-B is also independently verified.
 
 ## 5. Phase gates
 
@@ -243,6 +258,6 @@ On every significant PR:
 
 ## 7. Current authoritative conclusion
 
-TapJob has a defined product and architecture baseline and a repository/engineering skeleton, including a minimal mobile shell and backend readiness/observability wiring (WP0.1-A + WP0.1-B), but **no product functionality yet**.
+TapJob has a defined product and architecture baseline, a repository/engineering skeleton (WP0.1-A + WP0.1-B) and a first technical-contracts checkpoint (WP0.2-A: HTTP/OpenAPI/client-generation conventions), but **no product functionality yet**.
 
-WP0.1 is independently reviewed, merged and verified with green CI on `main`. Gate 0 is satisfied. The next authorized work is WP0.2 — Technical Contracts & Remaining Architecture Decisions; product feature work must not start before WP0.2 is independently verified.
+WP0.1 is independently reviewed, merged and verified with green CI on `main`. Gate 0 is satisfied. WP0.2-A is implemented and awaiting independent review/CI verification at latest HEAD; it must not be marked VERIFIED from this report alone. WP0.2-B (canonical ports/capability model, worker correlation, deployment contract) remains not started. Product feature work must not start before both WP0.2-A and WP0.2-B are independently verified.

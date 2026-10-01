@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // @hey-api/openapi-ts@0.99.0's generated fetch-client runtime (src/generated/client/**,
+    // src/generated/core/**) does not satisfy exactOptionalPropertyTypes: true as of this version
+    // (e.g. it passes an explicit `undefined` for several optional fields) -- verified against
+    // this exact generated output, not a general claim about the library. Narrowed to this
+    // package rather than tsconfig.base.json; docs/adr/0003-api-contract-client-generation.md
+    // records this as a known limitation. Any future app/package that imports @tapjob/contracts
+    // needs the same override (apps/mobile/tsconfig.json has it) because its own `tsc` re-checks
+    // these same generated files when it follows the import -- there is no build/.d.ts boundary
+    // between workspace packages in this monorepo (see packages/design-tokens, product-config).
+    "exactOptionalPropertyTypes": false
+  },
+  "include": ["src/**/*.ts", "openapi-ts.config.ts"]
+}

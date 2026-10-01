@@ -73,6 +73,36 @@ jobs:
       - run: uv sync --locked --all-packages
       - run: uv run pytest -m integration
 
+  contracts:
+    name: Contracts (OpenAPI export, client generation, drift check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          version: ${{ env.UV_VERSION }}
+      - run: uv sync --locked --all-packages
+      - name: Export the OpenAPI schema and check for drift
+        # Offline/deterministic (docs/adr/0003-api-contract-client-generation.md): no DATABASE_URL/
+        # REDIS_URL needed, nothing is connected to.
+        run: |
+          uv run python -m tapjob_api.openapi_export
+          git diff --exit-code -- packages/contracts/openapi.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Generate the TypeScript client and check for drift
+        run: |
+          npm run generate --workspace @tapjob/contracts
+          git diff --exit-code -- packages/contracts/src/generated
+      - run: npm run typecheck --workspace @tapjob/contracts
+      # Error/pagination handling itself is tested in the backend job; this is the Hey API
+      # generator fixture/regression suite (test/generator-fixtures.test.mjs).
+      - run: npm run test --workspace @tapjob/contracts
+
   packages:
     name: Shared packages (lint, format, tokens, product config)
     runs-on: ubuntu-latest

@@ -9,11 +9,13 @@
   "workspaces": [
     "packages/design-tokens",
     "packages/product-config",
+    "packages/contracts",
     "apps/mobile"
   ],
   "scripts": {
     "tokens:build": "npm run build --workspace @tapjob/design-tokens",
     "tokens:check": "npm run check --workspace @tapjob/design-tokens",
+    "contracts:generate": "npm run generate --workspace @tapjob/contracts",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "lint": "eslint .",
@@ -32,6 +34,9 @@
     "typescript-eslint": "^8.71.0"
   },
   "overrides": {
-    "react": "19.2.3"
+    "react": "19.2.3",
+    "@hey-api/json-schema-ref-parser": {
+      "js-yaml": "4.3.2"
+    }
   }
 }

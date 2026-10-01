@@ -75,10 +75,22 @@ Resolve pending foundational ADRs.
 - product analytics: Firebase Analytics;
 - technical observability: Sentry.
 
-### Decide
-- OpenAPI/client generation;
-- AI gateway abstraction;
-- canonical interfaces required before upstream code enters runtime: `JobSource`, `MatchingEngine`, `ResumeParser`, `ResumeRenderer`, `AiGateway`, `MessagingChannel`, `ApplyConnector`, `InboxConnector`.
+### Checkpoints
+
+#### WP0.2-A — HTTP Contract, OpenAPI Client & Contract CI (IMPLEMENTED / UNDER REVIEW)
+- OpenAPI/client generation: `@hey-api/openapi-ts` pinned exact, deterministic offline export, `createApiClient`/`isApiError` facade;
+- `/api/v1` versioning convention (`/health`/`/ready` stay unversioned), explicit camelCase `operationId`;
+- `ErrorResponse` error envelope and exception handlers;
+- cursor pagination codec (`CursorPage`, not tamper-proof);
+- `Idempotency-Key`/`X-Request-ID` conventions (idempotency: convention only, no middleware yet);
+- contract CI gates (OpenAPI export diff, TS client generation diff, generator regression tests).
+
+See `docs/adr/0003-api-contract-client-generation.md`, `docs/adr/0004-http-errors-pagination-correlation-idempotency.md` and `docs/PROJECT_STATE.md`.
+
+#### WP0.2-B — Internal Ports & Capability Model (NOT STARTED)
+- canonical interfaces required before upstream code enters runtime: `JobSource`, `MatchingEngine`, `ResumeParser`, `ResumeRenderer`, `AiGateway`, `MessagingChannel`, `ApplyConnector`, `InboxConnector` (as `Protocol`s with a capability model);
+- worker-side request correlation;
+- deployment/CD contract within the approved topology (not a real deploy).
 
 ### Deliver
 - ADRs;
@@ -490,6 +502,6 @@ Can progress alongside WPs when they do not alter contracts:
 
 ## First authorized next step
 
-**WP0.2 only.**
+**WP0.2 only** (WP0.2-A implemented/under review; WP0.2-B next).
 
-WP0.1 is independently verified and merged. Product feature work should not begin before WP0.2 technical contracts are independently verified.
+WP0.1 is independently verified and merged. Product feature work should not begin before both WP0.2-A and WP0.2-B technical contracts are independently verified.

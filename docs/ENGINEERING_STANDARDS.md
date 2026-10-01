@@ -188,6 +188,8 @@ Target:
 
 Mobile code should not hand-build ad hoc response shapes.
 
+Implemented in WP0.2-A: deterministic offline OpenAPI export (`tapjob_api.openapi_export`), `/api/v1` versioning with `/health`/`/ready` exempt, structural contract rules (`tapjob_api.http.contract_rules`), and a generated TypeScript client (`@hey-api/openapi-ts`, pinned exact) behind a `createApiClient`/`isApiError` facade (`packages/contracts`) — see `docs/adr/0003-api-contract-client-generation.md`.
+
 ## 8. Error model
 
 Errors need stable machine codes plus human-safe messages.
@@ -211,6 +213,8 @@ Define:
 - rate-limit errors;
 - temporary/unavailable errors;
 - user-action-required errors.
+
+Implemented in WP0.2-A: `tapjob_api.http.errors.ErrorResponse`/`ErrorCode` and the exception handlers that guarantee every non-2xx response (including an unhandled exception) uses this envelope with a populated `requestId`; cursor pagination (`tapjob_api.http.pagination`) and the `Idempotency-Key` convention — see `docs/adr/0004-http-errors-pagination-correlation-idempotency.md`.
 
 ## 9. Internationalization
 

@@ -133,6 +133,7 @@ export default defineConfig([
     "**/.expo/**",
     "**/coverage/**",
     "packages/design-tokens/generated/**",
+    "packages/contracts/src/generated/**",
   ]),
 
   // packages/*: Node-run TypeScript/JavaScript tooling (scripts, typed accessors).

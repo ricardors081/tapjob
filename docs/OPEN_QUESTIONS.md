@@ -33,8 +33,8 @@ Cloudflare R2.
 ### OQ-014 Search
 When/if pgvector is necessary.
 
-### OQ-015 Shared contracts
-OpenAPI-generated clients vs shared schemas/packages.
+### OQ-015 Shared contracts — RESOLVED 2026-10-01
+`@hey-api/openapi-ts` (pinned exact) generates a TypeScript client from the backend's deterministically-exported OpenAPI schema; `packages/contracts` publishes only a `createApiClient`/`isApiError` facade, never the generated internals. See `docs/adr/0003-api-contract-client-generation.md` (D-045).
 
 ## Integrations
 

@@ -14,6 +14,8 @@ from tapjob_api.core.config import ApiSettings, Environment
 from tapjob_api.core.database import create_database_engine
 from tapjob_api.core.logging import configure_logging
 from tapjob_api.core.observability import init_sentry
+from tapjob_api.http.api_v1 import router as api_v1_router
+from tapjob_api.http.errors import register_exception_handlers
 from tapjob_api.http.health import router as health_router
 from tapjob_api.http.readiness import router as readiness_router
 from tapjob_api.http.request_context import RequestContextMiddleware
@@ -55,6 +57,8 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.state.version = app_version
 
     app.add_middleware(RequestContextMiddleware)
+    register_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(readiness_router)
+    app.include_router(api_v1_router)
     return app

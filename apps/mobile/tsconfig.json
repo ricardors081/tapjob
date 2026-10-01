@@ -7,7 +7,12 @@
     "types": ["jest", "node"],
     "paths": {
       "@/*": ["./src/*"]
-    }
+    },
+    // See packages/contracts/tsconfig.json's comment: @tapjob/contracts's generated fetch-client
+    // runtime does not satisfy this flag, and importing it re-checks those files here too (no
+    // build/.d.ts boundary between workspace packages). Required only once this app actually
+    // imports @tapjob/contracts.
+    "exactOptionalPropertyTypes": false
   },
   "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"],
   "exclude": ["node_modules"]
