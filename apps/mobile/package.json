@@ -1,0 +1,50 @@
+{
+  "name": "@tapjob/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Expo/React Native shell: proves app boot, Expo Router, design tokens, product config, i18n and typed public config (WP0.1-B).",
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "doctor": "expo-doctor",
+    "export": "expo export --platform android --platform ios",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@expo-google-fonts/inter": "^0.4.2",
+    "@sentry/react-native": "~7.11.0",
+    "@tapjob/design-tokens": "*",
+    "@tapjob/product-config": "*",
+    "expo": "^57.0.26",
+    "expo-constants": "~57.0.20",
+    "expo-font": "~57.0.4",
+    "expo-linking": "~57.0.11",
+    "expo-localization": "~57.0.2",
+    "expo-router": "~57.0.24",
+    "expo-splash-screen": "~57.0.9",
+    "expo-status-bar": "~57.0.1",
+    "i18next": "^26.4.2",
+    "react": "19.2.3",
+    "react-i18next": "^17.0.15",
+    "react-native": "0.86.3",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.0"
+  },
+  "jest": {
+    "preset": "jest-expo",
+    "setupFiles": [
+      "<rootDir>/jest.setup.js"
+    ]
+  },
+  "devDependencies": {
+    "@testing-library/react-native": "^14.0.1",
+    "@types/jest": "29.5.14",
+    "@types/node": "^24.19.0",
+    "@types/react": "~19.2.4",
+    "jest": "~29.7.0",
+    "jest-expo": "~57.0.5"
+  }
+}

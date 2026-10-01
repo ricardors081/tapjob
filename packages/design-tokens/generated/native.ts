@@ -2,6 +2,13 @@
 // Sources: packages/design-tokens/tokens.json and packages/design-tokens/themes/*.json
 
 export const tokens = {
+  "spacing": {
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24
+  },
   "radius": {
     "none": 0,
     "sm": 8,
@@ -9,6 +16,9 @@ export const tokens = {
     "lg": 16,
     "xl": 24,
     "full": 9999
+  },
+  "borderWidth": {
+    "hairline": 1
   },
   "motion": {
     "duration": {
@@ -19,7 +29,15 @@ export const tokens = {
   },
   "typography": {
     "fontFamily": {
-      "primary": "Inter"
+      "primary": "Inter",
+      "primaryRegular": "Inter_400Regular",
+      "primarySemibold": "Inter_600SemiBold",
+      "primaryBold": "Inter_700Bold"
+    },
+    "fontSize": {
+      "body": 16,
+      "title": 24,
+      "heading": 28
     }
   }
 } as const;

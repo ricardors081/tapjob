@@ -69,7 +69,9 @@ describe("toNativeValue", () => {
   });
 
   it("rejects unexpected units", () => {
-    assert.throws(() => toNativeValue("r", { type: "dimension", value: { value: 1, unit: "rem" } }));
+    assert.throws(() =>
+      toNativeValue("r", { type: "dimension", value: { value: 1, unit: "rem" } }),
+    );
   });
 });
 
@@ -81,13 +83,21 @@ describe("dtcgColorToHex", () => {
 
   const invalid = [
     ["a legacy hex string value", "#2563EB", /expected { colorSpace/],
-    ["an unsupported color space", { ...BLUE_600, colorSpace: "display-p3" }, /colorSpace must be "srgb"/],
+    [
+      "an unsupported color space",
+      { ...BLUE_600, colorSpace: "display-p3" },
+      /colorSpace must be "srgb"/,
+    ],
     ["the none keyword", srgb(["none", 0, 0]), /components must be 3 numbers/],
     ["out-of-range components", srgb([37, 99, 235]), /components must be 3 numbers/],
     ["the wrong number of components", srgb([0.1, 0.2]), /components must be 3 numbers/],
     ["a translucent alpha", srgb([0, 0, 0], { alpha: 0.5 }), /alpha must be omitted or 1/],
     ["a malformed hex fallback", srgb([1, 1, 1], { hex: "#FFF" }), /hex fallback must be 6-digit/],
-    ["a hex fallback that disagrees", srgb([1, 1, 1], { hex: "#000000" }), /does not match components/],
+    [
+      "a hex fallback that disagrees",
+      srgb([1, 1, 1], { hex: "#000000" }),
+      /does not match components/,
+    ],
   ];
   for (const [label, value, message] of invalid) {
     it(`rejects ${label}`, () => {
@@ -132,5 +142,18 @@ describe("renderNative", () => {
 
   it("is deterministic", () => {
     assert.equal(renderNative(loadSources()), output);
+  });
+
+  it("exposes the spacing, border-width and typography scales the mobile shell consumes", () => {
+    const { tokens } = buildNativeTree(loadSources());
+    assert.deepEqual(tokens.spacing, { xs: 4, sm: 8, md: 12, lg: 16, xl: 24 });
+    assert.deepEqual(tokens.borderWidth, { hairline: 1 });
+    assert.deepEqual(tokens.typography.fontSize, { body: 16, title: 24, heading: 28 });
+    assert.deepEqual(tokens.typography.fontFamily, {
+      primary: "Inter",
+      primaryRegular: "Inter_400Regular",
+      primarySemibold: "Inter_600SemiBold",
+      primaryBold: "Inter_700Bold",
+    });
   });
 });

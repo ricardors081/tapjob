@@ -2,7 +2,7 @@
 
 > Plataforma pessoal de carreira para descobrir vagas, preparar candidaturas, aplicar com o nível de automação permitido, acompanhar processos e evoluir até a contratação.
 
-**Status atual:** Foundation: documentação canônica + fundação do monorepo (WP0.1-A). Sem funcionalidades de produto.  
+**Status atual:** Foundation: documentação canônica, fundação do monorepo (WP0.1-A) e shell mobile/readiness/observabilidade (WP0.1-B, em revisão). Sem funcionalidades de produto.  
 **Mercado inicial:** Brasil.  
 **Aplicação em produção:** ainda não existe.
 
@@ -73,8 +73,8 @@ A IA nunca deve inventar experiência, skill, formação ou resposta legal. O **
 ## Estrutura do repositório
 
 ```text
-apps/mobile/              app Expo (placeholder; shell em WP0.1-B)
-services/api/             backend FastAPI (Career Core), settings tipados, Alembic
+apps/mobile/              app Expo (shell mínimo: router, tokens, product config, i18n, config pública)
+services/api/             backend FastAPI (Career Core), settings tipados, readiness, Alembic
 services/worker/          worker Celery (mesmo código do backend)
 packages/product-config/  identidade do produto (product.json)
 packages/design-tokens/   tokens DTCG + saída gerada
@@ -98,13 +98,20 @@ npm run check
 # stack local: postgres, redis, migrate, api, worker
 cp infra/.env.example infra/.env        # PowerShell: Copy-Item infra/.env.example infra/.env
 docker compose -f infra/compose.yaml up --build
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/health       # liveness
+curl http://127.0.0.1:8000/ready        # readiness: PostgreSQL + Redis
+
+# app mobile (shell mínimo; nenhuma tela de produto ainda)
+cp apps/mobile/.env.example apps/mobile/.env   # PowerShell: Copy-Item apps/mobile/.env.example apps/mobile/.env
+npm run start --workspace @tapjob/mobile
 ```
 
 Outros comandos:
 
 - `npm run tokens:build`: regenera `packages/design-tokens/generated/native.ts` depois de editar os tokens;
-- `uv run pytest -m integration`: teste de migrações contra PostgreSQL real (exige `APP_ENV` e `DATABASE_URL`);
+- `npm run lint` / `npm run format:check`: ESLint (flat config + guards de magic value) e Prettier em `apps/` e `packages/`;
+- `npx expo-doctor` / `npx expo export --platform android --platform ios` (a partir de `apps/mobile`): diagnóstico de dependências e validação de bundle, como no CI;
+- `uv run pytest -m integration`: migrações e readiness contra PostgreSQL/Redis reais (exige `APP_ENV`, `DATABASE_URL` e `REDIS_URL`);
 - o worker Celery roda via Docker (Celery não suporta Windows nativamente).
 
 Toda configuração vem de variáveis de ambiente validadas na inicialização. Só arquivos `*.env.example` são versionados, e nunca contêm segredos.

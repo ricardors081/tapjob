@@ -9,6 +9,7 @@ from typing import Any
 from celery import Celery, signals
 
 from tapjob_api.core.logging import configure_logging
+from tapjob_api.core.observability import init_sentry
 from tapjob_worker.config import WorkerSettings
 
 SERVICE_NAME = "worker"
@@ -16,6 +17,7 @@ TASK_SERIALIZER = "json"
 
 
 def create_celery_app(settings: WorkerSettings) -> Celery:
+    init_sentry(settings, service=SERVICE_NAME)
     app = Celery(SERVICE_NAME, broker=str(settings.redis_url))
     app.conf.update(
         # Only JSON crosses the broker: no pickle deserialization of queue payloads.

@@ -8,6 +8,8 @@ dependencies = [
   "fastapi>=0.142.2",
   "psycopg[binary]>=3.3.6",
   "pydantic-settings>=2.15.0",
+  "redis>=6.4.0",
+  "sentry-sdk[fastapi]>=2.71.0",
   "sqlalchemy>=2.1.1",
   "tapjob-product-config",
   "uvicorn[standard]>=0.54.0",

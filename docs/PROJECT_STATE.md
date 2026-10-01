@@ -1,9 +1,9 @@
 # Project State — TapJob
 
-**As of:** 2026-09-30  
+**As of:** 2026-10-01  
 **Repository:** `ricardoo081/tapjob`  
 **Phase:** 0 — Foundation  
-**Code status:** WP0.1-A IMPLEMENTED (repository/monorepo foundation, no product features). WP0.1 overall: IN PROGRESS.
+**Code status:** WP0.1-A IMPLEMENTED. WP0.1-B IMPLEMENTED / UNDER REVIEW (mobile shell, readiness, Sentry wiring, i18n, lint/format baseline). WP0.1 overall: IN PROGRESS pending review/CI/merge of WP0.1-B.
 
 This file must reflect reality only.
 
@@ -77,16 +77,32 @@ See `docs/adr/0001-monorepo-foundation-tooling.md` (D-043).
 
 When this CI workflow is on `main`, the pre-CI bootstrap exception in `GOVERNANCE.md` no longer applies.
 
+### Mobile & readiness foundation — WP0.1-B (IMPLEMENTED, UNDER REVIEW)
+See `docs/adr/0002-mobile-foundation.md` (D-044). Not yet reviewed/merged; the WP0.1 acceptance criteria are not self-certified here.
+- `apps/mobile`: Expo SDK 57 + Expo Router shell (two routes) consuming `@tapjob/design-tokens` and `@tapjob/product-config`; proves boot, routing, tokens, product config, i18n and typed public config together; no product screens;
+- typed public config (`src/config/public-config.ts`): fail-fast validation of `EXPO_PUBLIC_APP_ENV`/`EXPO_PUBLIC_API_BASE_URL`, optional `EXPO_PUBLIC_SENTRY_DSN`; the only module allowed to read `process.env` in the app;
+- i18n: `i18next`/`react-i18next`/`expo-localization`, `pt-BR` implemented, architecture ready for `es`/`en`; the default locale comes from `@tapjob/product-config`'s `defaultLocale` (not a second hardcoded value), fail-fast if it ever has no registered resource;
+- design tokens: `spacing`/`typography.fontSize`/`borderWidth` semantic scales added for the shell (`docs/adr/0002-mobile-foundation.md` item 12); the Inter typeface is now actually loaded at runtime (`expo-font` + `@expo-google-fonts/inter`, three weights only, item 13), not just named by a token;
+- flat ESLint (`eslint-config-expo` for the app, lighter TS rules for `packages/*`) + Prettier, both wired into CI; magic-value guard rules for raw hex/rgb, hardcoded product identity (`productName`/`shortName`/`deepLinkScheme`), scattered `process.env`, inline URLs, and (in `apps/mobile/**/*.tsx`) raw design values in style properties (`fontSize`, `fontFamily`, spacing/padding/margin/gap, `borderRadius`/`borderWidth`);
+- TypeScript realigned to `~6.0.3` workspace-wide (was `^7.0.2` in WP0.1-A) for `eslint-config-expo` compatibility;
+- backend `GET /ready`: probes PostgreSQL and Redis concurrently with a bounded timeout (`ApiSettings.readiness_timeout_seconds`, default 2s); 200 when both are reachable, 503 otherwise; response/logs never carry a DSN, host or exception message;
+- Sentry: shared `init_sentry` helper for api/worker, no-op unless `SENTRY_DSN` is set (unset in CI/local dev); the Expo config plugin, Metro source-map upload and EAS release wiring are explicitly deferred (documented in `apps/mobile/README.md`);
+- CI: new `mobile` job (Expo Doctor, `expo export`); `packages` job gains `lint`/`format:check`; `backend-integration` gains a Redis service; the `docker` job and the `api` container's own healthcheck now call `/ready`;
+- CODEOWNERS was not added: no team exists yet.
+
+Known local-environment limitations (do not block CI, see ADR-0002 Consequences):
+- `uv run ruff|mypy|pytest` initially could not run on this Windows development machine — endpoint security blocked execution of the `uv`-provisioned Python interpreter, even for a plain `--version` check. Backend verification was then actually run, using the system Python 3.14 already installed/approved on the machine instead of `uv`'s own interpreter (`pip install --user` of the project's pinned dependencies plus editable installs of the three workspace packages, removed again afterward): `ruff check` passed; `ruff format --check` passed after one formatting fix; `mypy --strict` passed after fixing two misplaced `# type: ignore` comments; the 45 non-integration tests passed. This ran Python 3.14, not the project's pinned 3.12. GitHub Actions (Python 3.12) remains the authoritative gate, and it is also the only place PostgreSQL/Redis integration tests and the real Docker build/up/health check run.
+- `expo-doctor`'s React Native Directory check failed locally with a network error (sandboxed environment); expected to pass in GitHub Actions, which has full internet access.
+- Docker Desktop/WSL remains unavailable on this Windows machine (pre-existing, unrelated to this checkpoint); `docker compose config` was used locally to validate the Compose changes, and the real Docker build/up/health check runs in GitHub Actions.
+
 ## 2. Not implemented
 
-No production functionality exists yet. Backend code is limited to the WP0.1-A skeleton above.
+No production functionality exists yet. Backend code is limited to the WP0.1-A/WP0.1-B skeleton above (no domain models, tables or business endpoints; the database schema is still an empty baseline). The mobile app is a shell only, no product screens.
 
 Specifically NOT implemented:
 - any domain model, table or business endpoint (database schema is an empty baseline);
-- readiness checks against PostgreSQL/Redis;
-- Sentry / metrics wiring;
-- i18n layer;
-- mobile app (not even the shell: WP0.1-B);
+- Sentry Expo config plugin, Metro source-map upload, EAS release wiring (deferred from WP0.1-B, see `docs/adr/0002-mobile-foundation.md`);
+- `es`/`en` translations (architecture is ready; only `pt-BR` strings exist);
 - web app;
 - browser extension;
 - WhatsApp integration;
@@ -147,7 +163,7 @@ WP0.1 still installs CI and the team follows the documented PR/latest-HEAD revie
 
 Checkpoints:
 - **WP0.1-A — IMPLEMENTED:** repository/monorepo foundation (section 1).
-- **WP0.1-B — next:** minimal Expo mobile shell consuming design tokens/product config with a typed public config; ESLint/Prettier for TypeScript; `pt-BR` i18n foundation; readiness checks; Sentry wiring; magic-value lint strategy; CODEOWNERS if a team exists.
+- **WP0.1-B — IMPLEMENTED / UNDER REVIEW:** minimal Expo mobile shell consuming design tokens/product config with a typed public config; ESLint/Prettier for TypeScript; `pt-BR` i18n foundation; readiness checks; Sentry wiring; magic-value lint strategy (see section 1). CODEOWNERS was not added: no team exists yet. Review, CI and merge are still pending; only that gate can mark WP0.1 itself as done.
 
 Original WP0.1 deliverables:
 - project monorepo/scaffold decision;
@@ -227,6 +243,6 @@ On every significant PR:
 
 ## 7. Current authoritative conclusion
 
-TapJob has a defined product and architecture baseline and a repository/engineering skeleton (WP0.1-A), but **no product functionality yet**.
+TapJob has a defined product and architecture baseline and a repository/engineering skeleton, including a minimal mobile shell and backend readiness/observability wiring (WP0.1-A + WP0.1-B), but **no product functionality yet**.
 
-The correct next action is to finish engineering foundation (WP0.1-B), not feature implementation.
+WP0.1-B is implemented and under review; it is not self-certified as merged or as closing WP0.1. The correct next action is independent review, green CI at the PR's latest HEAD and merge under `docs/GOVERNANCE.md` — not feature implementation.

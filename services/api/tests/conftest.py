@@ -16,9 +16,19 @@ def database_url() -> str:
 
 
 @pytest.fixture
-def make_settings(database_url: str) -> SettingsFactory:
+def redis_url() -> str:
+    # Synthetic DSN: unit tests never open a Redis connection.
+    return "redis://localhost:6379/0"
+
+
+@pytest.fixture
+def make_settings(database_url: str, redis_url: str) -> SettingsFactory:
     def factory(environment: Environment = Environment.LOCAL) -> ApiSettings:
-        return ApiSettings(app_env=environment, database_url=database_url)  # type: ignore[arg-type]
+        return ApiSettings(
+            app_env=environment,
+            database_url=database_url,  # type: ignore[arg-type]
+            redis_url=redis_url,  # type: ignore[arg-type]
+        )
 
     return factory
 

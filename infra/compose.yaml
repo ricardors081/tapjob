@@ -19,6 +19,9 @@ x-database-env: &database-env
   APP_ENV: ${APP_ENV:?set APP_ENV in infra/.env}
   LOG_LEVEL: ${LOG_LEVEL:?set LOG_LEVEL in infra/.env}
   DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:?}
+  REDIS_URL: redis://redis:6379/0
+  # Optional; Sentry stays disabled when empty (docs/FOUNDATION_DECISIONS.md "Technical observability").
+  SENTRY_DSN: ${SENTRY_DSN:-}
 
 services:
   postgres:
@@ -68,12 +71,14 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     healthcheck:
       test:
         - CMD
         - python
         - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)"
       interval: 10s
       timeout: 5s
       retries: 6
@@ -85,6 +90,7 @@ services:
       APP_ENV: ${APP_ENV:?}
       LOG_LEVEL: ${LOG_LEVEL:?}
       REDIS_URL: redis://redis:6379/0
+      SENTRY_DSN: ${SENTRY_DSN:-}
     depends_on:
       redis:
         condition: service_healthy

@@ -35,7 +35,7 @@ jobs:
       - run: uv run pytest
 
   backend-integration:
-    name: Backend integration (PostgreSQL migrations)
+    name: Backend integration (PostgreSQL migrations, readiness)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -51,9 +51,19 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       APP_ENV: development
       DATABASE_URL: postgresql+psycopg://tapjob:ci-only-password@localhost:5432/tapjob_ci
+      REDIS_URL: redis://localhost:6379/0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
@@ -64,7 +74,7 @@ jobs:
       - run: uv run pytest -m integration
 
   packages:
-    name: Shared packages (tokens, product config)
+    name: Shared packages (lint, format, tokens, product config)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -73,9 +83,32 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      - run: npm run lint
+      - run: npm run format:check
       - run: npm run tokens:check
       - run: npm run typecheck
       - run: npm test
+
+  mobile:
+    name: Mobile (Expo Doctor, bundle export)
+    runs-on: ubuntu-latest
+    env:
+      # Only used to prove the shell boots/exports; no real backend is reachable in this job.
+      EXPO_PUBLIC_APP_ENV: development
+      EXPO_PUBLIC_API_BASE_URL: https://api.example.com
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Expo Doctor
+        working-directory: apps/mobile
+        run: npx expo-doctor
+      - name: Export the shell bundle (proves it actually builds)
+        working-directory: apps/mobile
+        run: npx expo export --platform android --platform ios
 
   docker:
     name: Docker build and compose smoke test
@@ -88,10 +121,11 @@ jobs:
         run: docker compose -f infra/compose.yaml build
       - name: Start stack
         run: docker compose -f infra/compose.yaml up --detach --wait --wait-timeout 180 postgres redis api worker
-      - name: Health check through published port
+      - name: Health and readiness checks through published port
         run: |
           set -a; . infra/.env; set +a
           curl --fail --silent --show-error "http://127.0.0.1:${API_HOST_PORT}/health"
+          curl --fail --silent --show-error "http://127.0.0.1:${API_HOST_PORT}/ready"
       - name: Show logs on failure
         if: failure()
         run: docker compose -f infra/compose.yaml logs --no-color

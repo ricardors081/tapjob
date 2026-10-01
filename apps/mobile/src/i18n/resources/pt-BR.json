@@ -1,0 +1,15 @@
+{
+  "home": {
+    "title": "Olá, {{productName}}",
+    "subtitle": "A fundação mobile está no ar.",
+    "environmentLabel": "Ambiente",
+    "localeLabel": "Idioma detectado",
+    "apiLabel": "API",
+    "aboutLink": "Sobre este shell"
+  },
+  "about": {
+    "title": "Sobre",
+    "description": "Shell mínimo do {{shortName}}: Expo Router, tokens, product config e i18n funcionando (WP0.1-B).",
+    "backLink": "Voltar"
+  }
+}

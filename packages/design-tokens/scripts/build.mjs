@@ -52,7 +52,11 @@ export function dtcgColorToHex(path, value) {
     fail(`alpha must be omitted or ${OPAQUE_ALPHA}`);
   }
   const hex = `#${components
-    .map((c) => Math.round(c * BYTE_MAX).toString(HEX_RADIX).padStart(2, "0"))
+    .map((c) =>
+      Math.round(c * BYTE_MAX)
+        .toString(HEX_RADIX)
+        .padStart(2, "0"),
+    )
     .join("")}`.toUpperCase();
   if (value.hex !== undefined) {
     if (typeof value.hex !== "string" || !HEX_COLOR_PATTERN.test(value.hex)) {
@@ -94,7 +98,8 @@ export function flattenTokens(tree, prefix = [], inheritedType = undefined, out 
 export function resolveToken(path, tokens, stack = []) {
   const token = tokens.get(path);
   if (!token) throw new Error(`Unknown token reference "${path}" (from ${stack.at(-1) ?? "root"})`);
-  if (stack.includes(path)) throw new Error(`Circular token reference: ${[...stack, path].join(" -> ")}`);
+  if (stack.includes(path))
+    throw new Error(`Circular token reference: ${[...stack, path].join(" -> ")}`);
   const alias = typeof token.value === "string" ? ALIAS_PATTERN.exec(token.value) : null;
   if (!alias) return token;
   const target = resolveToken(alias[1], tokens, [...stack, path]);
