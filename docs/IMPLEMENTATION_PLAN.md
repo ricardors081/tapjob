@@ -77,7 +77,8 @@ Resolve pending foundational ADRs.
 
 ### Checkpoints
 
-#### WP0.2-A — HTTP Contract, OpenAPI Client & Contract CI (IMPLEMENTED / UNDER REVIEW)
+#### WP0.2-A — HTTP Contract, OpenAPI Client & Contract CI (VERIFIED)
+Independently reviewed and merged in PR #9; CI green post-merge on `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`.
 - OpenAPI/client generation: `@hey-api/openapi-ts` pinned exact, deterministic offline export, `createApiClient`/`isApiError` facade;
 - `/api/v1` versioning convention (`/health`/`/ready` stay unversioned), explicit camelCase `operationId`;
 - `ErrorResponse` error envelope and exception handlers;
@@ -87,8 +88,9 @@ Resolve pending foundational ADRs.
 
 See `docs/adr/0003-api-contract-client-generation.md`, `docs/adr/0004-http-errors-pagination-correlation-idempotency.md` and `docs/PROJECT_STATE.md`.
 
-#### WP0.2-B — Internal Ports & Capability Model (NOT STARTED)
-- canonical interfaces required before upstream code enters runtime: `JobSource`, `MatchingEngine`, `ResumeParser`, `ResumeRenderer`, `AiGateway`, `MessagingChannel`, `ApplyConnector`, `InboxConnector` (as `Protocol`s with a capability model);
+#### WP0.2-B — Internal Ports & Capability Model (NOT STARTED, next authorized checkpoint)
+- canonical interfaces required before upstream code enters runtime: `JobSource`, `ResumeParser`, `ResumeRenderer`, `AiGateway`, `MessagingChannel`, `ApplyConnector`, `InboxConnector` (as `Protocol`s with a capability model);
+- `MatchingEngine` remains internal/domain for now, not a provider-neutral port: interface extraction is deferred to WP2.2 if justified by a real substitution need, not assumed up front;
 - worker-side request correlation;
 - deployment/CD contract within the approved topology (not a real deploy).
 
@@ -502,6 +504,6 @@ Can progress alongside WPs when they do not alter contracts:
 
 ## First authorized next step
 
-**WP0.2 only** (WP0.2-A implemented/under review; WP0.2-B next).
+**WP0.2 only** (WP0.2-A verified; WP0.2-B is the next authorized checkpoint). WP1.x is not authorized yet.
 
-WP0.1 is independently verified and merged. Product feature work should not begin before both WP0.2-A and WP0.2-B technical contracts are independently verified.
+WP0.1 is independently verified and merged. WP0.2-A is independently verified and merged (PR #9, `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`). Product feature work should not begin before WP0.2-B's technical contracts are also independently verified.

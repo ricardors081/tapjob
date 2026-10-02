@@ -1,9 +1,9 @@
 # Project State — TapJob
 
-**As of:** 2026-10-01  
+**As of:** 2026-10-02  
 **Repository:** `ricardoo081/tapjob`  
 **Phase:** 0 — Foundation  
-**Code status:** WP0.1 VERIFIED. WP0.2-A IMPLEMENTED / UNDER REVIEW. WP0.2-B NOT STARTED.
+**Code status:** WP0.1 VERIFIED. WP0.2-A VERIFIED. WP0.2-B NOT STARTED. WP0.2 IN PROGRESS.
 
 This file must reflect reality only.
 
@@ -95,8 +95,8 @@ Known local-environment limitations (do not block CI, see ADR-0002 Consequences)
 - `expo-doctor`'s React Native Directory check failed locally with a network error (sandboxed environment); expected to pass in GitHub Actions, which has full internet access.
 - Docker Desktop/WSL remains unavailable on this Windows machine (pre-existing, unrelated to this checkpoint); `docker compose config` was used locally to validate the Compose changes, and the real Docker build/up/health check runs in GitHub Actions.
 
-### API contract & HTTP conventions — WP0.2-A (IMPLEMENTED / UNDER REVIEW)
-See `docs/adr/0003-api-contract-client-generation.md` (D-045) and `docs/adr/0004-http-errors-pagination-correlation-idempotency.md` (D-046). Not yet independently reviewed/merged; closes `OQ-015`.
+### API contract & HTTP conventions — WP0.2-A (VERIFIED)
+See `docs/adr/0003-api-contract-client-generation.md` (D-045) and `docs/adr/0004-http-errors-pagination-correlation-idempotency.md` (D-046); closes `OQ-015`. Independently reviewed and merged in PR #9; CI also passed on the post-merge `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`.
 - deterministic, offline OpenAPI export (`tapjob_api.openapi_export`) to `packages/contracts/openapi.json`; structural contract rules (`tapjob_api.http.contract_rules`: explicit camelCase `operationId`, `/api/v1` scoping, non-2xx responses reference `ErrorResponse`) enforced at export time and unit-tested directly;
 - `/api/v1` business API root mounted (`tapjob_api.http.api_v1`), empty — no product route exists yet; `/health`/`/ready` stay unversioned and now additionally declare an explicit `operationId` and document their shared `500: ErrorResponse` case;
 - canonical `ErrorResponse` envelope and exception handlers (`tapjob_api.http.errors`) for `ApiError`/`RequestValidationError`/`StarletteHTTPException`/unhandled exceptions; `message` is safe-to-display but never a logic input, backend does not localize by `Accept-Language` at this stage;
@@ -210,11 +210,11 @@ Acceptance:
 - mobile shell boots;
 - docs align with repository reality.
 
-### WP0.2 — Technical Contracts & Remaining Architecture Decisions
+### WP0.2 — Technical Contracts & Remaining Architecture Decisions (IN PROGRESS)
 
 Checkpoints:
-- **WP0.2-A — IMPLEMENTED / UNDER REVIEW:** OpenAPI/client generation strategy; `/api/v1` versioning convention; `ErrorResponse` envelope and exception handlers; cursor pagination codec; `Idempotency-Key` convention (documented, not yet implemented); contract CI gates. See `docs/adr/0003-api-contract-client-generation.md` and `docs/adr/0004-http-errors-pagination-correlation-idempotency.md` (section 1 above has the full checkpoint summary). Not yet independently reviewed, merged or CI-verified at latest HEAD.
-- **WP0.2-B — NOT STARTED:** canonical internal ports (`JobSource`, `MatchingEngine`, `ResumeParser`, `ResumeRenderer`, `AiGateway`, `MessagingChannel`, `ApplyConnector`, `InboxConnector`) as `Protocol`s with a capability model; worker-side request correlation; deployment/CD contract (not a real deploy).
+- **WP0.2-A — VERIFIED:** OpenAPI/client generation strategy; `/api/v1` versioning convention; `ErrorResponse` envelope and exception handlers; cursor pagination codec; `Idempotency-Key` convention (documented, not yet implemented); contract CI gates. See `docs/adr/0003-api-contract-client-generation.md` and `docs/adr/0004-http-errors-pagination-correlation-idempotency.md` (section 1 above has the full checkpoint summary). Independently reviewed and merged in PR #9; CI green post-merge on `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`.
+- **WP0.2-B — NOT STARTED (next authorized checkpoint):** canonical internal ports (`JobSource`, `ResumeParser`, `ResumeRenderer`, `AiGateway`, `MessagingChannel`, `ApplyConnector`, `InboxConnector`) as `Protocol`s with a capability model; worker-side request correlation; deployment/CD contract (not a real deploy). `MatchingEngine` is not a provider-neutral port here: it remains internal/domain logic for now; interface extraction is deferred to WP2.2 if justified by a real substitution need (not assumed up front).
 
 Already resolved (pre-WP0.2):
 - auth: Firebase Authentication;
@@ -258,6 +258,6 @@ On every significant PR:
 
 ## 7. Current authoritative conclusion
 
-TapJob has a defined product and architecture baseline, a repository/engineering skeleton (WP0.1-A + WP0.1-B) and a first technical-contracts checkpoint (WP0.2-A: HTTP/OpenAPI/client-generation conventions), but **no product functionality yet**.
+TapJob has a defined product and architecture baseline, a repository/engineering skeleton (WP0.1-A + WP0.1-B) and a first verified technical-contracts checkpoint (WP0.2-A: HTTP/OpenAPI/client-generation conventions), but **no product functionality yet**.
 
-WP0.1 is independently reviewed, merged and verified with green CI on `main`. Gate 0 is satisfied. WP0.2-A is implemented and awaiting independent review/CI verification at latest HEAD; it must not be marked VERIFIED from this report alone. WP0.2-B (canonical ports/capability model, worker correlation, deployment contract) remains not started. Product feature work must not start before both WP0.2-A and WP0.2-B are independently verified.
+WP0.1 is independently reviewed, merged and verified with green CI on `main`. Gate 0 is satisfied. WP0.2-A is independently reviewed, merged (PR #9) and verified with green CI on `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`. WP0.2-B (canonical ports/capability model, worker correlation, deployment contract) remains not started and is the next authorized checkpoint; WP0.2 as a whole stays IN PROGRESS until it is also independently verified. Product feature work must not start before WP0.2-B is independently verified.
