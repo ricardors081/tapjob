@@ -2,7 +2,7 @@
 
 > Plataforma pessoal de carreira para descobrir vagas, preparar candidaturas, aplicar com o nível de automação permitido, acompanhar processos e evoluir até a contratação.
 
-**Status atual:** Foundation: WP0.1 verificado (monorepo, backend/worker skeletons, CI, Docker/Compose, shell Expo, readiness, observabilidade, i18n e design-token guards). WP0.2-A verificado (contrato HTTP/OpenAPI, cliente TypeScript gerado, CI de contrato). WP0.2-B (ports internos/capability model) é o próximo trabalho autorizado. Sem funcionalidades de produto.  
+**Status atual:** Foundation: WP0.1 verificado (monorepo, backend/worker skeletons, CI, Docker/Compose, shell Expo, readiness, observabilidade, i18n e design-token guards). WP0.2-A verificado (contrato HTTP/OpenAPI, cliente TypeScript gerado, CI de contrato). WP0.2-B em andamento: Checkpoint A (ports internos/capability model) implementado, aguardando revisão independente; Checkpoint B (correlação no worker, contrato de deploy) é o próximo passo. WP1.x não autorizado. Sem funcionalidades de produto.  
 **Mercado inicial:** Brasil.  
 **Aplicação em produção:** ainda não existe.
 

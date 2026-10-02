@@ -479,13 +479,14 @@ Only establish repo, CI, tooling and provenance mechanism.
 ## WP0.2
 Create interfaces that upstream code must fit:
 - JobSource;
-- MatchingEngine;
 - ResumeParser;
 - ResumeRenderer;
 - AiGateway;
 - MessagingChannel;
 - ApplyConnector;
 - InboxConnector.
+
+`MatchingEngine` remains internal/domain logic; interface extraction is deferred to WP2.2 only if justified by a real substitution need (docs/adr/0005-internal-ports-capability-model.md, D-048).
 
 ## WP1.2 / WP1.3
 Reuse:

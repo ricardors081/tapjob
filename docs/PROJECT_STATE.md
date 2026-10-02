@@ -3,7 +3,7 @@
 **As of:** 2026-10-02  
 **Repository:** `ricardoo081/tapjob`  
 **Phase:** 0 — Foundation  
-**Code status:** WP0.1 VERIFIED. WP0.2-A VERIFIED. WP0.2-B NOT STARTED. WP0.2 IN PROGRESS.
+**Code status:** WP0.1 VERIFIED. WP0.2-A VERIFIED. WP0.2-B IN PROGRESS (Checkpoint A implemented, pending independent review). WP0.2 IN PROGRESS. WP1.x NOT AUTHORIZED.
 
 This file must reflect reality only.
 
@@ -113,6 +113,20 @@ Known local-environment limitations for this checkpoint (do not block CI):
 - same Windows/`uv` interpreter restriction as WP0.1-B; backend verification ran with the system Python 3.14 instead (`pip install --user` + editable installs, removed afterward): `mypy --strict` passed (40 source files) and `pytest` passed (94 tests: 45 pre-existing + 49 new, across the checkpoint and a follow-up round of fixes from an independent code review). `ruff check`/`ruff format --check` passed earlier in the same session on this exact code; partway through, this machine's endpoint security began blocking execution of the `ruff.exe` binary itself (`PermissionError: Acesso negado`, reproduced even against a freshly reinstalled copy in a throwaway venv -- the same class of issue ADR-0002 documents for `uv`'s own interpreter, now hitting a different tool) and it could not be re-run after that point; `pyflakes` (a pure-Python fallback covering unused imports/names) was run instead and found nothing. GitHub Actions (Linux) remains the authoritative, unaffected gate for all of these.
 - an independent code review (`/code-review --level high`) of this checkpoint's diff found and fixed, before this PR was marked ready: a path-prefix boundary bug in `contract_rules` (`/api/v1beta` would have wrongly matched the `/api/v1` scope check), `/ready`'s existing 503/`ReadinessResponse` case was undocumented in the OpenAPI schema (the generated client had no typed way to see it — now documented and present in `GetReadinessErrors`), an un-bounded cursor length in `decode_cursor` (DoS-amplification risk), two defensive/efficiency nits in `contract_rules` (OpenAPI 3.1 wildcard status keys, redundant schema traversal), and `COMMON_OPERATIONAL_ERROR_RESPONSES` moved from being repeated per-route to each router's own constructor. Not fixed, deliberately: the exception-handling logic being split across `errors.py`/`request_context.py` (inherent to the Starlette architecture issue both already document at length) and `exactOptionalPropertyTypes` being scoped per-consumer rather than per-file (TypeScript has no per-file override within one `tsc` invocation; already flagged in ADR-0003 for human review).
 
+### Internal ports & capability model — WP0.2-B Checkpoint A (IMPLEMENTED, pending independent review)
+See `docs/adr/0005-internal-ports-capability-model.md` (D-048). Not yet independently reviewed or merged.
+- seven provider-neutral `typing.Protocol` contracts under `tapjob_api.ports`: `JobSource`, `ResumeParser`, `ResumeRenderer`, `AiGateway`, `MessagingChannel`, `ApplyConnector`, `InboxConnector` — no adapter, no provider SDK, no product feature;
+- `MatchingEngine` is explicitly NOT a port (remains internal/domain logic; interface extraction deferred to WP2.2 only if a real substitution need arises) — asserted by a test, not just documented;
+- shared primitives: `CallContext`/`Deadline` (deadline is a budget, not a retry policy), normalized `PortError`/`PortErrorCode` (8 codes, `OUTCOME_UNKNOWN` mandatory and distinct from `UNAVAILABLE`), `AdapterHealth`, generic `ResultMetadata`;
+- capability model: one shared `CapabilityStatus` vocabulary, per-port capability-key enums, `CapabilityReport[T]`, `ensure_unique_capabilities` (rejects a capability reported twice) and `capability_status_for` (an unreported capability deterministically resolves to `UNSUPPORTED`, never an exception or `None`);
+- `AiGateway`'s module docstring states explicitly that delimiting untrusted content in a prompt is not, by itself, a sufficient prompt-injection defense; grounding only ever references an already-confirmed `ProfileFact` id, never a fact value;
+- `ApplyConnector` covers only the `OFFICIAL_API` execution boundary (fetch form / submit); `SubmissionRequest.answers` only carries already-confirmed answers; `SubmissionOutcomeStatus.OUTCOME_UNKNOWN` stays mandatory;
+- an AST-based test asserts no port module imports anything outside the standard library and `tapjob_api` itself (no Expo/Evolution/OpenAI/Anthropic/Gmail/ATS/browser-extension types);
+- conformance is a static `mypy --strict` check (a fake adapter per port assigned to a Protocol-typed variable), not `@runtime_checkable`/`isinstance`;
+- no source reuse in this checkpoint (`docs/SOURCE_REUSE_LEDGER.md` unchanged — nothing to record).
+
+Known local-environment limitations for this checkpoint (do not block CI): same Windows/`uv`/`ruff.exe` restrictions as the prior two checkpoints; backend verification ran with the system Python 3.14 (`mypy --strict`: 54 source files clean; `pytest`: 132 tests, 94 pre-existing + 38 new, all passed); `pyflakes` (pure-Python fallback) found nothing; `black --line-length 100` was used locally as a formatting approximation since `ruff format` could not run, with GitHub Actions' real `ruff check`/`ruff format --check` remaining authoritative.
+
 ## 2. Not implemented
 
 No production functionality exists yet. Backend code is limited to the WP0.1-A/WP0.1-B skeleton above (no domain models, tables or business endpoints; the database schema is still an empty baseline). The mobile app is a shell only, no product screens.
@@ -214,7 +228,9 @@ Acceptance:
 
 Checkpoints:
 - **WP0.2-A — VERIFIED:** OpenAPI/client generation strategy; `/api/v1` versioning convention; `ErrorResponse` envelope and exception handlers; cursor pagination codec; `Idempotency-Key` convention (documented, not yet implemented); contract CI gates. See `docs/adr/0003-api-contract-client-generation.md` and `docs/adr/0004-http-errors-pagination-correlation-idempotency.md` (section 1 above has the full checkpoint summary). Independently reviewed and merged in PR #9; CI green post-merge on `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`.
-- **WP0.2-B — NOT STARTED (next authorized checkpoint):** canonical internal ports (`JobSource`, `ResumeParser`, `ResumeRenderer`, `AiGateway`, `MessagingChannel`, `ApplyConnector`, `InboxConnector`) as `Protocol`s with a capability model; worker-side request correlation; deployment/CD contract (not a real deploy). `MatchingEngine` is not a provider-neutral port here: it remains internal/domain logic for now; interface extraction is deferred to WP2.2 if justified by a real substitution need (not assumed up front).
+- **WP0.2-B — IN PROGRESS:** canonical internal ports (`JobSource`, `ResumeParser`, `ResumeRenderer`, `AiGateway`, `MessagingChannel`, `ApplyConnector`, `InboxConnector`) as `Protocol`s with a capability model; worker-side request correlation; deployment/CD contract (not a real deploy). `MatchingEngine` is not a provider-neutral port here: it remains internal/domain logic for now; interface extraction is deferred to WP2.2 if justified by a real substitution need (not assumed up front).
+  - **Checkpoint A — IMPLEMENTED, pending independent review:** the seven ports, capability model, `CallContext`/`PortError`/`AdapterHealth`. See section 1 above and `docs/adr/0005-internal-ports-capability-model.md`.
+  - **Checkpoint B — NOT STARTED:** worker-side request correlation; deployment/CD contract (ADR-0006, not a real deploy).
 
 Already resolved (pre-WP0.2):
 - auth: Firebase Authentication;
@@ -223,7 +239,7 @@ Already resolved (pre-WP0.2):
 - initial hosting: Linux + Docker Compose behind Cloudflare.
 
 Output:
-ADRs/contracts, not production feature claims. Product feature work must not start before WP0.2-B is also independently verified.
+ADRs/contracts, not production feature claims. WP0.2-B is not VERIFIED by this implementation alone; Checkpoint B remains. Product feature work must not start before WP0.2-B is independently verified. WP1.x remains NOT AUTHORIZED.
 
 ## 5. Phase gates
 
@@ -258,6 +274,6 @@ On every significant PR:
 
 ## 7. Current authoritative conclusion
 
-TapJob has a defined product and architecture baseline, a repository/engineering skeleton (WP0.1-A + WP0.1-B) and a first verified technical-contracts checkpoint (WP0.2-A: HTTP/OpenAPI/client-generation conventions), but **no product functionality yet**.
+TapJob has a defined product and architecture baseline, a repository/engineering skeleton (WP0.1-A + WP0.1-B), a verified technical-contracts checkpoint (WP0.2-A: HTTP/OpenAPI/client-generation conventions) and a first implemented-pending-review internal-ports checkpoint (WP0.2-B Checkpoint A), but **no product functionality yet**.
 
-WP0.1 is independently reviewed, merged and verified with green CI on `main`. Gate 0 is satisfied. WP0.2-A is independently reviewed, merged (PR #9) and verified with green CI on `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`. WP0.2-B (canonical ports/capability model, worker correlation, deployment contract) remains not started and is the next authorized checkpoint; WP0.2 as a whole stays IN PROGRESS until it is also independently verified. Product feature work must not start before WP0.2-B is independently verified.
+WP0.1 is independently reviewed, merged and verified with green CI on `main`. Gate 0 is satisfied. WP0.2-A is independently reviewed, merged (PR #9) and verified with green CI on `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`. WP0.2-B Checkpoint A (seven internal ports + capability model) is implemented and awaiting independent review/CI verification at latest HEAD; it must not be marked VERIFIED from this report alone. WP0.2-B Checkpoint B (worker correlation, deployment contract) remains not started. WP0.2 as a whole stays IN PROGRESS until WP0.2-B is independently verified. Product feature work must not start before then. WP1.x remains NOT AUTHORIZED.
