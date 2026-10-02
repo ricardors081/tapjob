@@ -191,5 +191,11 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-      - name: npm dependency audit
-        run: npm audit --audit-level=high
+      - name: Audit gate self-test (deterministic, no live registry access)
+        run: node --test tools/security/audit-gate.test.mjs
+      - name: npm dependency audit (scoped, fail-closed, time-limited exception gate)
+        # Runs the real `npm audit --json` and fails on any HIGH/CRITICAL finding except the one
+        # temporary, scoped, auto-expiring exception recorded in tools/security/audit-gate.mjs
+        # (docs/adr/0007-temporary-node-forge-audit-exception.md, D-047). See that file/ADR before
+        # changing this step.
+        run: node tools/security/audit-gate.mjs

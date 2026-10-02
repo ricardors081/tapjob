@@ -136,15 +136,19 @@ export default defineConfig([
     "packages/contracts/src/generated/**",
   ]),
 
-  // packages/*: Node-run TypeScript/JavaScript tooling (scripts, typed accessors).
+  // packages/* and tools/*: Node-run TypeScript/JavaScript tooling (scripts, typed accessors, CI
+  // gates).
   {
-    files: ["packages/**/*.{mjs,ts,mts}"],
+    files: ["packages/**/*.{mjs,ts,mts}", "tools/**/*.{mjs,ts,mts}"],
     extends: [js.configs.recommended, tseslint.configs.recommended],
     languageOptions: {
       globals: { process: "readonly", console: "readonly" },
     },
   },
-  { files: ["packages/**/*.{mjs,ts,mts}"], rules: magicValueGuardRules },
+  {
+    files: ["packages/**/*.{mjs,ts,mts}", "tools/**/*.{mjs,ts,mts}"],
+    rules: magicValueGuardRules,
+  },
 
   // apps/mobile: the Expo app.
   {
