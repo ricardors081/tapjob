@@ -1,0 +1,128 @@
+# Deployment-time Compose contract for staging/production (docs/adr/0006-worker-correlation-
+# deployment-cd-contract.md, D-050; docs/DEPLOYMENT.md). This is NOT the local development stack
+# (that remains infra/compose.yaml, which still builds the image locally for fast iteration).
+#
+# The one rule this file exists to enforce: api, worker and migrate all run the EXACT SAME,
+# already-built, already-reviewed backend image -- identified by its immutable digest, never a
+# mutable tag -- so the three processes are always in lockstep (D-043) and a deploy never silently
+# runs different code for different services. Nothing here builds an image; the digest is produced
+# once, by the (separate, manual, not executed by this checkpoint)
+# .github/workflows/release-image.yml, and the SAME value is promoted unchanged from staging to
+# production (docs/adr/0006-...md "build once, promote the same artifact").
+#
+# The repository below is a FIXED literal, not interpolated from an environment variable (2026
+# review, Finding 2): `docs/DEPLOYMENT.md`'s documented deploy command previously let an operator
+# set `BACKEND_IMAGE=...` to ANY value -- including a `:latest` tag or a foreign repository --
+# which made `tools/deploy/validate_image_ref.mjs` a convention an operator could simply skip, not
+# a structural guarantee. With the repository fixed here and only a bare `BACKEND_IMAGE_DIGEST`
+# (`sha256:<64 lowercase hex>`, no repo/tag slot at all -- see `validateImageDigest` in that same
+# file) left as the variable part, a mutable tag is unrepresentable and a foreign repository
+# cannot be substituted: there is nowhere left in this file for either to go.
+#
+# Usage (an operator, following docs/DEPLOYMENT.md, not this repository's CI):
+#   BACKEND_IMAGE_DIGEST=sha256:<digest> \
+#   docker compose -f infra/compose.deploy.yaml --env-file <environment>.env config
+#
+# `--env-file` supplies the environment-specific values (APP_ENV, DATABASE_URL, REDIS_URL,
+# POSTGRES_*, SENTRY_DSN, ...); this file never embeds an environment's actual secrets
+# (docs/ENGINEERING_STANDARDS.md §3.3, docs/adr/0006-...md "secrets policy").
+
+name: tapjob-deploy
+
+x-backend: &backend
+  image: ghcr.io/ricardoo081/tapjob-backend@${BACKEND_IMAGE_DIGEST:?set BACKEND_IMAGE_DIGEST to sha256:<64 lowercase hex characters> -- never a tag, never a full reference -- see tools/deploy/validate_image_ref.mjs's validateImageDigest}
+  restart: unless-stopped
+
+x-backend-env: &backend-env
+  APP_ENV: ${APP_ENV:?set APP_ENV (staging|production)}
+  LOG_LEVEL: ${LOG_LEVEL:?set LOG_LEVEL}
+  DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL -- staging and production never share a database}
+  REDIS_URL: ${REDIS_URL:?set REDIS_URL}
+  SENTRY_DSN: ${SENTRY_DSN:-}
+
+services:
+  # PostgreSQL/Redis are listed here only for the topology this checkpoint documents (docs/
+  # ARCHITECTURE.md §11): same-host Compose services, never bound to a host port, reachable only
+  # from other services on this Compose network -- never from the public Cloudflare-fronted
+  # ingress. A future environment that instead points DATABASE_URL/REDIS_URL at an externally
+  # managed instance simply omits these two services from its env/override; nothing else in this
+  # file assumes they are local.
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Deployment ordering (docs/adr/0006-...md "migration contract"): migrate must complete
+  # successfully, on the SAME digest, before api/worker are brought up against the new schema.
+  # This file never attempts an automatic `alembic downgrade`; a destructive/incompatible
+  # migration blocks promotion and requires an explicit, separately reviewed decision.
+  migrate:
+    <<: *backend
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *backend
+    environment:
+      <<: *backend-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    # No `ports:` publishing a host port: public ingress is Cloudflare Tunnel only
+    # (docs/ARCHITECTURE.md §11, docs/adr/0006-...md "Cloudflare boundary") -- out of scope for
+    # this checkpoint to configure, and never a directly-exposed container port either way.
+
+  worker:
+    <<: *backend
+    command: ["celery", "-A", "tapjob_worker.main:app", "worker", "--loglevel", "${LOG_LEVEL:?}"]
+    environment:
+      <<: *backend-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A tapjob_worker.main:app inspect ping --destination celery@$$HOSTNAME --timeout 5"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  postgres-data:

@@ -163,6 +163,76 @@ jobs:
         if: always()
         run: docker compose -f infra/compose.yaml down --volumes
 
+  deploy-contract:
+    name: Deployment contract (image-ref validator, compose config)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      - name: Image-reference/digest validator self-test (deterministic, no registry access)
+        run: node --test tools/deploy/validate_image_ref.test.mjs
+      - name: Release CI-success-gate self-test (deterministic, no live GitHub API access)
+        run: node --test tools/deploy/require_ci_success.test.mjs
+      - name: A dummy mutable tag is rejected as a digest (proves the gate, not just the unit tests)
+        run: |
+          if node tools/deploy/validate_image_ref.mjs --digest "latest"; then
+            echo "expected the validator to reject a mutable tag as a digest" >&2
+            exit 1
+          fi
+      - name: A dummy full reference (repo + digest) is rejected as a digest
+        # BACKEND_IMAGE_DIGEST has no repo/tag slot at all (2026 review, Finding 2) -- only a bare
+        # 'sha256:<digest>' is ever accepted, never a full 'name@sha256:<digest>' reference.
+        run: |
+          if node tools/deploy/validate_image_ref.mjs --digest "ghcr.io/example/tapjob-backend@sha256:$(printf 'a%.0s' {1..64})"; then
+            echo "expected the validator to reject a full reference where only a bare digest is accepted" >&2
+            exit 1
+          fi
+      - name: A dummy valid bare digest is accepted
+        run: node tools/deploy/validate_image_ref.mjs --digest "sha256:$(printf 'a%.0s' {1..64})"
+      - name: Resolve the deploy Compose contract with synthetic-only configuration
+        # `config` only resolves/validates the YAML + env substitution; it never pulls or runs the
+        # referenced image (docs/adr/0006-worker-correlation-deployment-cd-contract.md). Every
+        # value here is dummy/synthetic, never a real secret (docs/SECURITY_PRIVACY.md).
+        env:
+          BACKEND_IMAGE_DIGEST: sha256:0000000000000000000000000000000000000000000000000000000000000000
+          APP_ENV: staging
+          LOG_LEVEL: INFO
+          DATABASE_URL: postgresql+psycopg://dummy:dummy@postgres:5432/dummy
+          REDIS_URL: redis://redis:6379/0
+          POSTGRES_USER: dummy
+          POSTGRES_PASSWORD: dummy
+          POSTGRES_DB: dummy
+        run: docker compose -f infra/compose.deploy.yaml config
+      - name: Confirm the resolved image is the canonical repository at the given digest
+        run: |
+          images=$(docker compose -f infra/compose.deploy.yaml config --format json | \
+            python3 -c "import json,sys; d=json.load(sys.stdin); print('\n'.join(d['services'][s]['image'] for s in ('api','worker','migrate')))")
+          unique_count=$(echo "$images" | sort -u | wc -l)
+          if [ "$unique_count" -ne 1 ]; then
+            echo "api/worker/migrate must all resolve to the exact same image reference" >&2
+            echo "$images" >&2
+            exit 1
+          fi
+          expected="ghcr.io/ricardoo081/tapjob-backend@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+          resolved=$(echo "$images" | head -n 1)
+          if [ "$resolved" != "$expected" ]; then
+            echo "resolved image did not match the fixed canonical repository + digest" >&2
+            echo "expected: $expected" >&2
+            echo "resolved: $resolved" >&2
+            exit 1
+          fi
+        env:
+          BACKEND_IMAGE_DIGEST: sha256:0000000000000000000000000000000000000000000000000000000000000000
+          APP_ENV: staging
+          LOG_LEVEL: INFO
+          DATABASE_URL: postgresql+psycopg://dummy:dummy@postgres:5432/dummy
+          REDIS_URL: redis://redis:6379/0
+          POSTGRES_USER: dummy
+          POSTGRES_PASSWORD: dummy
+          POSTGRES_DB: dummy
+
   security:
     name: Secret scan and dependency audit
     runs-on: ubuntu-latest

@@ -253,6 +253,15 @@ One agent can implement; a different agent should review.
 
 Avoid multiple implementation agents editing the same module simultaneously.
 
+A research-only subagent/fork (dispatched to read files, search, or investigate) must never
+mutate git or GitHub — no commit, no push, no branch, no PR, no issue/comment. The primary agent
+is the sole writer unless write access was explicitly delegated for that specific task. If the
+runtime cannot enforce that a subagent stays read-only, do not delegate repository- or
+GitHub-write-capable work to it. Any unexpected mutation made by a subagent must be reported to
+the user and independently audited before the work is trusted (2026 review, WP0.2-B Checkpoint B:
+a research-only fork committed, pushed and opened a PR without authorization; it was caught and
+separately audited, but this must not become normal flow).
+
 ## 9. Definition of completion for Claude
 
 Claude may only report a checkpoint as complete when:

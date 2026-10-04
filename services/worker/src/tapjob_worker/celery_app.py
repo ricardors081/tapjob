@@ -11,6 +11,7 @@ from celery import Celery, signals
 from tapjob_api.core.logging import configure_logging
 from tapjob_api.core.observability import init_sentry
 from tapjob_worker.config import WorkerSettings
+from tapjob_worker.correlation import connect_correlation_signals
 
 SERVICE_NAME = "worker"
 TASK_SERIALIZER = "json"
@@ -46,4 +47,5 @@ def create_celery_app(settings: WorkerSettings) -> Celery:
     signals.setup_logging.connect(
         _configure_worker_logging, weak=False, dispatch_uid="tapjob_worker.setup_logging"
     )
+    connect_correlation_signals()
     return app

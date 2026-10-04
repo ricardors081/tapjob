@@ -1,0 +1,153 @@
+name: Release backend image
+
+# Manual-only, by design (docs/adr/0006-worker-correlation-deployment-cd-contract.md, D-050): this
+# workflow builds and pushes the ONE shared backend image (D-043 -- api, worker and migrate all run
+# it, differing only by command) to GHCR, captures its immutable digest, and stops. It never deploys
+# anything -- promoting a digest to staging/production is a separate, later operator action
+# (docs/DEPLOYMENT.md), not a side effect of this workflow.
+#
+# Deliberately `workflow_dispatch` only: no `push`/`pull_request` trigger, so this workflow cannot
+# run as a side effect of any commit, including the one that introduces it. It is reviewable here,
+# inert until a maintainer explicitly runs it from the Actions UI/API after this checkpoint's
+# review.
+#
+# No `ref` input (2026 review, Finding 1A): this workflow always builds whatever commit is at the
+# tip of `main` at run time -- never an arbitrary branch, tag or commit an operator (or anyone with
+# API access, since `workflow_dispatch` can be triggered via the API against ANY ref containing
+# this workflow file, not just through the Actions UI) could otherwise point it at. The preflight
+# job below enforces this with a hard failure, not a silent skip.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/tapjob-backend
+
+concurrency:
+  # One release build at a time; a second manual run queues rather than races the first
+  # (docs/adr/0006-...md "deployment concurrency" -- this is the BUILD step's own concurrency,
+  # distinct from a future deploy workflow's per-environment concurrency group). A static group is
+  # sufficient now that every run always targets the same ref (`main`, enforced below).
+  group: release-image
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Require main, require the exact commit's own CI to have succeeded
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Read-only: only enough to query past workflow runs via `gh api`
+      # (tools/deploy/require_ci_success.mjs) -- no write permission, no PAT.
+      actions: read
+    outputs:
+      source-sha: ${{ steps.source.outputs.sha }}
+    steps:
+      # `workflow_dispatch` can be triggered via the GitHub API against any ref containing this
+      # workflow file -- not just `main` through the Actions UI -- so this check must be an
+      # explicit, failing assertion in the workflow itself (2026 review, Finding 1A), never
+      # operator/UI discipline alone.
+      - name: Require this run was triggered against refs/heads/main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "This workflow may only be run against refs/heads/main; got '${{ github.ref }}'." >&2
+          echo "workflow_dispatch can be triggered via the API against any ref containing this" >&2
+          echo "workflow file -- this check enforces main even when the UI restriction is bypassed." >&2
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Capture the actual checked-out source commit SHA
+        # Read directly from the checked-out working tree (2026 review, Finding 1B), not from
+        # `github.sha`/implicit Action context -- the whole point is to use what was ACTUALLY
+        # checked out as the single source of truth for every downstream tag/label/summary value,
+        # rather than trusting two independently-computed values to agree.
+        id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Require this exact commit's own CI run to have completed with success
+        # Not "main is green right now" -- the exact commit SHA this run is about to build must
+        # itself have had a CI run conclude "success" (2026 review, Finding 1C; the real incident
+        # this guards: PR #13 merged cleanly, but a later post-merge audit-gate failure on main was
+        # discovered only afterward -- "main is green at this moment" never implied this specific
+        # commit's own run had succeeded). Pure evaluation logic lives in
+        # tools/deploy/require_ci_success.mjs and is unit-tested
+        # (require_ci_success.test.mjs) without ever executing this workflow.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node tools/deploy/require_ci_success.mjs "${{ steps.source.outputs.sha }}" "${{ github.repository }}"
+
+  build-and-push:
+    name: Build once, push by digest
+    needs: preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The only elevated permission this job needs; GITHUB_TOKEN is scoped to this run, not a
+      # long-lived credential (docs/adr/0006-...md "GHCR contract" -- no PAT is used or created).
+      packages: write
+    env:
+      SOURCE_SHA: ${{ needs.preflight.outputs.source-sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Confirm this checkout matches the SHA the preflight job verified
+        # Defense in depth: this job's own checkout must resolve to the exact same commit the
+        # preflight job captured and verified CI success for -- never two independently-trusted
+        # values that happen to usually agree.
+        run: |
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$SOURCE_SHA" ]; then
+            echo "checked-out commit ($actual) does not match the preflight-verified commit ($SOURCE_SHA)" >&2
+            exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tags/labels are built explicitly from SOURCE_SHA (2026 review, Finding 1B), not from
+      # docker/metadata-action's own implicit git-context detection (which reads `github.sha`,
+      # independent of what this workflow actually checked out) -- commit-SHA tags exist for human
+      # discovery only (docs/adr/0006-...md "one backend image"); the digest captured below -- not
+      # any tag here -- is the actual unit of promotion.
+      - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        id: meta
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=sha-${{ env.SOURCE_SHA }}
+          labels: |
+            org.opencontainers.image.title=tapjob-backend
+            org.opencontainers.image.description=TapJob Career Core backend (api, worker, migrate share this image)
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        id: build
+        with:
+          context: .
+          file: infra/docker/backend.Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Record the immutable digest this run produced
+        run: |
+          echo "## Release image" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Promotion reference:** \`${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **BACKEND_IMAGE_DIGEST (docs/DEPLOYMENT.md):** \`${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Source commit:** \`$SOURCE_SHA\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Promote this exact digest through staging then production (docs/DEPLOYMENT.md). Do not rebuild for either environment." >> "$GITHUB_STEP_SUMMARY"

@@ -6,11 +6,19 @@ Callers attach structured fields through ``extra``; never pass secrets, tokens o
 import json
 import logging
 import sys
+from collections.abc import Mapping
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
 
 request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
+
+# A small, generic place for a caller (the worker's Celery task hooks, for now) to attach a few
+# extra structured fields to every log line emitted during some scope, the same way `request_id_var`
+# already does for one field. Kept deliberately generic here (no Celery-specific field names) so
+# this module stays a cross-cutting logging primitive rather than owning worker-specific concepts
+# (docs/adr/0006-worker-correlation-deployment-cd-contract.md): the worker decides what goes in it.
+task_context_var: ContextVar[Mapping[str, Any] | None] = ContextVar("task_context", default=None)
 
 # Attributes every LogRecord carries; anything else on a record came from ``extra``.
 _STANDARD_RECORD_ATTRIBUTES = frozenset(vars(logging.makeLogRecord({}))) | {"message", "asctime"}
@@ -37,6 +45,9 @@ class JsonFormatter(logging.Formatter):
         request_id = request_id_var.get()
         if request_id is not None:
             payload["request_id"] = request_id
+        task_context = task_context_var.get()
+        if task_context is not None:
+            payload.update(task_context)
         for key, value in vars(record).items():
             if key not in _STANDARD_RECORD_ATTRIBUTES and not key.startswith("_"):
                 payload[key] = value

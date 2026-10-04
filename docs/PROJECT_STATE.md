@@ -1,9 +1,9 @@
 # Project State — TapJob
 
-**As of:** 2026-10-02  
+**As of:** 2026-10-04  
 **Repository:** `ricardoo081/tapjob`  
 **Phase:** 0 — Foundation  
-**Code status:** WP0.1 VERIFIED. WP0.2-A VERIFIED. WP0.2-B IN PROGRESS (Checkpoint A VERIFIED; Checkpoint B NOT STARTED, next authorized checkpoint). WP0.2 IN PROGRESS. WP1.x NOT AUTHORIZED.
+**Code status:** WP0.1 VERIFIED. WP0.2-A VERIFIED. WP0.2-B IN PROGRESS (Checkpoint A VERIFIED; Checkpoint B IMPLEMENTED, pending independent review). WP0.2 IN PROGRESS. WP1.x NOT AUTHORIZED.
 
 This file must reflect reality only.
 
@@ -130,6 +130,16 @@ Post-merge CI on `main` (run `37055251128`) confirmed, per job: `ruff check` all
 
 Known local-environment limitations during implementation (did not block CI): same Windows/`uv`/`ruff.exe` restrictions as the prior two checkpoints; local backend verification across the review rounds ran with the system Python 3.14 (final local state: `mypy --strict` 55 source files clean, `pytest` 171 passed/3 deselected, `pyflakes` clean, `black --check` clean). `ruff.exe` itself could not run locally at any point (`PermissionError: Acesso negado`), so GitHub Actions remained the sole authoritative `ruff check`/`ruff format --check` gate throughout, confirmed green at both the pre-merge and post-merge HEAD.
 
+### Worker correlation & deployment/CD contract — WP0.2-B Checkpoint B (IMPLEMENTED, pending independent review)
+See `docs/adr/0006-worker-correlation-deployment-cd-contract.md` (D-050) and `docs/DEPLOYMENT.md`. Not yet independently reviewed or merged.
+- worker-side TapJob correlation id propagated across Celery message boundaries via a custom `tapjob_correlation_id` message header (`tapjob_worker.correlation`) — never Celery's own built-in `correlation_id` message property, which is usually just the task id;
+- the shared, bounded, log-injection-safe identifier policy (`tapjob_api.core.correlation`) is extracted from the pre-existing HTTP `X-Request-ID` logic and reused by both HTTP and the worker, each with its own justified fallback (HTTP: fresh random id; worker: the task's own `root_id`, then `task_id`, then a fresh id); `resolve_correlation_id`/`is_valid_correlation_id` accept untyped `object` input, not `str | None`, so a malformed Celery message header (int/list/dict/etc.) degrades to the fallback instead of raising (2026 review, Finding 3);
+- `before_task_publish` propagates the active correlation id (including across nested task publication from within a running task); `task_prerun` binds it plus a new, generic `tapjob_api.core.logging.task_context_var` (Celery task id/root id/parent id/task name/retries — never task args/kwargs), with every message-derived field independently validated/normalized before being placed in the logged context, never trusted raw just because it came from `Task.request` (2026 review, Finding 3); `task_postrun`/`task_failure`/`task_retry` all reset it, so no finished task's context survives into whatever the worker executes next;
+- signal connection is idempotent (`dispatch_uid`, the same mechanism the pre-existing `setup_logging` hook already used) — `create_celery_app()` being called more than once never registers a duplicate handler;
+- deployment/CD contract: build-once/promote-the-same-immutable-digest (`registry/repo@sha256:...`, never `:latest`) across staging/production; one backend image preserved (D-043) for `api`/`worker`/`migrate`; `infra/compose.deploy.yaml` (new, no `build:`, no DB/Redis host ports, migration-before-rollout ordering enforced via `depends_on`) fixes the canonical repository directly in its image template and accepts only a bare `BACKEND_IMAGE_DIGEST=sha256:<digest>` (2026 review, Finding 2 — no repo/tag slot exists, so `:latest`/foreign-repository substitution is structurally impossible, not operator discipline); `tools/deploy/validate_image_ref.mjs` (new, zero-dependency) exports `validateImageRef` (full reference) and `validateImageDigest` (the bare digest form the deploy path uses), rejecting any mutable-tag/malformed/empty value; `.github/workflows/release-image.yml` (new, `workflow_dispatch`-only, no free-form `ref` input — **not executed by this checkpoint**) always builds the tip of `main`, hard-fails a `preflight` job if triggered against any other ref, captures the actual checked-out source SHA for every tag/label/summary value, and requires that exact commit's own CI run to have already completed with success (`tools/deploy/require_ci_success.mjs`, 2026 review, Finding 1) before building/pushing the one backend image to GHCR with minimal `GITHUB_TOKEN`/`actions: read` permissions and full-commit-SHA-pinned third-party actions; rollback is redigest-only, never an automatic database downgrade; EasyPanel/Cloudflare roles documented as bounded (operations/ingress only, never a configuration source of truth); SBOM/provenance attestation explicitly deferred (documented, not implemented);
+- no source reuse in this checkpoint (`docs/SOURCE_REUSE_LEDGER.md` unchanged — nothing to record);
+- both active temporary security exceptions (node-forge `GHSA-86w9-cpqp-85rv`/D-047, braces `GHSA-vfj7-8cjw-p6xm`/D-049) are untouched by this checkpoint.
+
 ## 2. Not implemented
 
 No production functionality exists yet. Backend code is limited to the WP0.1-A/WP0.1-B skeleton above (no domain models, tables or business endpoints; the database schema is still an empty baseline). The mobile app is a shell only, no product screens.
@@ -233,7 +243,7 @@ Checkpoints:
 - **WP0.2-A — VERIFIED:** OpenAPI/client generation strategy; `/api/v1` versioning convention; `ErrorResponse` envelope and exception handlers; cursor pagination codec; `Idempotency-Key` convention (documented, not yet implemented); contract CI gates. See `docs/adr/0003-api-contract-client-generation.md` and `docs/adr/0004-http-errors-pagination-correlation-idempotency.md` (section 1 above has the full checkpoint summary). Independently reviewed and merged in PR #9; CI green post-merge on `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`.
 - **WP0.2-B — IN PROGRESS:** canonical internal ports (`JobSource`, `ResumeParser`, `ResumeRenderer`, `AiGateway`, `MessagingChannel`, `ApplyConnector`, `InboxConnector`) as `Protocol`s with a capability model; worker-side request correlation; deployment/CD contract (not a real deploy). `MatchingEngine` is not a provider-neutral port here: it remains internal/domain logic for now; interface extraction is deferred to WP2.2 if justified by a real substitution need (not assumed up front).
   - **Checkpoint A — VERIFIED:** the seven ports, capability model, `CallContext`/`PortError`/`AdapterHealth`. Independently reviewed and merged via squash in PR #12 (`main` commit `a8bfbe621e5a83ae5f205adb1919ce3250684efb`); CI green post-merge (run `37055251128`, 7/7). See section 1 above and `docs/adr/0005-internal-ports-capability-model.md`.
-  - **Checkpoint B — NOT STARTED, next authorized checkpoint:** worker-side request correlation; deployment/CD contract (ADR-0006, not a real deploy). No implementation branch exists yet.
+  - **Checkpoint B — IMPLEMENTED, pending independent review:** worker-side TapJob correlation id propagated across Celery message boundaries (custom `tapjob_correlation_id` header, never Celery's own built-in `correlation_id`), bound into structured worker logs alongside Celery task/root/parent id and never task args/kwargs; deployment/CD contract establishing build-once/promote-the-same-immutable-digest, one backend image (D-043 preserved), `infra/compose.deploy.yaml`, `tools/deploy/validate_image_ref.mjs` digest-format gate, and a `workflow_dispatch`-only, not-yet-executed `.github/workflows/release-image.yml` GHCR publish workflow. See `docs/adr/0006-worker-correlation-deployment-cd-contract.md` and `docs/DEPLOYMENT.md`. No real deploy, no GHCR publish, no product feature, no migration.
 
 Already resolved (pre-WP0.2):
 - auth: Firebase Authentication;
@@ -242,7 +252,7 @@ Already resolved (pre-WP0.2):
 - initial hosting: Linux + Docker Compose behind Cloudflare.
 
 Output:
-ADRs/contracts, not production feature claims. WP0.2-B is not VERIFIED by this implementation alone; Checkpoint B remains. Product feature work must not start before WP0.2-B is independently verified. WP1.x remains NOT AUTHORIZED.
+ADRs/contracts, not production feature claims. WP0.2-B is not VERIFIED by this implementation alone — both checkpoints must be independently verified. Product feature work must not start before WP0.2-B is independently verified. WP1.x remains NOT AUTHORIZED.
 
 ## 5. Phase gates
 
@@ -277,6 +287,6 @@ On every significant PR:
 
 ## 7. Current authoritative conclusion
 
-TapJob has a defined product and architecture baseline, a repository/engineering skeleton (WP0.1-A + WP0.1-B), a verified technical-contracts checkpoint (WP0.2-A: HTTP/OpenAPI/client-generation conventions) and a second verified checkpoint (WP0.2-B Checkpoint A: internal ports + capability model), but **no product functionality yet**.
+TapJob has a defined product and architecture baseline, a repository/engineering skeleton (WP0.1-A + WP0.1-B), a verified technical-contracts checkpoint (WP0.2-A: HTTP/OpenAPI/client-generation conventions), a second verified checkpoint (WP0.2-B Checkpoint A: internal ports + capability model) and a third, implemented-pending-review checkpoint (WP0.2-B Checkpoint B: worker correlation + deployment/CD contract), but **no product functionality yet**.
 
-WP0.1 is independently reviewed, merged and verified with green CI on `main`. Gate 0 is satisfied. WP0.2-A is independently reviewed, merged (PR #9) and verified with green CI on `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`. WP0.2-B Checkpoint A (seven internal ports + capability model) is independently reviewed across three rounds, merged via squash (PR #12, `main` commit `a8bfbe621e5a83ae5f205adb1919ce3250684efb`) and verified with green CI on that commit (run `37055251128`, 7/7). WP0.2-B Checkpoint B (worker correlation, deployment contract) is the next authorized checkpoint and remains not started. WP0.2 as a whole stays IN PROGRESS until Checkpoint B is also independently verified. Product feature work must not start before then. WP1.x remains NOT AUTHORIZED.
+WP0.1 is independently reviewed, merged and verified with green CI on `main`. Gate 0 is satisfied. WP0.2-A is independently reviewed, merged (PR #9) and verified with green CI on `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`. WP0.2-B Checkpoint A (seven internal ports + capability model) is independently reviewed across three rounds, merged via squash (PR #12, `main` commit `a8bfbe621e5a83ae5f205adb1919ce3250684efb`) and verified with green CI on that commit (run `37055251128`, 7/7). WP0.2-B Checkpoint B (worker correlation, deployment/CD contract) is implemented and awaiting independent review/CI verification at latest HEAD; it must not be marked VERIFIED from this report alone. WP0.2-B as a whole stays IN PROGRESS until both checkpoints are independently verified. Product feature work must not start before then. WP1.x remains NOT AUTHORIZED.

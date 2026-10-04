@@ -34,3 +34,16 @@ def test_generated_request_id_replaces_downstream_values() -> None:
     values = response.headers.get_list(REQUEST_ID_HEADER)
     assert len(values) == 1
     assert values[0] not in {"downstream-1", "downstream-2"}
+
+
+def test_invalid_inbound_request_id_is_regenerated_not_echoed() -> None:
+    # Regression for the shared `resolve_correlation_id` extraction (docs/adr/0006-worker-
+    # correlation-deployment-cd-contract.md): an inbound header that fails the bounded/log-safe
+    # policy must still be replaced with a freshly minted id, exactly as before the extraction.
+    invalid = "has spaces/and?invalid!"
+    with TestClient(_app_whose_handler_sets_request_ids()) as client:
+        response = client.get(DOWNSTREAM_PATH, headers={REQUEST_ID_HEADER: invalid})
+
+    values = response.headers.get_list(REQUEST_ID_HEADER)
+    assert len(values) == 1
+    assert values[0] != invalid

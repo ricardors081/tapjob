@@ -1,7 +1,6 @@
 """Request correlation ID propagation and one structured log line per HTTP request."""
 
 import logging
-import re
 import time
 from http import HTTPStatus
 from uuid import uuid4
@@ -10,12 +9,11 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from tapjob_api.core.correlation import resolve_correlation_id
 from tapjob_api.core.logging import request_id_var
 from tapjob_api.http.errors import handle_unhandled_exception
 
 REQUEST_ID_HEADER = "X-Request-ID"
-# Inbound IDs are echoed into logs and responses, so they must be bounded and log-injection safe.
-_REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _MILLISECONDS_PER_SECOND = 1000
 
 logger = logging.getLogger(__name__)
@@ -23,9 +21,7 @@ logger = logging.getLogger(__name__)
 
 def _resolve_request_id(scope: Scope) -> str:
     incoming = Headers(scope=scope).get(REQUEST_ID_HEADER)
-    if incoming is not None and _REQUEST_ID_PATTERN.fullmatch(incoming):
-        return incoming
-    return uuid4().hex
+    return resolve_correlation_id(incoming, fallback=uuid4().hex)
 
 
 class RequestContextMiddleware:

@@ -99,11 +99,11 @@ Independently reviewed across three rounds (four blocking findings, then two mic
 
 See `docs/adr/0005-internal-ports-capability-model.md` and `docs/PROJECT_STATE.md`.
 
-##### Checkpoint B — Worker correlation & deployment contract (NOT STARTED, next authorized checkpoint)
-- worker-side request correlation;
-- deployment/CD contract within the approved topology (not a real deploy; ADR-0006).
+##### Checkpoint B — Worker correlation & deployment contract (IMPLEMENTED, pending independent review)
+- worker-side TapJob correlation id propagated across Celery message boundaries via a custom message header, bound into structured worker logs (Celery task id/root id/parent id/task name/retries, never args/kwargs), with idempotent signal connection and context reset on success/failure/retry;
+- deployment/CD contract within the approved topology (not a real deploy): build-once/promote-the-same-immutable-digest, one backend image preserved (D-043), `infra/compose.deploy.yaml`, `tools/deploy/validate_image_ref.mjs` digest-format gate, a `workflow_dispatch`-only (not executed) GHCR publish workflow, migration-before-rollout ordering, redigest-only rollback.
 
-Checkpoint B is the next authorized checkpoint now that Checkpoint A is merged and post-merge verified. It has not started: no implementation branch exists yet.
+See `docs/adr/0006-worker-correlation-deployment-cd-contract.md`, `docs/DEPLOYMENT.md` and `docs/PROJECT_STATE.md`. Not yet independently reviewed or merged.
 
 ### Deliver
 - ADRs;
@@ -515,6 +515,6 @@ Can progress alongside WPs when they do not alter contracts:
 
 ## First authorized next step
 
-**WP0.2 only** (WP0.2-A verified; WP0.2-B Checkpoint A verified — merged and post-merge CI verified; Checkpoint B is the next authorized checkpoint and remains not started). WP1.x remains **not authorized**.
+**WP0.2 only** (WP0.2-A verified; WP0.2-B Checkpoint A verified — merged and post-merge CI verified; Checkpoint B implemented and pending independent review). WP1.x remains **not authorized**.
 
-WP0.1 is independently verified and merged. WP0.2-A is independently verified and merged (PR #9, `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`). WP0.2-B Checkpoint A (internal ports/capability model) is independently verified and merged via squash (PR #12, `main` commit `a8bfbe621e5a83ae5f205adb1919ce3250684efb`; post-merge CI green, run `37055251128`, 7/7). WP0.2-B Checkpoint B (worker-side request correlation; ADR-0006 deployment/CD contract, not a real deploy) is the next authorized checkpoint and remains NOT STARTED — no implementation branch exists yet. WP0.2-B overall stays IN PROGRESS until Checkpoint B is also independently verified. Product feature work should not begin before WP0.2-B as a whole is independently verified.
+WP0.1 is independently verified and merged. WP0.2-A is independently verified and merged (PR #9, `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`). WP0.2-B Checkpoint A (internal ports/capability model) is independently verified and merged via squash (PR #12, `main` commit `a8bfbe621e5a83ae5f205adb1919ce3250684efb`; post-merge CI green, run `37055251128`, 7/7). WP0.2-B Checkpoint B (worker-side TapJob correlation propagation; ADR-0006 deployment/CD contract, not a real deploy) is implemented pending independent review; it must not be marked VERIFIED from this report alone. WP0.2-B overall stays IN PROGRESS until both checkpoints are independently verified. Product feature work should not begin before WP0.2-B as a whole is independently verified.
