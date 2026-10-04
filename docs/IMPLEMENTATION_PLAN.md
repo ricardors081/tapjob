@@ -90,17 +90,20 @@ See `docs/adr/0003-api-contract-client-generation.md`, `docs/adr/0004-http-error
 
 #### WP0.2-B — Internal Ports & Capability Model (IN PROGRESS)
 
-##### Checkpoint A — Internal ports & capability model (IMPLEMENTED, pending independent review)
+##### Checkpoint A — Internal ports & capability model (VERIFIED)
+Independently reviewed across three rounds (four blocking findings, then two micro-findings, then two documentation precision corrections — all resolved), merged via squash into `main` as PR #12 (squash commit `a8bfbe621e5a83ae5f205adb1919ce3250684efb`); CI green at latest HEAD before merge (run `37051633827`, 7/7) and CI green post-merge on `main` (run `37055251128`, 7/7).
 - canonical interfaces required before upstream code enters runtime: `JobSource`, `ResumeParser`, `ResumeRenderer`, `AiGateway`, `MessagingChannel`, `ApplyConnector`, `InboxConnector` (as `Protocol`s with a capability model) under `tapjob_api.ports`;
 - `MatchingEngine` remains internal/domain for now, not a provider-neutral port: interface extraction is deferred to WP2.2 if justified by a real substitution need, not assumed up front;
-- shared `CallContext`/`Deadline`, normalized `PortError`/`PortErrorCode`, `AdapterHealth`, `CapabilityStatus`/`CapabilityReport`;
+- shared `CallContext`/`Deadline`, normalized `PortError`/`PortErrorCode`, `AdapterHealth`, `CapabilityStatus`/`CapabilityReport`/`CapabilityManifest`;
 - no adapter, no provider, no deploy.
 
 See `docs/adr/0005-internal-ports-capability-model.md` and `docs/PROJECT_STATE.md`.
 
-##### Checkpoint B — Worker correlation & deployment contract (NOT STARTED)
+##### Checkpoint B — Worker correlation & deployment contract (NOT STARTED, next authorized checkpoint)
 - worker-side request correlation;
 - deployment/CD contract within the approved topology (not a real deploy; ADR-0006).
+
+Checkpoint B is the next authorized checkpoint now that Checkpoint A is merged and post-merge verified. It has not started: no implementation branch exists yet.
 
 ### Deliver
 - ADRs;
@@ -512,6 +515,6 @@ Can progress alongside WPs when they do not alter contracts:
 
 ## First authorized next step
 
-**WP0.2 only** (WP0.2-A verified; WP0.2-B Checkpoint A implemented and pending independent review). WP0.2-B Checkpoint A is implemented and pending independent review. Checkpoint B is the planned next checkpoint after Checkpoint A is merged and post-merge verified. WP1.x remains **not authorized**.
+**WP0.2 only** (WP0.2-A verified; WP0.2-B Checkpoint A verified — merged and post-merge CI verified; Checkpoint B is the next authorized checkpoint and remains not started). WP1.x remains **not authorized**.
 
-WP0.1 is independently verified and merged. WP0.2-A is independently verified and merged (PR #9, `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`). WP0.2-B Checkpoint A (internal ports/capability model) is implemented pending independent review; it must not be marked VERIFIED from this report alone. WP0.2-B Checkpoint B is NOT STARTED and not authorized to begin before Checkpoint A is merged and post-merge verified. Product feature work should not begin before WP0.2-B as a whole is independently verified.
+WP0.1 is independently verified and merged. WP0.2-A is independently verified and merged (PR #9, `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`). WP0.2-B Checkpoint A (internal ports/capability model) is independently verified and merged via squash (PR #12, `main` commit `a8bfbe621e5a83ae5f205adb1919ce3250684efb`; post-merge CI green, run `37055251128`, 7/7). WP0.2-B Checkpoint B (worker-side request correlation; ADR-0006 deployment/CD contract, not a real deploy) is the next authorized checkpoint and remains NOT STARTED — no implementation branch exists yet. WP0.2-B overall stays IN PROGRESS until Checkpoint B is also independently verified. Product feature work should not begin before WP0.2-B as a whole is independently verified.
