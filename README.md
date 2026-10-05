@@ -2,7 +2,7 @@
 
 > Plataforma pessoal de carreira para descobrir vagas, preparar candidaturas, aplicar com o nível de automação permitido, acompanhar processos e evoluir até a contratação.
 
-**Status atual:** Foundation / Phase 0 **verificado** (WP0.1 verificado; WP0.2 verificado — WP0.2-A, WP0.2-B Checkpoint A e WP0.2-B Checkpoint B todos verificados; PR #15 mergeada via squash, `main` `3edaf1cee33b892a5d753b07b9b9946cbcd28887`, CI verde antes e depois do merge). Próximo pacote de trabalho autorizado: **WP1.1 — Identity & User Account (não iniciado)**. WP1.2 em diante permanecem não autorizados até que suas dependências sejam verificadas. Sem funcionalidades de produto ainda.  
+**Status atual:** Foundation / Phase 0 **verificado** (WP0.1 verificado; WP0.2 verificado — WP0.2-A, WP0.2-B Checkpoint A e WP0.2-B Checkpoint B todos verificados). Phase 1 em andamento: **WP1.1 — Identity & User Account implementado, aguardando revisão independente** (identidade interna `User` UUID canônica; identidade externa Firebase via `ExternalIdentity`, nunca auto-linkada por e-mail; bootstrap concorrency-safe; verificação de token com `check_revoked=True`; revoke-all, devices, consentimento append-only, esqueleto de exclusão de conta; rate limiting fail-closed; mobile migra para React Native Firebase + Expo Development Build — ver `docs/adr/0009-identity-auth-user-account.md`, D-051). **WP1.2 em diante permanecem não autorizados.** Nenhuma conta real, nenhum deploy real, nenhuma mutação em Firebase Console/Google Console/Apple Developer.  
 **Mercado inicial:** Brasil.  
 **Aplicação em produção:** ainda não existe.
 

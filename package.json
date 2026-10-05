@@ -42,6 +42,7 @@
     "react": "19.2.3",
     "@hey-api/json-schema-ref-parser": {
       "js-yaml": "4.3.2"
-    }
+    },
+    "@grpc/grpc-js": "1.14.5"
   }
 }

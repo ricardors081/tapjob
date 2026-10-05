@@ -56,6 +56,30 @@ describe("publicConfig", () => {
     expect(publicConfig.sentryDsn).toBeUndefined();
   });
 
+  test("exposes no Google web client ID by default", () => {
+    const publicConfig = loadPublicConfig(VALID_ENV);
+
+    expect(publicConfig.googleWebClientId).toBeUndefined();
+  });
+
+  test("exposes an optional Google web client ID when configured", () => {
+    const publicConfig = loadPublicConfig({
+      ...VALID_ENV,
+      EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: "123-abc.apps.googleusercontent.com",
+    });
+
+    expect(publicConfig.googleWebClientId).toBe("123-abc.apps.googleusercontent.com");
+  });
+
+  test("treats a blank optional Google web client ID as absent", () => {
+    const publicConfig = loadPublicConfig({
+      ...VALID_ENV,
+      EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: "   ",
+    });
+
+    expect(publicConfig.googleWebClientId).toBeUndefined();
+  });
+
   test("throws when EXPO_PUBLIC_APP_ENV is missing", () => {
     expect(() => loadPublicConfig({ ...VALID_ENV, EXPO_PUBLIC_APP_ENV: undefined })).toThrow(
       /EXPO_PUBLIC_APP_ENV/,

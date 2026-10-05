@@ -39,6 +39,17 @@ class ErrorCode(StrEnum):
     UPSTREAM_TIMEOUT = "UPSTREAM_TIMEOUT"
     INVALID_CURSOR = "INVALID_CURSOR"
     INTERNAL_ERROR = "INTERNAL_ERROR"
+    # WP1.1 — identity/auth (docs/adr/0009-identity-auth-user-account.md): a verified-token trust
+    # boundary needs a finer vocabulary than AUTHENTICATION_REQUIRED alone, since a mobile client's
+    # retry/reauth behavior differs for each of these cases.
+    AUTH_TOKEN_MISSING = "AUTH_TOKEN_MISSING"  # noqa: S105 -- error code, not a credential
+    AUTH_TOKEN_INVALID = "AUTH_TOKEN_INVALID"  # noqa: S105 -- error code, not a credential
+    AUTH_TOKEN_REVOKED = "AUTH_TOKEN_REVOKED"  # noqa: S105 -- error code, not a credential
+    ACCOUNT_NOT_BOOTSTRAPPED = "ACCOUNT_NOT_BOOTSTRAPPED"
+    ACCOUNT_DISABLED = "ACCOUNT_DISABLED"
+    REAUTHENTICATION_REQUIRED = "REAUTHENTICATION_REQUIRED"
+    DEVICE_NOT_FOUND = "DEVICE_NOT_FOUND"
+    IDENTITY_CONFLICT = "IDENTITY_CONFLICT"
 
 
 # A status not explicitly raised anywhere yet (e.g. by a future connector/port) still needs a
@@ -76,6 +87,14 @@ _DEFAULT_MESSAGE_BY_CODE: dict[ErrorCode, str] = {
     ErrorCode.UPSTREAM_TIMEOUT: "Uma integração externa não respondeu a tempo.",
     ErrorCode.INVALID_CURSOR: "O cursor de paginação informado é inválido.",
     ErrorCode.INTERNAL_ERROR: "Ocorreu um erro inesperado.",
+    ErrorCode.AUTH_TOKEN_MISSING: "É necessário informar um token de autenticação.",
+    ErrorCode.AUTH_TOKEN_INVALID: "O token de autenticação informado é inválido.",
+    ErrorCode.AUTH_TOKEN_REVOKED: "A sessão foi revogada. Autentique-se novamente.",
+    ErrorCode.ACCOUNT_NOT_BOOTSTRAPPED: "Esta conta ainda não foi inicializada.",
+    ErrorCode.ACCOUNT_DISABLED: "Esta conta está desativada.",
+    ErrorCode.REAUTHENTICATION_REQUIRED: "É necessário autenticar-se novamente para esta ação.",
+    ErrorCode.DEVICE_NOT_FOUND: "Dispositivo não encontrado.",
+    ErrorCode.IDENTITY_CONFLICT: "Esta identidade já está associada a outra conta.",
 }
 
 

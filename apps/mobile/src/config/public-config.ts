@@ -22,6 +22,14 @@ export interface PublicConfig {
   readonly appEnv: AppEnvironment;
   readonly apiBaseUrl: string;
   readonly sentryDsn: string | undefined;
+  /** The Google OAuth "Web client" ID (Firebase/Google Cloud console) used by
+   * `GoogleSignin.configure()` to obtain an ID token Firebase can verify -- NOT a secret (it
+   * identifies the OAuth client, not a credential), but environment-specific (a different real
+   * Firebase project per app-env), so it is config, never a literal in feature code
+   * (docs/adr/0009-identity-auth-user-account.md §I, 2026 review finding 2). `undefined` until a
+   * real Firebase project is configured for this environment -- `signInWithGoogle()` then fails
+   * closed with a clear error instead of silently calling an unconfigured SDK. */
+  readonly googleWebClientId: string | undefined;
 }
 
 function isAppEnvironment(value: string): value is AppEnvironment {
@@ -59,7 +67,7 @@ function parseApiBaseUrl(value: string): string {
   return value;
 }
 
-function parseOptionalSentryDsn(value: string | undefined): string | undefined {
+function parseOptionalString(value: string | undefined): string | undefined {
   return value && value.trim().length > 0 ? value : undefined;
 }
 
@@ -69,7 +77,8 @@ function loadPublicConfig(): PublicConfig {
     apiBaseUrl: parseApiBaseUrl(
       readRequired("EXPO_PUBLIC_API_BASE_URL", process.env.EXPO_PUBLIC_API_BASE_URL),
     ),
-    sentryDsn: parseOptionalSentryDsn(process.env.EXPO_PUBLIC_SENTRY_DSN),
+    sentryDsn: parseOptionalString(process.env.EXPO_PUBLIC_SENTRY_DSN),
+    googleWebClientId: parseOptionalString(process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID),
   });
 }
 

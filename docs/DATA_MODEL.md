@@ -2,12 +2,70 @@
 
 ## 1. Core entities
 
-### User
+### User (WP1.1, `docs/adr/0009-identity-auth-user-account.md`)
+TapJob-minted UUID is the one canonical identity; never a Firebase UID or any other external
+provider's identifier (see `ExternalIdentity` below).
+- id (UUID, canonical)
+- status (`active`/`disabled`)
+- locale (seeded from product-config's `defaultLocale`, user-overridable)
+- timezone (neutral default `Etc/UTC`, never inferred from server/request location; device/user
+  supplies a real value)
+- created_at / updated_at
+
+No email/phone field on `User` itself: email is never the primary identity or an account-merge
+key (see `ExternalIdentity.email_snapshot`, a display/audit-only snapshot).
+
+### ExternalIdentity (WP1.1)
+Links one external provider identity to exactly one `User`. A `User` may exist with zero rows here
+(e.g. a future WhatsApp-first onboarding before Firebase is ever linked).
 - id
-- email/phone
-- locale/timezone
-- status
-- created_at
+- user_id (FK -> User)
+- provider (`firebase` today; designed to admit future providers, e.g. `whatsapp`, without a
+  destructive migration)
+- provider_subject (e.g. the Firebase UID) — `UNIQUE(provider, provider_subject)`, the concurrency
+  backstop for first-login races and the only key bootstrap resolution ever looks up by (never
+  `email_snapshot` — no auto-link by email, ever)
+- email_snapshot / email_verified (snapshot only, not re-read live, never a lookup key)
+- created_at / last_seen_at
+
+### UserDevice (WP1.1)
+A mobile installation, identified by a TapJob-minted random `installation_id` — never an IMEI,
+hardware serial, advertising ID or other invasive fingerprint.
+- id
+- user_id (FK -> User)
+- installation_id — `UNIQUE(user_id, installation_id)`
+- platform (`ios`/`android`/`web`)
+- app_version
+- push_token (nullable; future FCM delivery, not wired to anything in WP1.1; never logged)
+- created_at / last_seen_at / revoked_at
+
+### ConsentRecord (WP1.1)
+Append-only: a changed decision is a new row, never an overwrite. No fixed purpose-key catalog is
+enforced yet (no final legal-purpose list approved for the product).
+- id
+- user_id (FK -> User)
+- purpose_key / policy_version
+- decision (`granted`/`withdrawn`)
+- source
+- recorded_at
+
+### AccountDeletionRequest (WP1.1 — skeleton only, never claims data was actually deleted)
+- id
+- user_id (FK -> User)
+- status (`requested`/`cancelled`/`processing`/`completed`/`failed`; at most one
+  `requested`/`processing` row per user at a time)
+- requested_at / cancelled_at / updated_at
+
+### AccountAuditEvent (WP1.1 — append-only)
+Allowlisted metadata only — never args/kwargs, a password, a Firebase token, or an `Authorization`
+header value.
+- id
+- user_id (FK -> User)
+- event_type / outcome (`success`/`failure`)
+- metadata (JSONB, allowlisted fields only)
+- correlation_id (joins back to the originating request's logs, shared with ADR-0006's
+  correlation convention)
+- recorded_at
 
 ### CareerProfile
 One active canonical profile per user.

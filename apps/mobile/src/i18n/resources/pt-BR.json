@@ -10,6 +10,22 @@
   "about": {
     "title": "Sobre",
     "description": "Shell mínimo do {{shortName}}: Expo Router, tokens, product config e i18n funcionando (WP0.1-B).",
-    "backLink": "Voltar"
+    "backLink": "Voltar",
+    "signedInAs": "Conectado como {{email}}",
+    "signOut": "Sair"
+  },
+  "auth": {
+    "title": "Acesse sua conta",
+    "emailLabel": "E-mail",
+    "passwordLabel": "Senha",
+    "signIn": "Entrar",
+    "signUp": "Criar conta",
+    "signInWithGoogle": "Entrar com Google",
+    "signInWithApple": "Entrar com Apple",
+    "genericError": "Não foi possível autenticar. Tente novamente.",
+    "bootstrapping": "Preparando sua conta...",
+    "bootstrapError": "Não foi possível preparar sua conta.",
+    "retry": "Tentar novamente",
+    "signOut": "Sair"
   }
 }

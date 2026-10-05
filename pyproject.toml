@@ -38,8 +38,20 @@ select = [
 [tool.ruff.lint.isort]
 known-first-party = ["tapjob_api", "tapjob_worker", "tapjob_product_config"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom is `param: T = Depends(provider)` -- a call in a default
+# argument that bugbear's B008 would otherwise (correctly, for ordinary code) flag as a mutable/
+# re-evaluated default. FastAPI special-cases Depends/Security itself (re-resolved per request, not
+# evaluated once at function-definition time), so this is the standard, documented way to silence
+# B008 for exactly these two calls (WP1.1, docs/adr/0009-identity-auth-user-account.md) -- not a
+# blanket B008 disable.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.params.Depends", "fastapi.Security"]
+
 [tool.ruff.lint.per-file-ignores]
-"**/tests/**" = ["S101"]
+# S101: pytest `assert` is the standard assertion mechanism, not a stripped-in-production hazard.
+# S106: every test fixture passes a literal, non-secret string into a `token=`/`subject=`-named
+# parameter (WP1.1 fake-identity helpers); none of these touch a real credential.
+"**/tests/**" = ["S101", "S106"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -56,6 +68,7 @@ files = [
 explicit_package_bases = true
 mypy_path = [
   "services/api/src",
+  "services/api/tests",
   "services/worker/src",
   "packages/product-config/src",
 ]
@@ -63,6 +76,13 @@ mypy_path = [
 [[tool.mypy.overrides]]
 # Celery ships without type information.
 module = ["celery", "celery.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# firebase-admin ships without a py.typed marker (WP1.1, docs/adr/0009-identity-auth-user-
+# account.md). tapjob_api.identity.firebase is the ONLY module that imports it, so this gap stays
+# contained to one small, reviewable adapter file.
+module = ["firebase_admin", "firebase_admin.*"]
 ignore_missing_imports = true
 
 [tool.pydantic-mypy]
@@ -77,6 +97,10 @@ testpaths = [
   "packages/product-config/tests",
 ]
 addopts = ["--strict-markers", "--import-mode=importlib", "-m", "not integration"]
+# Lets test files do a plain `import identity_fakes` for the shared WP1.1 test double
+# (services/api/tests/identity_fakes.py) instead of a package-relative import --
+# `--import-mode=importlib` alone does not put a test file's own directory on sys.path.
+pythonpath = ["services/api/tests"]
 markers = [
   "integration: requires real infrastructure (PostgreSQL, Redis); run with `pytest -m integration`",
 ]

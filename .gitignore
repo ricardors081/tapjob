@@ -26,6 +26,12 @@ node_modules/
 # Expo (apps/mobile)
 .expo/
 
+# Real native Firebase service files (docs/adr/0009-identity-auth-user-account.md §I1): never
+# committed. A real Development Build supplies these via an EAS secret-file environment variable
+# (or a local copy before `expo prebuild`) at the exact canonical paths app.config.ts references.
+apps/mobile/google-services.json
+apps/mobile/GoogleService-Info.plist
+
 # OS / editors
 .DS_Store
 Thumbs.db

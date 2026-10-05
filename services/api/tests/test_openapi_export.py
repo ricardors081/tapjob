@@ -26,11 +26,22 @@ def test_health_and_ready_have_explicit_camel_case_operation_ids() -> None:
     assert schema["paths"]["/ready"]["get"]["operationId"] == "getReadiness"
 
 
-def test_schema_exposes_no_business_routes_yet() -> None:
-    # WP0.2-A ships contracts, not product endpoints (docs/IMPLEMENTATION_PLAN.md WP0.2).
+def test_schema_exposes_the_wp1_1_identity_routes_under_api_v1() -> None:
+    # WP1.1 is the first business feature (docs/adr/0009-identity-auth-user-account.md); every
+    # business route lives under /api/v1 (validate_api_v1_scoping enforces this structurally too).
     schema = build_openapi_schema()
 
-    assert set(schema["paths"]) == {"/health", "/ready"}
+    assert set(schema["paths"]) == {
+        "/health",
+        "/ready",
+        "/api/v1/auth/bootstrap",
+        "/api/v1/me",
+        "/api/v1/me/sessions/revoke-all",
+        "/api/v1/me/devices",
+        "/api/v1/me/devices/{device_id}",
+        "/api/v1/me/consents",
+        "/api/v1/me/deletion-request",
+    }
 
 
 def test_error_response_is_a_documented_schema_component() -> None:

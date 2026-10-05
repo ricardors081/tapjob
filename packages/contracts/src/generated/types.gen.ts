@@ -5,6 +5,84 @@ export type ClientOptions = {
 };
 
 /**
+ * BootstrapResponse
+ */
+export type BootstrapResponse = {
+    /**
+     * Created
+     */
+    created: boolean;
+    user: UserResponse;
+};
+
+/**
+ * ConsentDecision
+ */
+export type ConsentDecision = 'granted' | 'withdrawn';
+
+/**
+ * ConsentRecordRequest
+ */
+export type ConsentRecordRequest = {
+    decision: ConsentDecision;
+    /**
+     * Policyversion
+     */
+    policyVersion: string;
+    /**
+     * Purposekey
+     */
+    purposeKey: string;
+};
+
+/**
+ * ConsentRecordResponse
+ */
+export type ConsentRecordResponse = {
+    decision: ConsentDecision;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Policyversion
+     */
+    policyVersion: string;
+    /**
+     * Purposekey
+     */
+    purposeKey: string;
+    /**
+     * Recordedat
+     */
+    recordedAt: string;
+};
+
+/**
+ * DeletionRequestResponse
+ */
+export type DeletionRequestResponse = {
+    /**
+     * Cancelledat
+     */
+    cancelledAt?: string | null;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Requestedat
+     */
+    requestedAt: string;
+    status: DeletionRequestStatus;
+};
+
+/**
+ * DeletionRequestStatus
+ */
+export type DeletionRequestStatus = 'requested' | 'cancelled' | 'processing' | 'completed' | 'failed';
+
+/**
  * DependencyName
  */
 export type DependencyName = 'postgresql' | 'redis';
@@ -13,6 +91,61 @@ export type DependencyName = 'postgresql' | 'redis';
  * DependencyStatus
  */
 export type DependencyStatus = 'ok' | 'unavailable';
+
+/**
+ * DevicePlatform
+ */
+export type DevicePlatform = 'ios' | 'android' | 'web';
+
+/**
+ * DeviceRegistrationRequest
+ */
+export type DeviceRegistrationRequest = {
+    /**
+     * Appversion
+     */
+    appVersion?: string | null;
+    /**
+     * Installationid
+     */
+    installationId: string;
+    platform: DevicePlatform;
+    /**
+     * Pushtoken
+     */
+    pushToken?: string | null;
+};
+
+/**
+ * DeviceResponse
+ */
+export type DeviceResponse = {
+    /**
+     * Appversion
+     */
+    appVersion?: string | null;
+    /**
+     * Createdat
+     */
+    createdAt: string;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Installationid
+     */
+    installationId: string;
+    /**
+     * Lastseenat
+     */
+    lastSeenAt: string;
+    platform: DevicePlatform;
+    /**
+     * Revokedat
+     */
+    revokedAt?: string | null;
+};
 
 /**
  * Environment
@@ -24,7 +157,7 @@ export type Environment = 'local' | 'development' | 'staging' | 'production';
  *
  * Machine-readable error vocabulary. Clients localize/branch on this, never on ``message``.
  */
-export type ErrorCode = 'INVALID_REQUEST' | 'VALIDATION_FAILED' | 'AUTHENTICATION_REQUIRED' | 'PERMISSION_DENIED' | 'RESOURCE_NOT_FOUND' | 'METHOD_NOT_ALLOWED' | 'CONFLICT' | 'RATE_LIMITED' | 'SERVICE_UNAVAILABLE' | 'UPSTREAM_FAILED' | 'UPSTREAM_TIMEOUT' | 'INVALID_CURSOR' | 'INTERNAL_ERROR';
+export type ErrorCode = 'INVALID_REQUEST' | 'VALIDATION_FAILED' | 'AUTHENTICATION_REQUIRED' | 'PERMISSION_DENIED' | 'RESOURCE_NOT_FOUND' | 'METHOD_NOT_ALLOWED' | 'CONFLICT' | 'RATE_LIMITED' | 'SERVICE_UNAVAILABLE' | 'UPSTREAM_FAILED' | 'UPSTREAM_TIMEOUT' | 'INVALID_CURSOR' | 'INTERNAL_ERROR' | 'AUTH_TOKEN_MISSING' | 'AUTH_TOKEN_INVALID' | 'AUTH_TOKEN_REVOKED' | 'ACCOUNT_NOT_BOOTSTRAPPED' | 'ACCOUNT_DISABLED' | 'REAUTHENTICATION_REQUIRED' | 'DEVICE_NOT_FOUND' | 'IDENTITY_CONFLICT';
 
 /**
  * ErrorResponse
@@ -97,6 +230,52 @@ export type ReadinessResponse = {
 export type ReadinessStatus = 'ok' | 'degraded';
 
 /**
+ * UpdateUserSettingsRequest
+ */
+export type UpdateUserSettingsRequest = {
+    /**
+     * Locale
+     */
+    locale?: string | null;
+    /**
+     * Timezone
+     */
+    timezone?: string | null;
+};
+
+/**
+ * UserResponse
+ */
+export type UserResponse = {
+    /**
+     * Createdat
+     */
+    createdAt: string;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Locale
+     */
+    locale: string;
+    status: UserStatus;
+    /**
+     * Timezone
+     */
+    timezone: string;
+    /**
+     * Updatedat
+     */
+    updatedAt: string;
+};
+
+/**
+ * UserStatus
+ */
+export type UserStatus = 'active' | 'disabled';
+
+/**
  * ValidationErrorItem
  *
  * One field-level validation failure. Carries only a normalized ``code`` (Pydantic's error
@@ -113,6 +292,466 @@ export type ValidationErrorItem = {
      */
     location: Array<string>;
 };
+
+export type BootstrapAccountData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/auth/bootstrap';
+};
+
+export type BootstrapAccountErrors = {
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Muitas requisições.
+     */
+    429: ErrorResponse;
+    /**
+     * Erro interno inesperado.
+     */
+    500: ErrorResponse;
+};
+
+export type BootstrapAccountError = BootstrapAccountErrors[keyof BootstrapAccountErrors];
+
+export type BootstrapAccountResponses = {
+    /**
+     * Successful Response
+     */
+    200: BootstrapResponse;
+};
+
+export type BootstrapAccountResponse = BootstrapAccountResponses[keyof BootstrapAccountResponses];
+
+export type GetCurrentUserData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/me';
+};
+
+export type GetCurrentUserErrors = {
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Conta desativada.
+     */
+    403: ErrorResponse;
+    /**
+     * Conta ainda não inicializada.
+     */
+    404: ErrorResponse;
+    /**
+     * Erro interno inesperado.
+     */
+    500: ErrorResponse;
+};
+
+export type GetCurrentUserError = GetCurrentUserErrors[keyof GetCurrentUserErrors];
+
+export type GetCurrentUserResponses = {
+    /**
+     * Successful Response
+     */
+    200: UserResponse;
+};
+
+export type GetCurrentUserResponse = GetCurrentUserResponses[keyof GetCurrentUserResponses];
+
+export type UpdateCurrentUserData = {
+    body: UpdateUserSettingsRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/me';
+};
+
+export type UpdateCurrentUserErrors = {
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Conta desativada.
+     */
+    403: ErrorResponse;
+    /**
+     * Conta ainda não inicializada.
+     */
+    404: ErrorResponse;
+    /**
+     * Dados inválidos.
+     */
+    422: ErrorResponse;
+    /**
+     * Erro interno inesperado.
+     */
+    500: ErrorResponse;
+};
+
+export type UpdateCurrentUserError = UpdateCurrentUserErrors[keyof UpdateCurrentUserErrors];
+
+export type UpdateCurrentUserResponses = {
+    /**
+     * Successful Response
+     */
+    200: UserResponse;
+};
+
+export type UpdateCurrentUserResponse = UpdateCurrentUserResponses[keyof UpdateCurrentUserResponses];
+
+export type ListConsentsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/me/consents';
+};
+
+export type ListConsentsErrors = {
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Conta desativada.
+     */
+    403: ErrorResponse;
+    /**
+     * Conta ainda não inicializada.
+     */
+    404: ErrorResponse;
+    /**
+     * Erro interno inesperado.
+     */
+    500: ErrorResponse;
+};
+
+export type ListConsentsError = ListConsentsErrors[keyof ListConsentsErrors];
+
+export type ListConsentsResponses = {
+    /**
+     * Response Listconsents
+     *
+     * Successful Response
+     */
+    200: Array<ConsentRecordResponse>;
+};
+
+export type ListConsentsResponse = ListConsentsResponses[keyof ListConsentsResponses];
+
+export type RecordConsentData = {
+    body: ConsentRecordRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/me/consents';
+};
+
+export type RecordConsentErrors = {
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Conta desativada.
+     */
+    403: ErrorResponse;
+    /**
+     * Conta ainda não inicializada.
+     */
+    404: ErrorResponse;
+    /**
+     * Dados inválidos.
+     */
+    422: ErrorResponse;
+    /**
+     * Muitas requisições.
+     */
+    429: ErrorResponse;
+    /**
+     * Erro interno inesperado.
+     */
+    500: ErrorResponse;
+};
+
+export type RecordConsentError = RecordConsentErrors[keyof RecordConsentErrors];
+
+export type RecordConsentResponses = {
+    /**
+     * Successful Response
+     */
+    200: ConsentRecordResponse;
+};
+
+export type RecordConsentResponse = RecordConsentResponses[keyof RecordConsentResponses];
+
+export type CancelAccountDeletionData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/me/deletion-request';
+};
+
+export type CancelAccountDeletionErrors = {
+    /**
+     * Autenticação recente é necessária para esta ação.
+     */
+    401: ErrorResponse;
+    /**
+     * Conta desativada.
+     */
+    403: ErrorResponse;
+    /**
+     * Conta ainda não inicializada.
+     */
+    404: ErrorResponse;
+    /**
+     * Não há solicitação de exclusão cancelável (inexistente ou já em processamento).
+     */
+    409: ErrorResponse;
+    /**
+     * Muitas requisições.
+     */
+    429: ErrorResponse;
+    /**
+     * Erro interno inesperado.
+     */
+    500: ErrorResponse;
+};
+
+export type CancelAccountDeletionError = CancelAccountDeletionErrors[keyof CancelAccountDeletionErrors];
+
+export type CancelAccountDeletionResponses = {
+    /**
+     * Successful Response
+     */
+    200: DeletionRequestResponse;
+};
+
+export type CancelAccountDeletionResponse = CancelAccountDeletionResponses[keyof CancelAccountDeletionResponses];
+
+export type GetAccountDeletionRequestData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/me/deletion-request';
+};
+
+export type GetAccountDeletionRequestErrors = {
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Conta desativada.
+     */
+    403: ErrorResponse;
+    /**
+     * Conta ainda não inicializada.
+     */
+    404: ErrorResponse;
+    /**
+     * Erro interno inesperado.
+     */
+    500: ErrorResponse;
+};
+
+export type GetAccountDeletionRequestError = GetAccountDeletionRequestErrors[keyof GetAccountDeletionRequestErrors];
+
+export type GetAccountDeletionRequestResponses = {
+    /**
+     * Response Getaccountdeletionrequest
+     *
+     * Successful Response
+     */
+    200: DeletionRequestResponse | null;
+};
+
+export type GetAccountDeletionRequestResponse = GetAccountDeletionRequestResponses[keyof GetAccountDeletionRequestResponses];
+
+export type RequestAccountDeletionData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/me/deletion-request';
+};
+
+export type RequestAccountDeletionErrors = {
+    /**
+     * Autenticação recente é necessária para esta ação.
+     */
+    401: ErrorResponse;
+    /**
+     * Conta desativada.
+     */
+    403: ErrorResponse;
+    /**
+     * Conta ainda não inicializada.
+     */
+    404: ErrorResponse;
+    /**
+     * Muitas requisições.
+     */
+    429: ErrorResponse;
+    /**
+     * Erro interno inesperado.
+     */
+    500: ErrorResponse;
+};
+
+export type RequestAccountDeletionError = RequestAccountDeletionErrors[keyof RequestAccountDeletionErrors];
+
+export type RequestAccountDeletionResponses = {
+    /**
+     * Successful Response
+     */
+    202: DeletionRequestResponse;
+};
+
+export type RequestAccountDeletionResponse = RequestAccountDeletionResponses[keyof RequestAccountDeletionResponses];
+
+export type RegisterDeviceData = {
+    body: DeviceRegistrationRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/me/devices';
+};
+
+export type RegisterDeviceErrors = {
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Conta desativada.
+     */
+    403: ErrorResponse;
+    /**
+     * Conta ainda não inicializada.
+     */
+    404: ErrorResponse;
+    /**
+     * Dados inválidos.
+     */
+    422: ErrorResponse;
+    /**
+     * Muitas requisições.
+     */
+    429: ErrorResponse;
+    /**
+     * Erro interno inesperado.
+     */
+    500: ErrorResponse;
+};
+
+export type RegisterDeviceError = RegisterDeviceErrors[keyof RegisterDeviceErrors];
+
+export type RegisterDeviceResponses = {
+    /**
+     * Successful Response
+     */
+    200: DeviceResponse;
+};
+
+export type RegisterDeviceResponse = RegisterDeviceResponses[keyof RegisterDeviceResponses];
+
+export type RevokeDeviceData = {
+    body?: never;
+    path: {
+        /**
+         * Device Id
+         */
+        device_id: string;
+    };
+    query?: never;
+    url: '/api/v1/me/devices/{device_id}';
+};
+
+export type RevokeDeviceErrors = {
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Conta desativada.
+     */
+    403: ErrorResponse;
+    /**
+     * Dispositivo não encontrado.
+     */
+    404: ErrorResponse;
+    /**
+     * Identificador de dispositivo inválido.
+     */
+    422: ErrorResponse;
+    /**
+     * Muitas requisições.
+     */
+    429: ErrorResponse;
+    /**
+     * Erro interno inesperado.
+     */
+    500: ErrorResponse;
+};
+
+export type RevokeDeviceError = RevokeDeviceErrors[keyof RevokeDeviceErrors];
+
+export type RevokeDeviceResponses = {
+    /**
+     * Successful Response
+     */
+    204: void;
+};
+
+export type RevokeDeviceResponse = RevokeDeviceResponses[keyof RevokeDeviceResponses];
+
+export type RevokeAllSessionsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/me/sessions/revoke-all';
+};
+
+export type RevokeAllSessionsErrors = {
+    /**
+     * Autenticação recente é necessária para esta ação.
+     */
+    401: ErrorResponse;
+    /**
+     * Conta desativada.
+     */
+    403: ErrorResponse;
+    /**
+     * Conta ainda não inicializada.
+     */
+    404: ErrorResponse;
+    /**
+     * Muitas requisições.
+     */
+    429: ErrorResponse;
+    /**
+     * Erro interno inesperado.
+     */
+    500: ErrorResponse;
+    /**
+     * O provedor de identidade não pôde ser contatado.
+     */
+    503: ErrorResponse;
+};
+
+export type RevokeAllSessionsError = RevokeAllSessionsErrors[keyof RevokeAllSessionsErrors];
+
+export type RevokeAllSessionsResponses = {
+    /**
+     * Successful Response
+     */
+    204: void;
+};
+
+export type RevokeAllSessionsResponse = RevokeAllSessionsResponses[keyof RevokeAllSessionsResponses];
 
 export type GetHealthData = {
     body?: never;

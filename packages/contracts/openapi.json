@@ -1,6 +1,138 @@
 {
   "components": {
     "schemas": {
+      "BootstrapResponse": {
+        "properties": {
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserResponse"
+          }
+        },
+        "required": [
+          "user",
+          "created"
+        ],
+        "title": "BootstrapResponse",
+        "type": "object"
+      },
+      "ConsentDecision": {
+        "enum": [
+          "granted",
+          "withdrawn"
+        ],
+        "title": "ConsentDecision",
+        "type": "string"
+      },
+      "ConsentRecordRequest": {
+        "properties": {
+          "decision": {
+            "$ref": "#/components/schemas/ConsentDecision"
+          },
+          "policyVersion": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Policyversion",
+            "type": "string"
+          },
+          "purposeKey": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Purposekey",
+            "type": "string"
+          }
+        },
+        "required": [
+          "purposeKey",
+          "policyVersion",
+          "decision"
+        ],
+        "title": "ConsentRecordRequest",
+        "type": "object"
+      },
+      "ConsentRecordResponse": {
+        "properties": {
+          "decision": {
+            "$ref": "#/components/schemas/ConsentDecision"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "policyVersion": {
+            "title": "Policyversion",
+            "type": "string"
+          },
+          "purposeKey": {
+            "title": "Purposekey",
+            "type": "string"
+          },
+          "recordedAt": {
+            "format": "date-time",
+            "title": "Recordedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "purposeKey",
+          "policyVersion",
+          "decision",
+          "recordedAt"
+        ],
+        "title": "ConsentRecordResponse",
+        "type": "object"
+      },
+      "DeletionRequestResponse": {
+        "properties": {
+          "cancelledAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancelledat"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "requestedAt": {
+            "format": "date-time",
+            "title": "Requestedat",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeletionRequestStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "requestedAt"
+        ],
+        "title": "DeletionRequestResponse",
+        "type": "object"
+      },
+      "DeletionRequestStatus": {
+        "enum": [
+          "requested",
+          "cancelled",
+          "processing",
+          "completed",
+          "failed"
+        ],
+        "title": "DeletionRequestStatus",
+        "type": "string"
+      },
       "DependencyName": {
         "enum": [
           "postgresql",
@@ -16,6 +148,116 @@
         ],
         "title": "DependencyStatus",
         "type": "string"
+      },
+      "DevicePlatform": {
+        "enum": [
+          "ios",
+          "android",
+          "web"
+        ],
+        "title": "DevicePlatform",
+        "type": "string"
+      },
+      "DeviceRegistrationRequest": {
+        "properties": {
+          "appVersion": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appversion"
+          },
+          "installationId": {
+            "maxLength": 64,
+            "minLength": 8,
+            "title": "Installationid",
+            "type": "string"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/DevicePlatform"
+          },
+          "pushToken": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pushtoken"
+          }
+        },
+        "required": [
+          "installationId",
+          "platform"
+        ],
+        "title": "DeviceRegistrationRequest",
+        "type": "object"
+      },
+      "DeviceResponse": {
+        "properties": {
+          "appVersion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appversion"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "installationId": {
+            "title": "Installationid",
+            "type": "string"
+          },
+          "lastSeenAt": {
+            "format": "date-time",
+            "title": "Lastseenat",
+            "type": "string"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/DevicePlatform"
+          },
+          "revokedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revokedat"
+          }
+        },
+        "required": [
+          "id",
+          "installationId",
+          "platform",
+          "createdAt",
+          "lastSeenAt"
+        ],
+        "title": "DeviceResponse",
+        "type": "object"
       },
       "Environment": {
         "enum": [
@@ -42,7 +284,15 @@
           "UPSTREAM_FAILED",
           "UPSTREAM_TIMEOUT",
           "INVALID_CURSOR",
-          "INTERNAL_ERROR"
+          "INTERNAL_ERROR",
+          "AUTH_TOKEN_MISSING",
+          "AUTH_TOKEN_INVALID",
+          "AUTH_TOKEN_REVOKED",
+          "ACCOUNT_NOT_BOOTSTRAPPED",
+          "ACCOUNT_DISABLED",
+          "REAUTHENTICATION_REQUIRED",
+          "DEVICE_NOT_FOUND",
+          "IDENTITY_CONFLICT"
         ],
         "title": "ErrorCode",
         "type": "string"
@@ -165,6 +415,83 @@
         "title": "ReadinessStatus",
         "type": "string"
       },
+      "UpdateUserSettingsRequest": {
+        "properties": {
+          "locale": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locale"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          }
+        },
+        "title": "UpdateUserSettingsRequest",
+        "type": "object"
+      },
+      "UserResponse": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "locale": {
+            "title": "Locale",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/UserStatus"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "locale",
+          "timezone",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "UserResponse",
+        "type": "object"
+      },
+      "UserStatus": {
+        "enum": [
+          "active",
+          "disabled"
+        ],
+        "title": "UserStatus",
+        "type": "string"
+      },
       "ValidationErrorItem": {
         "description": "One field-level validation failure. Carries only a normalized ``code`` (Pydantic's error\n``type``) plus ``location``, never the raw ``input``/``ctx``/``msg``: those can echo request\ndata -- including personal data -- back into the error body.",
         "properties": {
@@ -195,6 +522,824 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/auth/bootstrap": {
+      "post": {
+        "description": "Resolves the caller's existing TapJob `User` for this verified Firebase identity, or creates\none (plus its `ExternalIdentity` link) if this is the first time this identity has ever\nauthenticated. Idempotent and concurrency-safe (`service.bootstrap_user`); never auto-links to\na different `User` based on email. The `ACCOUNT_CREATED` audit row (when `created`) commits in\nthe SAME transaction as the new `User`/`ExternalIdentity` rows -- never a separate, later\ncommit that could leave a `User` durably created with no corresponding audit row (2026\nindependent-review \"account-created audit transaction\").",
+        "operationId": "bootstrapAccount",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BootstrapResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Muitas requisições."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Erro interno inesperado."
+          }
+        },
+        "summary": "Bootstrap Account",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/v1/me": {
+      "get": {
+        "operationId": "getCurrentUser",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta desativada."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta ainda não inicializada."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Erro interno inesperado."
+          }
+        },
+        "summary": "Get Current User",
+        "tags": [
+          "identity"
+        ]
+      },
+      "patch": {
+        "operationId": "updateCurrentUser",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateUserSettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta desativada."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta ainda não inicializada."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Dados inválidos."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Erro interno inesperado."
+          }
+        },
+        "summary": "Update Current User",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/v1/me/consents": {
+      "get": {
+        "operationId": "listConsents",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ConsentRecordResponse"
+                  },
+                  "title": "Response Listconsents",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta desativada."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta ainda não inicializada."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Erro interno inesperado."
+          }
+        },
+        "summary": "List Consents",
+        "tags": [
+          "identity"
+        ]
+      },
+      "post": {
+        "operationId": "recordConsent",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsentRecordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsentRecordResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta desativada."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta ainda não inicializada."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Dados inválidos."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Muitas requisições."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Erro interno inesperado."
+          }
+        },
+        "summary": "Record Consent",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/v1/me/deletion-request": {
+      "delete": {
+        "description": "Security-sensitive in exactly the same way as requesting deletion -- recent authentication\nand rate limiting apply here too (docs/adr/0009-...md \"sensitive action / recent auth\",\n2026 independent-review finding 3). Only a REQUESTED request is cancellable: once\nPROCESSING/COMPLETED/FAILED, this is a 409, never a silent no-op or a false \"cancelled\".",
+        "operationId": "cancelAccountDeletion",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionRequestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Autenticação recente é necessária para esta ação."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta desativada."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta ainda não inicializada."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Não há solicitação de exclusão cancelável (inexistente ou já em processamento)."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Muitas requisições."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Erro interno inesperado."
+          }
+        },
+        "summary": "Cancel Account Deletion",
+        "tags": [
+          "identity"
+        ]
+      },
+      "get": {
+        "operationId": "getAccountDeletionRequest",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/DeletionRequestResponse"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Getaccountdeletionrequest"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta desativada."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta ainda não inicializada."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Erro interno inesperado."
+          }
+        },
+        "summary": "Get Account Deletion Request",
+        "tags": [
+          "identity"
+        ]
+      },
+      "post": {
+        "description": "202 Accepted, not 200/204: this only SCHEDULES/records a request -- it never claims data was\ndeleted (docs/adr/0009-...md \"deletion endpoint\"). Idempotent: a second call while one is\nalready active returns the existing request rather than creating a duplicate.",
+        "operationId": "requestAccountDeletion",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionRequestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Autenticação recente é necessária para esta ação."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta desativada."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta ainda não inicializada."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Muitas requisições."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Erro interno inesperado."
+          }
+        },
+        "summary": "Request Account Deletion",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/v1/me/devices": {
+      "post": {
+        "operationId": "registerDevice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceRegistrationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta desativada."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta ainda não inicializada."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Dados inválidos."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Muitas requisições."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Erro interno inesperado."
+          }
+        },
+        "summary": "Register Device",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/v1/me/devices/{device_id}": {
+      "delete": {
+        "description": "Ownership-scoped (docs/adr/0009-...md \"ownership / IDOR testing\"): a device belonging to a\ndifferent user is indistinguishable from a nonexistent one -- both resolve to\n`DEVICE_NOT_FOUND`.",
+        "operationId": "revokeDevice",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta desativada."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Dispositivo não encontrado."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Identificador de dispositivo inválido."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Muitas requisições."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Erro interno inesperado."
+          }
+        },
+        "summary": "Revoke Device",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/v1/me/sessions/revoke-all": {
+      "post": {
+        "description": "Revokes every Firebase refresh token for this account's linked identity (global, not\nper-device -- docs/adr/0009-...md \"per-device session revocation\"). The audit row reflects the\nACTUAL provider outcome: a success row is written only after Firebase confirms the revocation,\nand a failed provider call is recorded as a failure, never silently dropped\n(docs/adr/0009-...md \"audit transaction semantics\"). Because `IdentityTokenVerifier` always\nverifies with `check_revoked=True` (see `tapjob_api.identity.firebase`'s module docstring,\ncorrected 2026 independent-review finding 5), this backend rejects an already-issued ID token\non the very next request after this call, not merely after that token's own natural expiry --\nthe only thing that can lag is the CLIENT noticing (its local Firebase SDK session keeps using\nits cached token until it next refreshes or itself observes revocation); this endpoint's own\nserver-side enforcement is immediate.",
+        "operationId": "revokeAllSessions",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Autenticação recente é necessária para esta ação."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta desativada."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta ainda não inicializada."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Muitas requisições."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Erro interno inesperado."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "O provedor de identidade não pôde ser contatado."
+          }
+        },
+        "summary": "Revoke All Sessions",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
     "/health": {
       "get": {
         "operationId": "getHealth",

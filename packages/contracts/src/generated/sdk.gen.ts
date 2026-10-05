@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { GetHealthData, GetHealthErrors, GetHealthResponses, GetReadinessData, GetReadinessErrors, GetReadinessResponses } from './types.gen';
+import type { BootstrapAccountData, BootstrapAccountErrors, BootstrapAccountResponses, CancelAccountDeletionData, CancelAccountDeletionErrors, CancelAccountDeletionResponses, GetAccountDeletionRequestData, GetAccountDeletionRequestErrors, GetAccountDeletionRequestResponses, GetCurrentUserData, GetCurrentUserErrors, GetCurrentUserResponses, GetHealthData, GetHealthErrors, GetHealthResponses, GetReadinessData, GetReadinessErrors, GetReadinessResponses, ListConsentsData, ListConsentsErrors, ListConsentsResponses, RecordConsentData, RecordConsentErrors, RecordConsentResponses, RegisterDeviceData, RegisterDeviceErrors, RegisterDeviceResponses, RequestAccountDeletionData, RequestAccountDeletionErrors, RequestAccountDeletionResponses, RevokeAllSessionsData, RevokeAllSessionsErrors, RevokeAllSessionsResponses, RevokeDeviceData, RevokeDeviceErrors, RevokeDeviceResponses, UpdateCurrentUserData, UpdateCurrentUserErrors, UpdateCurrentUserResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -17,6 +17,115 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
      */
     meta?: keyof ClientMeta extends never ? Record<string, unknown> : ClientMeta;
 };
+
+/**
+ * Bootstrap Account
+ *
+ * Resolves the caller's existing TapJob `User` for this verified Firebase identity, or creates
+ * one (plus its `ExternalIdentity` link) if this is the first time this identity has ever
+ * authenticated. Idempotent and concurrency-safe (`service.bootstrap_user`); never auto-links to
+ * a different `User` based on email. The `ACCOUNT_CREATED` audit row (when `created`) commits in
+ * the SAME transaction as the new `User`/`ExternalIdentity` rows -- never a separate, later
+ * commit that could leave a `User` durably created with no corresponding audit row (2026
+ * independent-review "account-created audit transaction").
+ */
+export const bootstrapAccount = <ThrowOnError extends boolean = false>(options?: Options<BootstrapAccountData, ThrowOnError>): RequestResult<BootstrapAccountResponses, BootstrapAccountErrors, ThrowOnError> => (options?.client ?? client).post<BootstrapAccountResponses, BootstrapAccountErrors, ThrowOnError>({ url: '/api/v1/auth/bootstrap', ...options });
+
+/**
+ * Get Current User
+ */
+export const getCurrentUser = <ThrowOnError extends boolean = false>(options?: Options<GetCurrentUserData, ThrowOnError>): RequestResult<GetCurrentUserResponses, GetCurrentUserErrors, ThrowOnError> => (options?.client ?? client).get<GetCurrentUserResponses, GetCurrentUserErrors, ThrowOnError>({ url: '/api/v1/me', ...options });
+
+/**
+ * Update Current User
+ */
+export const updateCurrentUser = <ThrowOnError extends boolean = false>(options: Options<UpdateCurrentUserData, ThrowOnError>): RequestResult<UpdateCurrentUserResponses, UpdateCurrentUserErrors, ThrowOnError> => (options.client ?? client).patch<UpdateCurrentUserResponses, UpdateCurrentUserErrors, ThrowOnError>({
+    url: '/api/v1/me',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * List Consents
+ */
+export const listConsents = <ThrowOnError extends boolean = false>(options?: Options<ListConsentsData, ThrowOnError>): RequestResult<ListConsentsResponses, ListConsentsErrors, ThrowOnError> => (options?.client ?? client).get<ListConsentsResponses, ListConsentsErrors, ThrowOnError>({ url: '/api/v1/me/consents', ...options });
+
+/**
+ * Record Consent
+ */
+export const recordConsent = <ThrowOnError extends boolean = false>(options: Options<RecordConsentData, ThrowOnError>): RequestResult<RecordConsentResponses, RecordConsentErrors, ThrowOnError> => (options.client ?? client).post<RecordConsentResponses, RecordConsentErrors, ThrowOnError>({
+    url: '/api/v1/me/consents',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Cancel Account Deletion
+ *
+ * Security-sensitive in exactly the same way as requesting deletion -- recent authentication
+ * and rate limiting apply here too (docs/adr/0009-...md "sensitive action / recent auth",
+ * 2026 independent-review finding 3). Only a REQUESTED request is cancellable: once
+ * PROCESSING/COMPLETED/FAILED, this is a 409, never a silent no-op or a false "cancelled".
+ */
+export const cancelAccountDeletion = <ThrowOnError extends boolean = false>(options?: Options<CancelAccountDeletionData, ThrowOnError>): RequestResult<CancelAccountDeletionResponses, CancelAccountDeletionErrors, ThrowOnError> => (options?.client ?? client).delete<CancelAccountDeletionResponses, CancelAccountDeletionErrors, ThrowOnError>({ url: '/api/v1/me/deletion-request', ...options });
+
+/**
+ * Get Account Deletion Request
+ */
+export const getAccountDeletionRequest = <ThrowOnError extends boolean = false>(options?: Options<GetAccountDeletionRequestData, ThrowOnError>): RequestResult<GetAccountDeletionRequestResponses, GetAccountDeletionRequestErrors, ThrowOnError> => (options?.client ?? client).get<GetAccountDeletionRequestResponses, GetAccountDeletionRequestErrors, ThrowOnError>({ url: '/api/v1/me/deletion-request', ...options });
+
+/**
+ * Request Account Deletion
+ *
+ * 202 Accepted, not 200/204: this only SCHEDULES/records a request -- it never claims data was
+ * deleted (docs/adr/0009-...md "deletion endpoint"). Idempotent: a second call while one is
+ * already active returns the existing request rather than creating a duplicate.
+ */
+export const requestAccountDeletion = <ThrowOnError extends boolean = false>(options?: Options<RequestAccountDeletionData, ThrowOnError>): RequestResult<RequestAccountDeletionResponses, RequestAccountDeletionErrors, ThrowOnError> => (options?.client ?? client).post<RequestAccountDeletionResponses, RequestAccountDeletionErrors, ThrowOnError>({ url: '/api/v1/me/deletion-request', ...options });
+
+/**
+ * Register Device
+ */
+export const registerDevice = <ThrowOnError extends boolean = false>(options: Options<RegisterDeviceData, ThrowOnError>): RequestResult<RegisterDeviceResponses, RegisterDeviceErrors, ThrowOnError> => (options.client ?? client).post<RegisterDeviceResponses, RegisterDeviceErrors, ThrowOnError>({
+    url: '/api/v1/me/devices',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Revoke Device
+ *
+ * Ownership-scoped (docs/adr/0009-...md "ownership / IDOR testing"): a device belonging to a
+ * different user is indistinguishable from a nonexistent one -- both resolve to
+ * `DEVICE_NOT_FOUND`.
+ */
+export const revokeDevice = <ThrowOnError extends boolean = false>(options: Options<RevokeDeviceData, ThrowOnError>): RequestResult<RevokeDeviceResponses, RevokeDeviceErrors, ThrowOnError> => (options.client ?? client).delete<RevokeDeviceResponses, RevokeDeviceErrors, ThrowOnError>({ url: '/api/v1/me/devices/{device_id}', ...options });
+
+/**
+ * Revoke All Sessions
+ *
+ * Revokes every Firebase refresh token for this account's linked identity (global, not
+ * per-device -- docs/adr/0009-...md "per-device session revocation"). The audit row reflects the
+ * ACTUAL provider outcome: a success row is written only after Firebase confirms the revocation,
+ * and a failed provider call is recorded as a failure, never silently dropped
+ * (docs/adr/0009-...md "audit transaction semantics"). Because `IdentityTokenVerifier` always
+ * verifies with `check_revoked=True` (see `tapjob_api.identity.firebase`'s module docstring,
+ * corrected 2026 independent-review finding 5), this backend rejects an already-issued ID token
+ * on the very next request after this call, not merely after that token's own natural expiry --
+ * the only thing that can lag is the CLIENT noticing (its local Firebase SDK session keeps using
+ * its cached token until it next refreshes or itself observes revocation); this endpoint's own
+ * server-side enforcement is immediate.
+ */
+export const revokeAllSessions = <ThrowOnError extends boolean = false>(options?: Options<RevokeAllSessionsData, ThrowOnError>): RequestResult<RevokeAllSessionsResponses, RevokeAllSessionsErrors, ThrowOnError> => (options?.client ?? client).post<RevokeAllSessionsResponses, RevokeAllSessionsErrors, ThrowOnError>({ url: '/api/v1/me/sessions/revoke-all', ...options });
 
 /**
  * Get Health

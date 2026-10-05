@@ -168,6 +168,17 @@ export default defineConfig([
     },
   },
 
+  // Manual Jest mocks for node_modules packages (docs/adr/0009-identity-auth-user-account.md §I):
+  // applied automatically by Jest itself (no per-test `jest.mock()` call), so `eslint-config-expo`'s
+  // own test-file detection (matching `*.test.*`/`__tests__/**`) never covers these -- `jest` must
+  // be declared as a global here explicitly instead.
+  {
+    files: ["apps/mobile/__mocks__/**/*.js"],
+    languageOptions: {
+      globals: { jest: "readonly" },
+    },
+  },
+
   // Config/tooling files legitimately need the patterns the guards above forbid elsewhere.
   {
     files: [

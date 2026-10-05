@@ -115,22 +115,26 @@ See `docs/adr/0006-worker-correlation-deployment-cd-contract.md`, `docs/DEPLOYME
 
 ---
 
-## WP1.1 — Identity & User Account (NOT STARTED / NEXT AUTHORIZED WORK PACKAGE)
+## WP1.1 — Identity & User Account (IMPLEMENTED, pending independent review)
+
+Independently reviewed: not yet. See `docs/adr/0009-identity-auth-user-account.md` (D-051) and `docs/PROJECT_STATE.md` for the full checkpoint summary.
 
 ### Deliver
-- sign-up/login;
-- session lifecycle;
-- account settings;
-- locale/timezone;
-- device registration;
-- deletion skeleton;
-- consent model.
+- sign-up/login — Firebase Authentication (Google/Apple/email), internal `User` UUID canonical, `ExternalIdentity` links a Firebase UID, never auto-linked by email, concurrency-safe bootstrap;
+- session lifecycle — Firebase owns the client session; backend verifies ID tokens (`check_revoked=True`); global revoke-all (not per-device); 15-minute recent-authentication policy for security-sensitive actions;
+- account settings — locale (product-config default, user-overridable), timezone (neutral `Etc/UTC` default, never inferred from server/request location);
+- locale/timezone — validated (BCP-47-compatible pattern; real IANA `zoneinfo`);
+- device registration — privacy-preserving random `installation_id`, idempotent re-register, ownership-scoped revoke;
+- deletion skeleton — request/query/cancel only, 202 Accepted, never claims data was actually deleted;
+- consent model — append-only `ConsentRecord`, no fixed purpose-key catalog enforced yet (none approved for the product).
 
 ### Security
-- ownership enforcement;
-- session revocation;
-- rate limit;
-- audit.
+- ownership enforcement — every `/me/...` route derives `user_id` from the verified token, never a client-supplied value; IDOR-tested (a resource owned by a different user resolves to its own not-found code, never a distinguishable forbidden response);
+- session revocation — real Firebase `revoke_refresh_tokens`, audited with the actual provider outcome (never claims success before Firebase confirms it);
+- rate limit — generic, reusable, Redis-backed fixed-window limiter, fail-closed on Redis outage, guarding bootstrap/revoke-all/devices/consents/deletion;
+- audit — append-only `AccountAuditEvent`, allowlisted metadata only, never args/kwargs/tokens/passwords.
+
+Mobile: React Native Firebase + an Expo Development Build (not the Firebase JS SDK, not Expo Go — `docs/adr/0009-...md` §H); only a minimal auth technical surface, no product screens. Zero real Firebase project, zero real deploy, zero real OAuth, zero production data in this checkpoint.
 
 ---
 
@@ -516,6 +520,6 @@ Can progress alongside WPs when they do not alter contracts:
 
 ## First authorized next step
 
-**WP1.1 — Identity & User Account (NOT STARTED / NEXT AUTHORIZED WORK PACKAGE).** WP0.1 and WP0.2 (both WP0.2-A and all of WP0.2-B) are independently verified, merged, and post-merge CI verified — Phase 0 / Foundation is complete. WP1.1 is the only work package this closeout authorizes; it has not been started. WP1.2 and every downstream work package remain **not authorized** until their own dependencies are independently verified — authorizing WP1.1 does not authorize the rest of WP1.x.
+**WP1.1 — Identity & User Account (IMPLEMENTED, pending independent review).** WP0.1 and WP0.2 (both WP0.2-A and all of WP0.2-B) are independently verified, merged, and post-merge CI verified — Phase 0 / Foundation is complete. WP1.1 is the only work package authorized so far, and is now implemented (`docs/adr/0009-identity-auth-user-account.md`, D-051) pending independent review — it is not VERIFIED by this report alone. WP1.2 and every downstream work package remain **not authorized** until their own dependencies are independently verified — implementing WP1.1 does not authorize the rest of WP1.x.
 
-WP0.1 is independently verified and merged. WP0.2-A is independently verified and merged (PR #9, `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`). WP0.2-B Checkpoint A (internal ports/capability model) is independently verified and merged via squash (PR #12, `main` commit `a8bfbe621e5a83ae5f205adb1919ce3250684efb`; post-merge CI green, run `37055251128`, 7/7). WP0.2-B Checkpoint B (worker-side TapJob correlation propagation; ADR-0006 deployment/CD contract, not a real deploy) is independently verified and merged via squash (PR #15, `main` commit `3edaf1cee33b892a5d753b07b9b9946cbcd28887`; CI green pre-merge, run `37230556089`, 8/8, and post-merge, run `37231990603`, 8/8). WP0.2-B overall — and WP0.2 as a whole — is now **VERIFIED**. Product feature work (WP1.x) may now begin with WP1.1 only.
+WP0.1 is independently verified and merged. WP0.2-A is independently verified and merged (PR #9, `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`). WP0.2-B Checkpoint A (internal ports/capability model) is independently verified and merged via squash (PR #12, `main` commit `a8bfbe621e5a83ae5f205adb1919ce3250684efb`; post-merge CI green, run `37055251128`, 7/7). WP0.2-B Checkpoint B (worker-side TapJob correlation propagation; ADR-0006 deployment/CD contract, not a real deploy) is independently verified and merged via squash (PR #15, `main` commit `3edaf1cee33b892a5d753b07b9b9946cbcd28887`; CI green pre-merge, run `37230556089`, 8/8, and post-merge, run `37231990603`, 8/8). WP0.2-B overall — and WP0.2 as a whole — is **VERIFIED**. WP1.1 (internal `User`/Firebase `ExternalIdentity`/bootstrap/session lifecycle/devices/consent/deletion skeleton/rate limiting/minimal mobile auth surface) is implemented pending independent review, CI green at latest HEAD, merge, and post-merge CI green — the same pattern every prior checkpoint followed. Product feature work beyond WP1.1 (i.e. WP1.2+) remains not authorized.

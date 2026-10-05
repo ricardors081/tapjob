@@ -2,8 +2,8 @@
 
 **As of:** 2026-10-04  
 **Repository:** `ricardoo081/tapjob`  
-**Phase:** 0 — Foundation (VERIFIED, complete)  
-**Code status:** WP0.1 VERIFIED. WP0.2-A VERIFIED. WP0.2-B VERIFIED (Checkpoint A VERIFIED; Checkpoint B VERIFIED). WP0.2 VERIFIED. Next authorized work: WP1.1 — Identity & User Account (NOT STARTED / NEXT AUTHORIZED WORK PACKAGE). WP1.2 and downstream work packages remain NOT AUTHORIZED until their own dependencies are independently verified.
+**Phase:** 0 — Foundation (VERIFIED, complete); 1 — IN PROGRESS  
+**Code status:** WP0.1 VERIFIED. WP0.2 VERIFIED (WP0.2-A, WP0.2-B Checkpoint A, WP0.2-B Checkpoint B all VERIFIED). WP1.1 — Identity & User Account IMPLEMENTED, pending independent review (not VERIFIED by this report alone). WP1.2 and downstream work packages remain NOT AUTHORIZED until their own dependencies are independently verified.
 
 This file must reflect reality only.
 
@@ -142,19 +142,28 @@ See `docs/adr/0006-worker-correlation-deployment-cd-contract.md` (D-050) and `do
 
 Post-merge CI on `main` (run `37231990603`) confirmed, per job: `ruff check` all checks passed; `ruff format --check` clean (102 files already formatted); `mypy` clean (59 source files); `pytest` 222 passed, 3 deselected; the deployment-contract job's image/digest validator self-test (25/25) and release CI-success-gate self-test (30/30) both passed; `gitleaks` no leaks found; `pip-audit` no known vulnerabilities; the audit-gate self-test (94/94) and the real, scoped npm dependency audit gate both passed (both temporary exceptions above still active and unchanged, no third HIGH/CRITICAL advisory). No real GHCR publish, staging/production deploy, or database migration occurred — `.github/workflows/release-image.yml` is `workflow_dispatch`-only and has zero runs. First real execution of that workflow and the first real environment promotion remain a separate, later, operational gate requiring their own explicit authorization (ADR-0006).
 
+### Identity & User Account — WP1.1 (IMPLEMENTED, pending independent review)
+See `docs/adr/0009-identity-auth-user-account.md` (D-051). Not yet independently reviewed or merged.
+- internal `User` UUID is the one canonical identity (never a Firebase UID); a separate `ExternalIdentity` table (`UNIQUE(provider, provider_subject)`) links a Firebase UID, concurrency-safe under real concurrent first-login races against real PostgreSQL, and never auto-linked to an existing `User` by email match (even verified);
+- `tapjob_api.identity.firebase` is the sole module importing `firebase_admin`; every SDK exception is normalized behind an `IdentityTokenVerifier` Protocol; every token verification uses `check_revoked=True`; no test or CI job ever contacts a real Firebase project (a `FakeIdentityVerifier` is injected everywhere);
+- eight new `ErrorCode` members for the auth trust boundary (`AUTH_TOKEN_MISSING`/`AUTH_TOKEN_INVALID`/`AUTH_TOKEN_REVOKED`/`ACCOUNT_NOT_BOOTSTRAPPED`/`ACCOUNT_DISABLED`/`REAUTHENTICATION_REQUIRED`/`DEVICE_NOT_FOUND`/`IDENTITY_CONFLICT`);
+- `POST /api/v1/auth/bootstrap`, `GET`/`PATCH /api/v1/me`, `POST /me/sessions/revoke-all` (global Firebase revoke, audited with the real provider outcome — never claims success before Firebase confirms it), `POST`/`DELETE /me/devices` (idempotent registration, ownership-scoped revoke), `GET`/`POST /me/consents` (append-only), `POST`/`GET`/`DELETE /me/deletion-request` (skeleton only — 202 Accepted, never claims data was deleted; idempotent; cancellable only while still `requested`); a 15-minute recent-authentication policy guards session revoke-all and deletion;
+- new schema (migration `0002`, chained off the WP0.1 baseline): `users`, `external_identities`, `user_devices`, `consent_records`, `account_deletion_requests`, `account_audit_events` — every enum-shaped column is a `CHECK`-constrained `VARCHAR`, never a native Postgres `ENUM`;
+- a new, generic (not identity-specific) `tapjob_api.core.rate_limit.RedisFixedWindowRateLimiter`, fail-closed on Redis outage, guarding bootstrap/revoke-all/devices/consents/deletion;
+- OpenAPI/TypeScript contract regenerated (7 new operations under `/api/v1`); `packages/contracts/src/index.ts`'s facade re-exports the new types, no direct `./generated/*` import anywhere;
+- mobile: decision to use React Native Firebase + an Expo Development Build (not the Firebase JS SDK's unencrypted-AsyncStorage persistence, not Expo Go) for Google/Apple/email sign-in; only the minimal technical auth surface is built (auth provider/context, signed-out route, minimal sign-in screen, API bearer-token wiring) — no Career Profile/Jobs/Resume/Agent UI;
+- no source reuse in this checkpoint; zero real Firebase project, zero real deploy, zero real OAuth, zero production data.
+
 ## 2. Not implemented
 
-No production functionality exists yet. Backend code is limited to the WP0.1-A/WP0.1-B skeleton above (no domain models, tables or business endpoints; the database schema is still an empty baseline). The mobile app is a shell only, no product screens.
+No production feature beyond WP1.1's identity/account foundation exists yet. The mobile app has only a minimal auth technical surface, no product screens.
 
 Specifically NOT implemented:
-- any domain model, table or business endpoint (database schema is an empty baseline);
+- CareerProfile/Truth Store, resume import, Jobs/Matching, WhatsApp adapter, Apply Engine, Browser Extension (all WP1.2+, not authorized);
 - Sentry Expo config plugin, Metro source-map upload, EAS release wiring (deferred from WP0.1-B, see `docs/adr/0002-mobile-foundation.md`);
 - `es`/`en` translations (architecture is ready; only `pt-BR` strings exist);
 - web app;
-- browser extension;
-- WhatsApp integration;
-- auth;
-- profile;
+- profile beyond WP1.1's account settings (locale/timezone);
 - resume parser;
 - job ingestion;
 - matching;
@@ -163,6 +172,8 @@ Specifically NOT implemented:
 - apply engine;
 - Gmail integration;
 - notifications;
+- FCM push delivery (device push-token storage exists; nothing is ever sent);
+- a real deletion orchestrator (the skeleton records/tracks a request only; no data is ever actually deleted);
 - CD / deployment (CI exists; nothing is deployed);
 - monitoring.
 
@@ -254,7 +265,10 @@ Already resolved (pre-WP0.2):
 - initial hosting: Linux + Docker Compose behind Cloudflare.
 
 Output:
-ADRs/contracts, not production feature claims. Both WP0.2-B checkpoints are independently reviewed, merged and post-merge CI verified; WP0.2-B — and WP0.2 as a whole — is VERIFIED. No product feature exists yet. Next authorized work package is WP1.1 — Identity & User Account (NOT STARTED); WP1.2 and downstream packages remain NOT AUTHORIZED until their own dependencies are independently verified.
+ADRs/contracts, not production feature claims. Both WP0.2-B checkpoints are independently reviewed, merged and post-merge CI verified; WP0.2-B — and WP0.2 as a whole — is VERIFIED.
+
+### WP1.1 — Identity & User Account (IMPLEMENTED, pending independent review)
+The first authorized product work package. See section 1 above and `docs/adr/0009-identity-auth-user-account.md` (D-051). Not yet independently reviewed or merged. WP1.2 and downstream packages remain NOT AUTHORIZED until their own dependencies are independently verified.
 
 ## 5. Phase gates
 
@@ -289,6 +303,8 @@ On every significant PR:
 
 ## 7. Current authoritative conclusion
 
-TapJob has a defined product and architecture baseline, a repository/engineering skeleton (WP0.1-A + WP0.1-B), and three verified technical-contracts checkpoints (WP0.2-A: HTTP/OpenAPI/client-generation conventions; WP0.2-B Checkpoint A: internal ports + capability model; WP0.2-B Checkpoint B: worker correlation + deployment/CD contract) — **Phase 0 / Foundation is VERIFIED and complete**, but **no product functionality yet**.
+TapJob has a defined product and architecture baseline, a repository/engineering skeleton (WP0.1-A + WP0.1-B), and three verified technical-contracts checkpoints (WP0.2-A: HTTP/OpenAPI/client-generation conventions; WP0.2-B Checkpoint A: internal ports + capability model; WP0.2-B Checkpoint B: worker correlation + deployment/CD contract) — **Phase 0 / Foundation is VERIFIED and complete**. Phase 1 is now IN PROGRESS: WP1.1 — Identity & User Account (internal `User` UUID, Firebase `ExternalIdentity`, bootstrap, session lifecycle, devices, consent, deletion skeleton, rate limiting, minimal mobile auth surface — `docs/adr/0009-identity-auth-user-account.md`, D-051) is **implemented, pending independent review** — **no product functionality beyond identity/account exists yet**.
 
-WP0.1 is independently reviewed, merged and verified with green CI on `main`. Gate 0 is satisfied. WP0.2-A is independently reviewed, merged (PR #9) and verified with green CI on `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`. WP0.2-B Checkpoint A (seven internal ports + capability model) is independently reviewed across three rounds, merged via squash (PR #12, `main` commit `a8bfbe621e5a83ae5f205adb1919ce3250684efb`) and verified with green CI on that commit (run `37055251128`, 7/7). WP0.2-B Checkpoint B (worker correlation, deployment/CD contract) is independently reviewed across three rounds, merged via squash (PR #15, `main` commit `3edaf1cee33b892a5d753b07b9b9946cbcd28887`) and verified with green CI both pre-merge (run `37230556089`, 8/8) and post-merge (run `37231990603`, 8/8). WP0.2-B as a whole — and WP0.2 overall — is now **VERIFIED**. Phase 0 / Foundation is complete. **Next authorized work package: WP1.1 — Identity & User Account (NOT STARTED).** WP1.2 and every downstream work package remain NOT AUTHORIZED until their own dependencies are independently verified — this closeout authorizes only WP1.1, not the rest of WP1.x.
+WP0.1 is independently reviewed, merged and verified with green CI on `main`. Gate 0 is satisfied. WP0.2-A is independently reviewed, merged (PR #9) and verified with green CI on `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`. WP0.2-B Checkpoint A (seven internal ports + capability model) is independently reviewed across three rounds, merged via squash (PR #12, `main` commit `a8bfbe621e5a83ae5f205adb1919ce3250684efb`) and verified with green CI on that commit (run `37055251128`, 7/7). WP0.2-B Checkpoint B (worker correlation, deployment/CD contract) is independently reviewed across three rounds, merged via squash (PR #15, `main` commit `3edaf1cee33b892a5d753b07b9b9946cbcd28887`) and verified with green CI both pre-merge (run `37230556089`, 8/8) and post-merge (run `37231990603`, 8/8). WP0.2-B as a whole — and WP0.2 overall — is **VERIFIED**. Phase 0 / Foundation is complete.
+
+WP1.1 (Identity & User Account) is implemented — internal canonical `User` UUID, Firebase `ExternalIdentity` linking (never auto-linked by email, concurrency-safe), token verification with `check_revoked=True`, account bootstrap/settings/devices/consent/deletion-skeleton/session-revocation endpoints, fail-closed rate limiting, and a minimal mobile auth technical surface on React Native Firebase + an Expo Development Build — but it has **not yet been independently reviewed, merged, or CI-verified at latest HEAD**, and this report does not claim it VERIFIED. **WP1.2 and every downstream work package remain NOT AUTHORIZED** until their own dependencies are independently verified.
