@@ -115,9 +115,9 @@ See `docs/adr/0006-worker-correlation-deployment-cd-contract.md`, `docs/DEPLOYME
 
 ---
 
-## WP1.1 — Identity & User Account (IMPLEMENTED, pending independent review)
+## WP1.1 — Identity & User Account (VERIFIED)
 
-Independently reviewed: not yet. See `docs/adr/0009-identity-auth-user-account.md` (D-051) and `docs/PROJECT_STATE.md` for the full checkpoint summary.
+Independently reviewed across three rounds (5 blocking findings, then 6 operational-hardening findings, then one concentrated session-retry-semantics blocker — all resolved), merged via squash into `main` as PR #17 (squash commit `bc269d8dd99f1455d1d44cf8b3abb4ba8d7915e7`); CI green at latest HEAD before merge (run `37254156902`, 8/8) and CI green post-merge on `main` (run `37312677497`, 8/8). See `docs/adr/0009-identity-auth-user-account.md` (D-051) and `docs/PROJECT_STATE.md` for the full checkpoint summary.
 
 ### Deliver
 - sign-up/login — Firebase Authentication (Google/Apple/email), internal `User` UUID canonical, `ExternalIdentity` links a Firebase UID, never auto-linked by email, concurrency-safe bootstrap;
@@ -138,7 +138,9 @@ Mobile: React Native Firebase + an Expo Development Build (not the Firebase JS S
 
 ---
 
-## WP1.2 — Career Profile & Truth Store
+## WP1.2 — Career Profile & Truth Store (NOT STARTED / next authorized work package)
+
+WP1.1's own dependencies are independently verified (see above), so WP1.2 is now the next authorized work package to begin. It has not started. WP1.3 and every further downstream work package remain NOT AUTHORIZED until WP1.2's own dependencies are independently verified in turn.
 
 ### Deliver
 - CareerProfile;
@@ -520,6 +522,6 @@ Can progress alongside WPs when they do not alter contracts:
 
 ## First authorized next step
 
-**WP1.1 — Identity & User Account (IMPLEMENTED, pending independent review).** WP0.1 and WP0.2 (both WP0.2-A and all of WP0.2-B) are independently verified, merged, and post-merge CI verified — Phase 0 / Foundation is complete. WP1.1 is the only work package authorized so far, and is now implemented (`docs/adr/0009-identity-auth-user-account.md`, D-051) pending independent review — it is not VERIFIED by this report alone. WP1.2 and every downstream work package remain **not authorized** until their own dependencies are independently verified — implementing WP1.1 does not authorize the rest of WP1.x.
+**WP1.2 — Career Profile & Truth Store (NOT STARTED / next authorized work package).** WP0.1, WP0.2 (both WP0.2-A and all of WP0.2-B) and WP1.1 are all independently verified, merged, and post-merge CI verified. WP1.1 — Identity & User Account is now **VERIFIED** (`docs/adr/0009-identity-auth-user-account.md`, D-051; PR #17, squash commit `bc269d8dd99f1455d1d44cf8b3abb4ba8d7915e7`; CI green pre-merge run `37254156902` 8/8 and post-merge run `37312677497` 8/8). This authorizes WP1.2 to begin — it has not started. WP1.3 and every further downstream work package remain **not authorized** until their own dependencies are independently verified in turn — WP1.1 being verified does not authorize the rest of WP1.x/WP2+.
 
-WP0.1 is independently verified and merged. WP0.2-A is independently verified and merged (PR #9, `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`). WP0.2-B Checkpoint A (internal ports/capability model) is independently verified and merged via squash (PR #12, `main` commit `a8bfbe621e5a83ae5f205adb1919ce3250684efb`; post-merge CI green, run `37055251128`, 7/7). WP0.2-B Checkpoint B (worker-side TapJob correlation propagation; ADR-0006 deployment/CD contract, not a real deploy) is independently verified and merged via squash (PR #15, `main` commit `3edaf1cee33b892a5d753b07b9b9946cbcd28887`; CI green pre-merge, run `37230556089`, 8/8, and post-merge, run `37231990603`, 8/8). WP0.2-B overall — and WP0.2 as a whole — is **VERIFIED**. WP1.1 (internal `User`/Firebase `ExternalIdentity`/bootstrap/session lifecycle/devices/consent/deletion skeleton/rate limiting/minimal mobile auth surface) is implemented pending independent review, CI green at latest HEAD, merge, and post-merge CI green — the same pattern every prior checkpoint followed. Product feature work beyond WP1.1 (i.e. WP1.2+) remains not authorized.
+WP0.1 is independently verified and merged. WP0.2-A is independently verified and merged (PR #9, `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`). WP0.2-B Checkpoint A (internal ports/capability model) is independently verified and merged via squash (PR #12, `main` commit `a8bfbe621e5a83ae5f205adb1919ce3250684efb`; post-merge CI green, run `37055251128`, 7/7). WP0.2-B Checkpoint B (worker-side TapJob correlation propagation; ADR-0006 deployment/CD contract, not a real deploy) is independently verified and merged via squash (PR #15, `main` commit `3edaf1cee33b892a5d753b07b9b9946cbcd28887`; CI green pre-merge, run `37230556089`, 8/8, and post-merge, run `37231990603`, 8/8). WP0.2-B overall — and WP0.2 as a whole — is **VERIFIED**. WP1.1 (internal `User`/Firebase `ExternalIdentity`/bootstrap/session lifecycle/devices/consent/deletion skeleton/rate limiting/minimal mobile auth surface) is independently reviewed across three rounds, merged via squash (PR #17, `main` commit `bc269d8dd99f1455d1d44cf8b3abb4ba8d7915e7`), CI green at latest HEAD before merge and post-merge CI green — the same pattern every prior checkpoint followed. **WP1.1 is VERIFIED.** Product feature work beyond WP1.2 (i.e. WP1.3+) remains not authorized.
