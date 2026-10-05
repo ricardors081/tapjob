@@ -3,7 +3,7 @@
 **As of:** 2026-10-05  
 **Repository:** `ricardoo081/tapjob`  
 **Phase:** 0 — Foundation (VERIFIED, complete); 1 — IN PROGRESS  
-**Code status:** WP0.1 VERIFIED. WP0.2 VERIFIED (WP0.2-A, WP0.2-B Checkpoint A, WP0.2-B Checkpoint B all VERIFIED). WP1.1 — Identity & User Account **VERIFIED** (PR #17, squash commit `bc269d8dd99f1455d1d44cf8b3abb4ba8d7915e7`, CI green pre- and post-merge). WP1.2 — Career Profile & Truth Store is **NOT STARTED / the next authorized work package**. WP1.3 and downstream work packages remain NOT AUTHORIZED until their own dependencies are independently verified.
+**Code status:** WP0.1 VERIFIED. WP0.2 VERIFIED (WP0.2-A, WP0.2-B Checkpoint A, WP0.2-B Checkpoint B all VERIFIED). WP1.1 — Identity & User Account **VERIFIED** (PR #17, squash commit `bc269d8dd99f1455d1d44cf8b3abb4ba8d7915e7`, CI green pre- and post-merge). WP1.2 — Career Profile & Truth Store is **IMPLEMENTED, pending independent review** (branch `feat/wp1-2-career-profile-truth-store`, not yet merged, not yet VERIFIED). WP1.3 and downstream work packages remain NOT AUTHORIZED until their own dependencies are independently verified.
 
 This file must reflect reality only.
 
@@ -156,16 +156,31 @@ See `docs/adr/0009-identity-auth-user-account.md` (D-051). Independently reviewe
 
 **Operational prerequisites still pending (not an unverified-code gap — WP1.1's code is VERIFIED; these are external setup steps documented in ADR-0009 §I1/§I2):** the first real Expo Development Build/EAS build has not been executed; a real Firebase project, enabled Google/Apple/email providers, the real (gitignored) native service files and the real `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` value are not configured. Google sign-in remains on the free "Original" API (`GoogleSignin.configure`/`signIn`), a documented limitation — the paid "Universal Sign In" product was investigated and deliberately not purchased/migrated to (ADR-0009 addendum, round 2). Session revocation is global only (`revoke_refresh_tokens`); true per-device auth-session revocation is an explicitly named future gap, not silently worked around.
 
+### Career Profile & Professional Truth Store — WP1.2 (IMPLEMENTED, pending independent review — NOT VERIFIED)
+See `docs/adr/0010-career-profile-truth-store.md` (D-052). Branch `feat/wp1-2-career-profile-truth-store`, not yet merged. Not yet independently reviewed; not yet VERIFIED.
+- one `CareerProfile` per `User` (`UNIQUE(user_id)`), lazily created on first mutation only — `GET` never creates a row; a `User` with none yet receives a virtual `profileVersion: 0` response;
+- `ProfileFact` is typed (nine `FactValue` shapes: experience/education/skill/certification/language/project/link/preference/work_authorization), immutable (a changed claim creates a new fact in the same lineage and supersedes the old one — the old row's original value stays permanently readable), and never hard-deleted on retraction;
+- `source_kind`/`user_confirmed` are always server-assigned (`user_direct`) for the public add-fact endpoint — no client can spoof provenance or confirmation;
+- optimistic concurrency via one atomic conditional `UPDATE ... WHERE profile_version = :expected ... RETURNING` per logical mutation, `expectedProfileVersion` in every mutating request, conflict → `409 PROFILE_VERSION_CONFLICT`, verified under real concurrent PostgreSQL load (first-write race and a non-zero-version conflict, real threads);
+- `get_truth_snapshot` is the one read path any future AI/resume/matching/WhatsApp consumer may ground on — confirmed, active, not retracted/superseded, owned-only, with historical `profile_version` reconstruction;
+- audit reuses WP1.1's `AccountAuditEvent` (four new event types), allowlisted metadata only — never fact content, salary figures, or work-authorization answers;
+- new schema (migration `0003`, chained off `0002`): `career_profiles`, `profile_facts`, with a partial unique index (`lineage_id` WHERE `status='active'`) and two `CHECK` constraints;
+- OpenAPI/TypeScript contract regenerated (8 new operations under `/api/v1/me/...`); facade re-exports the new types, no direct `./generated/*` import;
+- source reuse: `career-ops-hq/career-ops` (provenance/evidence concept, PORT — in-place mutation explicitly rejected) and `roysahar11/appliable` (Source-of-Truth-Discipline concept, ADAPT — filesystem-as-database explicitly rejected), both recorded in `docs/SOURCE_REUSE_LEDGER.md`;
+- zero AI/LLM calls, zero Resume Import, zero WhatsApp adapter, zero full mobile profile UI, zero real deploy, zero real migration.
+
 ## 2. Not implemented
 
-No production feature beyond WP1.1's identity/account foundation exists yet. The mobile app has only a minimal auth technical surface, no product screens.
+No production feature beyond WP1.1's identity/account foundation and WP1.2's Career Profile/Truth
+Store (pending independent review) exists yet. The mobile app has only a minimal auth technical
+surface, no product screens.
 
 Specifically NOT implemented:
-- CareerProfile/Truth Store, resume import, Jobs/Matching, WhatsApp adapter, Apply Engine, Browser Extension (all WP1.2+, not authorized);
+- Resume import, Jobs/Matching, WhatsApp adapter, Apply Engine, Browser Extension (all WP1.3+, not authorized);
 - Sentry Expo config plugin, Metro source-map upload, EAS release wiring (deferred from WP0.1-B, see `docs/adr/0002-mobile-foundation.md`);
 - `es`/`en` translations (architecture is ready; only `pt-BR` strings exist);
 - web app;
-- profile beyond WP1.1's account settings (locale/timezone);
+- full mobile profile UI (WP1.2's Career Profile/Truth Store is implemented backend-side only — no onboarding/experience/education/skill screens were built; that is explicitly deferred);
 - resume parser;
 - job ingestion;
 - matching;
@@ -272,8 +287,8 @@ ADRs/contracts, not production feature claims. Both WP0.2-B checkpoints are inde
 ### WP1.1 — Identity & User Account (VERIFIED)
 The first authorized product work package. See section 1 above and `docs/adr/0009-identity-auth-user-account.md` (D-051). Independently reviewed and merged via squash (PR #17, `main` commit `bc269d8dd99f1455d1d44cf8b3abb4ba8d7915e7`); CI green pre-merge (run `37254156902`, 8/8) and post-merge (run `37312677497`, 8/8).
 
-### WP1.2 — Career Profile & Truth Store (NOT STARTED / next authorized work package)
-The only work package now authorized to begin, since WP1.1's own dependencies are independently verified. See `docs/IMPLEMENTATION_PLAN.md` for scope (CareerProfile, ProfileFact, preferences, skills, experiences, education, certifications, links, work-authorization answers, salary/location preferences — WhatsApp-onboarding-first API/use cases). WP1.3 and every further downstream work package remain NOT AUTHORIZED until their own dependencies are independently verified.
+### WP1.2 — Career Profile & Truth Store (IMPLEMENTED, pending independent review — NOT VERIFIED)
+See section 1 above and `docs/adr/0010-career-profile-truth-store.md` (D-052). Implemented end-to-end on `feat/wp1-2-career-profile-truth-store` (CareerProfile, ProfileFact, typed fact values, optimistic concurrency, truth snapshot, provenance, audit, migration `0003`, OpenAPI/contracts regenerated). Not yet independently reviewed, not yet merged, not yet VERIFIED. WP1.3 and every further downstream work package remain NOT AUTHORIZED until WP1.2's own dependencies are independently verified.
 
 ## 5. Phase gates
 

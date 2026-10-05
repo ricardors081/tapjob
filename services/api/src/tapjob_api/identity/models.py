@@ -70,6 +70,13 @@ class AuditEventType(StrEnum):
     DELETION_REQUESTED = "deletion_requested"
     DELETION_CANCELLED = "deletion_cancelled"
     AUTH_TOKEN_REJECTED = "auth_token_rejected"  # noqa: S105 -- event-type label, not a credential
+    # WP1.2 (docs/adr/0010-career-profile-truth-store.md "audit"): reuses this SAME append-only
+    # mechanism rather than a second, near-identical table -- a Truth Store mutation is an
+    # account-level event in exactly the sense this table already models.
+    PROFILE_UPDATED = "profile_updated"
+    PROFILE_FACT_ADDED = "profile_fact_added"
+    PROFILE_FACT_REPLACED = "profile_fact_replaced"
+    PROFILE_FACT_RETRACTED = "profile_fact_retracted"
 
 
 class AuditOutcome(StrEnum):

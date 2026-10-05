@@ -67,37 +67,63 @@ header value.
   correlation convention)
 - recorded_at
 
-### CareerProfile
-One active canonical profile per user.
-- headline
-- summary
-- target roles
-- preferences
-- profile_version
-
-### ProfileFact
-Atomic fact used for grounding.
+### CareerProfile (WP1.2, `docs/adr/0010-career-profile-truth-store.md`)
+One canonical `CareerProfile` per `User` (`UNIQUE(user_id)`), lazily created on first mutation —
+`GET` never creates a row as a side effect; a `User` with none yet gets a virtual response at
+`profileVersion: 0`.
 - id
-- user_id
-- type
-- value_json
-- source
-- evidence_ref
-- confidence
-- user_confirmed
-- valid_from / valid_to
+- user_id (FK -> User, `UNIQUE`)
+- headline (nullable)
+- summary (nullable)
+- target_roles (string list; preferences with deeper substructure are `ProfileFact`s instead, see
+  below — never duplicated across both)
+- profile_version (starts at 0; bumped by exactly one on every logical mutation, see
+  "Optimistic concurrency")
+- created_at / updated_at
+
+### ProfileFact (WP1.2)
+A typed, immutable, provenance-carrying professional claim — never arbitrary JSON and never edited
+in place. Replacing a claim's value creates a **new** row in the same `lineage_id` and marks the old
+row `superseded`; the old row's original value remains permanently readable by its own id.
+Retraction is logical only (`status = retracted`) — a `ProfileFact` row is never hard-deleted.
+- id (UUID, stable — future `ResumeVersion`/`ApplicationKit`/agent output reference a fact by this
+  id)
+- user_id (FK -> User)
+- career_profile_id (FK -> CareerProfile)
+- fact_type (`experience` / `education` / `skill` / `certification` / `language` / `project` /
+  `link` / `preference` / `work_authorization` — exactly these nine; `application_answer` is
+  explicitly out of scope, deferred to a future `ApplicationAnswer` entity)
+- value (JSONB; always a typed, bounded `FactValue` shape per `fact_type` — see
+  `tapjob_api.career_profile.fact_values`, never `{type: string, value: Any}`)
+- source_kind (server-assigned only — `user_direct` is the only value WP1.2 defines; a client can
+  never choose its own provenance)
+- source_ref (nullable, optional)
+- evidence_ref (nullable; a reference only, never a dumping ground for full resume/chat text)
+- confidence (nullable, `0..1`; meaningful for future machine-derived candidates, not for a
+  user-direct confirmed fact)
+- user_confirmed (server-assigned `true` for every WP1.2-created fact)
+- confirmed_at
+- status (`active` / `superseded` / `retracted`)
+- lineage_id (equal to `id` at creation; copied onto whatever fact later supersedes this one — at
+  most one `active` fact per `lineage_id`, enforced by a partial unique index)
+- supersedes_fact_id (nullable, FK -> ProfileFact)
+- active_from_profile_version / inactive_from_profile_version (nullable) — **system/version
+  validity**: when this fact entered/left the current-truth set, in `profile_version` terms. Never
+  confused with a fact's own **domain validity** (e.g. an experience's real 2022–2024 dates), which
+  lives inside `value` for the fact types that have one.
 - created_at
 
-Types:
-- experience;
-- education;
-- skill;
-- certification;
-- language;
-- project;
-- preference;
-- application_answer;
-- legal/work authorization response.
+`get_truth_snapshot(user, profile_version?)` is the one read path any future AI/resume/matching/
+WhatsApp consumer may ground on: owned, `user_confirmed`, active at the target version, never
+retracted/superseded, never another user's fact. Supports both the current version and a historical
+reconstruction via the `active_from`/`inactive_from_profile_version` window — no separate
+event-sourcing framework.
+
+**Optimistic concurrency:** every mutating request supplies `expectedProfileVersion`; the server
+applies one atomic conditional `UPDATE career_profiles SET profile_version = profile_version + 1
+WHERE user_id = :user AND profile_version = :expected RETURNING *` in the same transaction as the
+mutation. Zero matched rows → `409 PROFILE_VERSION_CONFLICT` — never a silent last-write-wins, never
+more than one version bump per logical mutation.
 
 ### Resume
 Logical resume family.

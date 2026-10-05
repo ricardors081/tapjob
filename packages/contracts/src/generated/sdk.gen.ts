@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { BootstrapAccountData, BootstrapAccountErrors, BootstrapAccountResponses, CancelAccountDeletionData, CancelAccountDeletionErrors, CancelAccountDeletionResponses, GetAccountDeletionRequestData, GetAccountDeletionRequestErrors, GetAccountDeletionRequestResponses, GetCurrentUserData, GetCurrentUserErrors, GetCurrentUserResponses, GetHealthData, GetHealthErrors, GetHealthResponses, GetReadinessData, GetReadinessErrors, GetReadinessResponses, ListConsentsData, ListConsentsErrors, ListConsentsResponses, RecordConsentData, RecordConsentErrors, RecordConsentResponses, RegisterDeviceData, RegisterDeviceErrors, RegisterDeviceResponses, RequestAccountDeletionData, RequestAccountDeletionErrors, RequestAccountDeletionResponses, RevokeAllSessionsData, RevokeAllSessionsErrors, RevokeAllSessionsResponses, RevokeDeviceData, RevokeDeviceErrors, RevokeDeviceResponses, UpdateCurrentUserData, UpdateCurrentUserErrors, UpdateCurrentUserResponses } from './types.gen';
+import type { AddProfileFactData, AddProfileFactErrors, AddProfileFactResponses, BootstrapAccountData, BootstrapAccountErrors, BootstrapAccountResponses, CancelAccountDeletionData, CancelAccountDeletionErrors, CancelAccountDeletionResponses, GetAccountDeletionRequestData, GetAccountDeletionRequestErrors, GetAccountDeletionRequestResponses, GetCareerProfileData, GetCareerProfileErrors, GetCareerProfileResponses, GetCurrentUserData, GetCurrentUserErrors, GetCurrentUserResponses, GetHealthData, GetHealthErrors, GetHealthResponses, GetProfileFactData, GetProfileFactErrors, GetProfileFactResponses, GetReadinessData, GetReadinessErrors, GetReadinessResponses, GetTruthSnapshotData, GetTruthSnapshotErrors, GetTruthSnapshotResponses, ListConsentsData, ListConsentsErrors, ListConsentsResponses, ListProfileFactsData, ListProfileFactsErrors, ListProfileFactsResponses, RecordConsentData, RecordConsentErrors, RecordConsentResponses, RegisterDeviceData, RegisterDeviceErrors, RegisterDeviceResponses, ReplaceProfileFactData, ReplaceProfileFactErrors, ReplaceProfileFactResponses, RequestAccountDeletionData, RequestAccountDeletionErrors, RequestAccountDeletionResponses, RetractProfileFactData, RetractProfileFactErrors, RetractProfileFactResponses, RevokeAllSessionsData, RevokeAllSessionsErrors, RevokeAllSessionsResponses, RevokeDeviceData, RevokeDeviceErrors, RevokeDeviceResponses, UpdateCareerProfileData, UpdateCareerProfileErrors, UpdateCareerProfileResponses, UpdateCurrentUserData, UpdateCurrentUserErrors, UpdateCurrentUserResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -41,6 +41,29 @@ export const getCurrentUser = <ThrowOnError extends boolean = false>(options?: O
  */
 export const updateCurrentUser = <ThrowOnError extends boolean = false>(options: Options<UpdateCurrentUserData, ThrowOnError>): RequestResult<UpdateCurrentUserResponses, UpdateCurrentUserErrors, ThrowOnError> => (options.client ?? client).patch<UpdateCurrentUserResponses, UpdateCurrentUserErrors, ThrowOnError>({
     url: '/api/v1/me',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Get Career Profile
+ */
+export const getCareerProfile = <ThrowOnError extends boolean = false>(options?: Options<GetCareerProfileData, ThrowOnError>): RequestResult<GetCareerProfileResponses, GetCareerProfileErrors, ThrowOnError> => (options?.client ?? client).get<GetCareerProfileResponses, GetCareerProfileErrors, ThrowOnError>({ url: '/api/v1/me/career-profile', ...options });
+
+/**
+ * Update Career Profile
+ *
+ * `UpdateCareerProfileRequest` IS a `CareerProfilePatchCommand` (round-3 independent review
+ * "BLOCKER 1") -- passed straight through to `service.update_career_profile`, which owns every
+ * invariant itself (trim/non-blank/control-character/bounds/dedupe, absent-vs-explicit-null via
+ * `model_fields_set`, the virtual-profile/same-value no-op decision). This router call is just
+ * the HTTP entry point, never a second copy of that validation.
+ */
+export const updateCareerProfile = <ThrowOnError extends boolean = false>(options: Options<UpdateCareerProfileData, ThrowOnError>): RequestResult<UpdateCareerProfileResponses, UpdateCareerProfileErrors, ThrowOnError> => (options.client ?? client).patch<UpdateCareerProfileResponses, UpdateCareerProfileErrors, ThrowOnError>({
+    url: '/api/v1/me/career-profile',
     ...options,
     headers: {
         'Content-Type': 'application/json',
@@ -111,6 +134,71 @@ export const registerDevice = <ThrowOnError extends boolean = false>(options: Op
 export const revokeDevice = <ThrowOnError extends boolean = false>(options: Options<RevokeDeviceData, ThrowOnError>): RequestResult<RevokeDeviceResponses, RevokeDeviceErrors, ThrowOnError> => (options.client ?? client).delete<RevokeDeviceResponses, RevokeDeviceErrors, ThrowOnError>({ url: '/api/v1/me/devices/{device_id}', ...options });
 
 /**
+ * List Profile Facts
+ *
+ * Active (current-truth) facts only -- superseded/retracted history is reachable one fact at a
+ * time via `GET /me/profile-facts/{factId}`, not this listing (docs/adr/0010-...md
+ * "retraction").
+ */
+export const listProfileFacts = <ThrowOnError extends boolean = false>(options?: Options<ListProfileFactsData, ThrowOnError>): RequestResult<ListProfileFactsResponses, ListProfileFactsErrors, ThrowOnError> => (options?.client ?? client).get<ListProfileFactsResponses, ListProfileFactsErrors, ThrowOnError>({ url: '/api/v1/me/profile-facts', ...options });
+
+/**
+ * Add Profile Fact
+ */
+export const addProfileFact = <ThrowOnError extends boolean = false>(options: Options<AddProfileFactData, ThrowOnError>): RequestResult<AddProfileFactResponses, AddProfileFactErrors, ThrowOnError> => (options.client ?? client).post<AddProfileFactResponses, AddProfileFactErrors, ThrowOnError>({
+    url: '/api/v1/me/profile-facts',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Get Profile Fact
+ *
+ * Ownership-scoped (docs/adr/0010-...md "ownership / IDOR testing"): a fact belonging to a
+ * different user is indistinguishable from a nonexistent one -- both resolve to
+ * `PROFILE_FACT_NOT_FOUND`. Deliberately reachable regardless of `status` -- this is how a
+ * superseded/retracted fact's history stays readable.
+ */
+export const getProfileFact = <ThrowOnError extends boolean = false>(options: Options<GetProfileFactData, ThrowOnError>): RequestResult<GetProfileFactResponses, GetProfileFactErrors, ThrowOnError> => (options.client ?? client).get<GetProfileFactResponses, GetProfileFactErrors, ThrowOnError>({ url: '/api/v1/me/profile-facts/{fact_id}', ...options });
+
+/**
+ * Replace Profile Fact
+ *
+ * The original fact's `value_json` is NEVER edited in place -- this creates a NEW fact in the
+ * same lineage and marks the old one `SUPERSEDED`, permanently readable via its own id
+ * (docs/adr/0010-...md "fact immutability"). The ownership-scoped lookup and the `value.kind`/
+ * `factType` cross-check both happen INSIDE `service.replace_profile_fact` now (round-2
+ * independent review "BLOCKER 1") -- this router no longer resolves the fact itself first.
+ */
+export const replaceProfileFact = <ThrowOnError extends boolean = false>(options: Options<ReplaceProfileFactData, ThrowOnError>): RequestResult<ReplaceProfileFactResponses, ReplaceProfileFactErrors, ThrowOnError> => (options.client ?? client).post<ReplaceProfileFactResponses, ReplaceProfileFactErrors, ThrowOnError>({
+    url: '/api/v1/me/profile-facts/{fact_id}/replace',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Retract Profile Fact
+ *
+ * Logical retraction -- the row is never hard-deleted (docs/adr/0010-...md "retraction"). The
+ * ownership-scoped lookup happens INSIDE `service.retract_profile_fact` now (round-2 independent
+ * review "BLOCKER 1").
+ */
+export const retractProfileFact = <ThrowOnError extends boolean = false>(options: Options<RetractProfileFactData, ThrowOnError>): RequestResult<RetractProfileFactResponses, RetractProfileFactErrors, ThrowOnError> => (options.client ?? client).post<RetractProfileFactResponses, RetractProfileFactErrors, ThrowOnError>({
+    url: '/api/v1/me/profile-facts/{fact_id}/retract',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
  * Revoke All Sessions
  *
  * Revokes every Firebase refresh token for this account's linked identity (global, not
@@ -126,6 +214,18 @@ export const revokeDevice = <ThrowOnError extends boolean = false>(options: Opti
  * server-side enforcement is immediate.
  */
 export const revokeAllSessions = <ThrowOnError extends boolean = false>(options?: Options<RevokeAllSessionsData, ThrowOnError>): RequestResult<RevokeAllSessionsResponses, RevokeAllSessionsErrors, ThrowOnError> => (options?.client ?? client).post<RevokeAllSessionsResponses, RevokeAllSessionsErrors, ThrowOnError>({ url: '/api/v1/me/sessions/revoke-all', ...options });
+
+/**
+ * Get Truth Snapshot
+ *
+ * The ONLY shape any future consumer may use to ground generated external material
+ * (docs/AI_AGENT.md §6, AGENTS.md §6) -- confirmed, active facts only, never an unconfirmed
+ * candidate or another user's fact (docs/adr/0010-...md "truth snapshot filter"). A
+ * `profileVersion` greater than the profile's real current version is `404
+ * PROFILE_VERSION_NOT_FOUND` -- never a fabricated snapshot for a version that was never actually
+ * reached (round-1 independent review "future version error").
+ */
+export const getTruthSnapshot = <ThrowOnError extends boolean = false>(options?: Options<GetTruthSnapshotData, ThrowOnError>): RequestResult<GetTruthSnapshotResponses, GetTruthSnapshotErrors, ThrowOnError> => (options?.client ?? client).get<GetTruthSnapshotResponses, GetTruthSnapshotErrors, ThrowOnError>({ url: '/api/v1/me/truth-snapshot', ...options });
 
 /**
  * Get Health

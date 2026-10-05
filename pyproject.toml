@@ -45,7 +45,12 @@ known-first-party = ["tapjob_api", "tapjob_worker", "tapjob_product_config"]
 # evaluated once at function-definition time), so this is the standard, documented way to silence
 # B008 for exactly these two calls (WP1.1, docs/adr/0009-identity-auth-user-account.md) -- not a
 # blanket B008 disable.
-extend-immutable-calls = ["fastapi.Depends", "fastapi.params.Depends", "fastapi.Security"]
+extend-immutable-calls = [
+  "fastapi.Depends",
+  "fastapi.params.Depends",
+  "fastapi.Security",
+  "fastapi.Query",
+]
 
 [tool.ruff.lint.per-file-ignores]
 # S101: pytest `assert` is the standard assertion mechanism, not a stripped-in-production hazard.

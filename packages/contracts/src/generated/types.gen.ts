@@ -5,6 +5,44 @@ export type ClientOptions = {
 };
 
 /**
+ * AddProfileFactRequest
+ *
+ * `sourceKind`/`sourceRef`/`confidence`/`userConfirmed` are deliberately NOT accepted here --
+ * the server always assigns `source_kind=USER_DIRECT`/`user_confirmed=True` for this endpoint
+ * (docs/adr/0010-...md "provenance / no source spoofing"); a public client can never choose its
+ * own provenance metadata.
+ */
+export type AddProfileFactRequest = {
+    /**
+     * Expectedprofileversion
+     */
+    expectedProfileVersion: number;
+    factType: FactType;
+    /**
+     * Value
+     */
+    value: ({
+        kind: 'experience';
+    } & ExperienceFactValue) | ({
+        kind: 'education';
+    } & EducationFactValue) | ({
+        kind: 'skill';
+    } & SkillFactValue) | ({
+        kind: 'certification';
+    } & CertificationFactValue) | ({
+        kind: 'language';
+    } & LanguageFactValue) | ({
+        kind: 'project';
+    } & ProjectFactValue) | ({
+        kind: 'link';
+    } & LinkFactValue) | ({
+        kind: 'preference';
+    } & PreferenceFactValue) | ({
+        kind: 'work_authorization';
+    } & WorkAuthorizationFactValue);
+};
+
+/**
  * BootstrapResponse
  */
 export type BootstrapResponse = {
@@ -13,6 +51,68 @@ export type BootstrapResponse = {
      */
     created: boolean;
     user: UserResponse;
+};
+
+/**
+ * CareerProfileResponse
+ *
+ * A `User` with no `CareerProfile` row yet still gets a response here -- a virtual profile at
+ * `profileVersion: 0` (docs/adr/0010-...md "profile creation"), never a 404. `createdAt`/
+ * `updatedAt` are `null` only for that virtual case.
+ */
+export type CareerProfileResponse = {
+    /**
+     * Createdat
+     */
+    createdAt?: string | null;
+    /**
+     * Headline
+     */
+    headline?: string | null;
+    /**
+     * Profileversion
+     */
+    profileVersion: number;
+    /**
+     * Summary
+     */
+    summary?: string | null;
+    /**
+     * Targetroles
+     */
+    targetRoles?: Array<string>;
+    /**
+     * Updatedat
+     */
+    updatedAt?: string | null;
+};
+
+/**
+ * CertificationFactValue
+ */
+export type CertificationFactValue = {
+    /**
+     * Credentialid
+     */
+    credentialId?: string | null;
+    /**
+     * Credentialurl
+     */
+    credentialUrl?: string | null;
+    expires?: YearMonth | null;
+    issued?: YearMonth | null;
+    /**
+     * Issuer
+     */
+    issuer: string;
+    /**
+     * Kind
+     */
+    kind?: 'certification';
+    /**
+     * Name
+     */
+    name: string;
 };
 
 /**
@@ -148,6 +248,59 @@ export type DeviceResponse = {
 };
 
 /**
+ * EducationFactValue
+ */
+export type EducationFactValue = {
+    /**
+     * Degree
+     */
+    degree?: string | null;
+    /**
+     * Description
+     */
+    description?: string | null;
+    end?: YearMonth | null;
+    /**
+     * Fieldofstudy
+     */
+    fieldOfStudy?: string | null;
+    /**
+     * Institution
+     */
+    institution: string;
+    /**
+     * Kind
+     */
+    kind?: 'education';
+    start?: YearMonth | null;
+    status?: EducationStatus | null;
+};
+
+/**
+ * EducationStatus
+ */
+export type EducationStatus = 'in_progress' | 'completed' | 'incomplete';
+
+/**
+ * EmploymentType
+ */
+export type EmploymentType = 'full_time' | 'part_time' | 'contract' | 'internship' | 'freelance';
+
+/**
+ * EmploymentTypePreferenceValue
+ */
+export type EmploymentTypePreferenceValue = {
+    /**
+     * Employmenttypes
+     */
+    employmentTypes: Array<EmploymentType>;
+    /**
+     * Preferencekind
+     */
+    preferenceKind?: 'employment_type';
+};
+
+/**
  * Environment
  */
 export type Environment = 'local' | 'development' | 'staging' | 'production';
@@ -157,7 +310,7 @@ export type Environment = 'local' | 'development' | 'staging' | 'production';
  *
  * Machine-readable error vocabulary. Clients localize/branch on this, never on ``message``.
  */
-export type ErrorCode = 'INVALID_REQUEST' | 'VALIDATION_FAILED' | 'AUTHENTICATION_REQUIRED' | 'PERMISSION_DENIED' | 'RESOURCE_NOT_FOUND' | 'METHOD_NOT_ALLOWED' | 'CONFLICT' | 'RATE_LIMITED' | 'SERVICE_UNAVAILABLE' | 'UPSTREAM_FAILED' | 'UPSTREAM_TIMEOUT' | 'INVALID_CURSOR' | 'INTERNAL_ERROR' | 'AUTH_TOKEN_MISSING' | 'AUTH_TOKEN_INVALID' | 'AUTH_TOKEN_REVOKED' | 'ACCOUNT_NOT_BOOTSTRAPPED' | 'ACCOUNT_DISABLED' | 'REAUTHENTICATION_REQUIRED' | 'DEVICE_NOT_FOUND' | 'IDENTITY_CONFLICT';
+export type ErrorCode = 'INVALID_REQUEST' | 'VALIDATION_FAILED' | 'AUTHENTICATION_REQUIRED' | 'PERMISSION_DENIED' | 'RESOURCE_NOT_FOUND' | 'METHOD_NOT_ALLOWED' | 'CONFLICT' | 'RATE_LIMITED' | 'SERVICE_UNAVAILABLE' | 'UPSTREAM_FAILED' | 'UPSTREAM_TIMEOUT' | 'INVALID_CURSOR' | 'INTERNAL_ERROR' | 'AUTH_TOKEN_MISSING' | 'AUTH_TOKEN_INVALID' | 'AUTH_TOKEN_REVOKED' | 'ACCOUNT_NOT_BOOTSTRAPPED' | 'ACCOUNT_DISABLED' | 'REAUTHENTICATION_REQUIRED' | 'DEVICE_NOT_FOUND' | 'IDENTITY_CONFLICT' | 'PROFILE_VERSION_CONFLICT' | 'PROFILE_FACT_NOT_FOUND' | 'PROFILE_FACT_ALREADY_RETRACTED' | 'PROFILE_VERSION_NOT_FOUND';
 
 /**
  * ErrorResponse
@@ -187,6 +340,62 @@ export type ErrorResponse = {
 };
 
 /**
+ * ExperienceFactValue
+ */
+export type ExperienceFactValue = {
+    /**
+     * Achievements
+     */
+    achievements?: Array<string>;
+    /**
+     * Current
+     */
+    current?: boolean;
+    /**
+     * Description
+     */
+    description?: string | null;
+    /**
+     * Employer
+     */
+    employer: string;
+    employmentType?: EmploymentType | null;
+    end?: YearMonth | null;
+    /**
+     * Kind
+     */
+    kind?: 'experience';
+    /**
+     * Location
+     */
+    location?: string | null;
+    start: YearMonth;
+    /**
+     * Title
+     */
+    title: string;
+};
+
+/**
+ * FactStatus
+ *
+ * A fact's lifecycle state (docs/adr/0010-...md "retraction"). `ACTIVE` facts are the only
+ * ones a default `TruthSnapshot` ever returns. `SUPERSEDED`/`RETRACTED` facts are never
+ * hard-deleted -- they remain queryable for history/auditability.
+ */
+export type FactStatus = 'active' | 'superseded' | 'retracted';
+
+/**
+ * FactType
+ *
+ * The canonical professional-claim categories WP1.2 must support
+ * (docs/IMPLEMENTATION_PLAN.md WP1.2 "Deliver"). `application_answer`-shaped facts are explicitly
+ * out of scope here -- that concept belongs to the future `ApplicationAnswer` entity
+ * (docs/DATA_MODEL.md), not this Truth Store.
+ */
+export type FactType = 'experience' | 'education' | 'skill' | 'certification' | 'language' | 'project' | 'link' | 'preference' | 'work_authorization';
+
+/**
  * HealthResponse
  */
 export type HealthResponse = {
@@ -206,6 +415,226 @@ export type HealthResponse = {
  * HealthStatus
  */
 export type HealthStatus = 'ok';
+
+/**
+ * LanguageFactValue
+ *
+ * `proficiency` is free-form, bounded text -- never forced into a CEFR scale the user never
+ * stated (docs/adr/0010-...md "no invented proficiency scale").
+ */
+export type LanguageFactValue = {
+    /**
+     * Kind
+     */
+    kind?: 'language';
+    /**
+     * Language
+     */
+    language: string;
+    /**
+     * Proficiency
+     */
+    proficiency?: string | null;
+};
+
+/**
+ * LinkFactValue
+ *
+ * Only `http`/`https` ever validates -- `pydantic.HttpUrl` structurally rejects
+ * `javascript:`/`data:`/`file:` and every other non-http(s) scheme
+ * (docs/adr/0010-...md "link safety"). No URL is ever fetched by this WP.
+ */
+export type LinkFactValue = {
+    /**
+     * Kind
+     */
+    kind?: 'link';
+    /**
+     * Label
+     */
+    label?: string | null;
+    /**
+     * Linktype
+     */
+    linkType: string;
+    /**
+     * Url
+     */
+    url: string;
+};
+
+/**
+ * LocationPreferenceValue
+ *
+ * No geocoding, no coordinates (docs/adr/0010-...md "no geocoding in WP1.2") -- plain,
+ * bounded, user-supplied location text.
+ */
+export type LocationPreferenceValue = {
+    /**
+     * City
+     */
+    city?: string | null;
+    /**
+     * Country
+     */
+    country?: string | null;
+    /**
+     * Preferencekind
+     */
+    preferenceKind?: 'location';
+    /**
+     * Region
+     */
+    region?: string | null;
+    /**
+     * Workplacetypes
+     */
+    workplaceTypes?: Array<WorkplaceType>;
+};
+
+/**
+ * PreferenceFactValue
+ *
+ * `fact_type = preference`'s own payload is itself a discriminated union on
+ * `preference_kind` -- one `FactType` member deliberately covers several preference shapes
+ * (docs/adr/0010-...md "preferences"), since the canonical `fact_type` vocabulary
+ * (docs/IMPLEMENTATION_PLAN.md) names `preference` once, not once per kind.
+ */
+export type PreferenceFactValue = {
+    /**
+     * Kind
+     */
+    kind?: 'preference';
+    /**
+     * Preference
+     */
+    preference: ({
+        preferenceKind: 'salary';
+    } & SalaryPreferenceValue) | ({
+        preferenceKind: 'location';
+    } & LocationPreferenceValue) | ({
+        preferenceKind: 'workplace_type';
+    } & WorkplaceTypePreferenceValue) | ({
+        preferenceKind: 'employment_type';
+    } & EmploymentTypePreferenceValue);
+};
+
+/**
+ * ProfileFactResponse
+ *
+ * `value` is the SAME typed `FactValue` discriminated union the request side uses (round-2
+ * independent review "BLOCKER 2") -- never `dict[str, object]`/`Record<string, unknown>` on the
+ * generated TypeScript side. Pydantic validates the stored `value_json` dict against this union
+ * on every construction, so a corrupted/incompatible DB row fails to build this response at all
+ * (an unhandled 500, never a 200 with inconsistent data) rather than silently passing through
+ * whatever bytes happened to be stored.
+ */
+export type ProfileFactResponse = {
+    /**
+     * Activefromprofileversion
+     */
+    activeFromProfileVersion: number;
+    /**
+     * Confidence
+     */
+    confidence?: number | null;
+    /**
+     * Confirmedat
+     */
+    confirmedAt?: string | null;
+    /**
+     * Createdat
+     */
+    createdAt: string;
+    /**
+     * Evidenceref
+     */
+    evidenceRef?: string | null;
+    factType: FactType;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Inactivefromprofileversion
+     */
+    inactiveFromProfileVersion?: number | null;
+    /**
+     * Lineageid
+     */
+    lineageId: string;
+    /**
+     * Sourcekind
+     */
+    sourceKind: string;
+    /**
+     * Sourceref
+     */
+    sourceRef?: string | null;
+    status: FactStatus;
+    /**
+     * Supersedesfactid
+     */
+    supersedesFactId?: string | null;
+    /**
+     * Userconfirmed
+     */
+    userConfirmed: boolean;
+    /**
+     * Value
+     */
+    value: ({
+        kind: 'experience';
+    } & ExperienceFactValue) | ({
+        kind: 'education';
+    } & EducationFactValue) | ({
+        kind: 'skill';
+    } & SkillFactValue) | ({
+        kind: 'certification';
+    } & CertificationFactValue) | ({
+        kind: 'language';
+    } & LanguageFactValue) | ({
+        kind: 'project';
+    } & ProjectFactValue) | ({
+        kind: 'link';
+    } & LinkFactValue) | ({
+        kind: 'preference';
+    } & PreferenceFactValue) | ({
+        kind: 'work_authorization';
+    } & WorkAuthorizationFactValue);
+};
+
+/**
+ * ProjectFactValue
+ */
+export type ProjectFactValue = {
+    /**
+     * Description
+     */
+    description?: string | null;
+    end?: YearMonth | null;
+    /**
+     * Kind
+     */
+    kind?: 'project';
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Role
+     */
+    role?: string | null;
+    start?: YearMonth | null;
+    /**
+     * Technologies
+     */
+    technologies?: Array<string>;
+    /**
+     * Url
+     */
+    url?: string | null;
+};
 
 /**
  * ReadinessResponse
@@ -228,6 +657,186 @@ export type ReadinessResponse = {
  * ReadinessStatus
  */
 export type ReadinessStatus = 'ok' | 'degraded';
+
+/**
+ * ReplaceProfileFactRequest
+ *
+ * The replacement's `value` must match the ORIGINAL fact's `factType` -- enforced at the
+ * service layer, not re-declared here (docs/adr/0010-...md "replacement model").
+ */
+export type ReplaceProfileFactRequest = {
+    /**
+     * Expectedprofileversion
+     */
+    expectedProfileVersion: number;
+    /**
+     * Value
+     */
+    value: ({
+        kind: 'experience';
+    } & ExperienceFactValue) | ({
+        kind: 'education';
+    } & EducationFactValue) | ({
+        kind: 'skill';
+    } & SkillFactValue) | ({
+        kind: 'certification';
+    } & CertificationFactValue) | ({
+        kind: 'language';
+    } & LanguageFactValue) | ({
+        kind: 'project';
+    } & ProjectFactValue) | ({
+        kind: 'link';
+    } & LinkFactValue) | ({
+        kind: 'preference';
+    } & PreferenceFactValue) | ({
+        kind: 'work_authorization';
+    } & WorkAuthorizationFactValue);
+};
+
+/**
+ * RetractProfileFactRequest
+ */
+export type RetractProfileFactRequest = {
+    /**
+     * Expectedprofileversion
+     */
+    expectedProfileVersion: number;
+};
+
+/**
+ * SalaryPeriod
+ */
+export type SalaryPeriod = 'hourly' | 'monthly' | 'annual';
+
+/**
+ * SalaryPreferenceValue
+ *
+ * Money is NEVER a float (docs/ENGINEERING_STANDARDS.md §11) -- integer minor units plus a
+ * separate currency code, exactly `amountMinor`/`currency`'s documented shape. No currency
+ * conversion ever happens here.
+ *
+ * `currency` validates SHAPE only (three uppercase letters) -- NOT real ISO 4217 registry
+ * membership. A well-formed but non-existent code (e.g. "ABC") is accepted (round-1 independent
+ * review, "currency validation policy": implementing full registry validation would require a new
+ * dependency this WP has no concrete need for; this is a deliberate, documented choice, not an
+ * oversight).
+ */
+export type SalaryPreferenceValue = {
+    /**
+     * Currency
+     */
+    currency: string;
+    /**
+     * Minorunitmax
+     */
+    minorUnitMax?: number | null;
+    /**
+     * Minorunitmin
+     */
+    minorUnitMin?: number | null;
+    period: SalaryPeriod;
+    /**
+     * Preferencekind
+     */
+    preferenceKind?: 'salary';
+};
+
+/**
+ * SkillFactValue
+ *
+ * No proficiency is ever inferred -- `proficiency` only exists when the user actually
+ * supplied one (docs/adr/0010-...md "no inferred proficiency").
+ */
+export type SkillFactValue = {
+    /**
+     * Kind
+     */
+    kind?: 'skill';
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Proficiency
+     */
+    proficiency?: string | null;
+    /**
+     * Yearsexperience
+     */
+    yearsExperience?: number | null;
+};
+
+/**
+ * TruthSnapshotResponse
+ *
+ * The ONLY shape any future consumer (resume import review, matching, tailored resumes,
+ * application answers, the Career Agent, WhatsApp) may use to ground generated external material
+ * (docs/AI_AGENT.md §6, AGENTS.md §6) -- confirmed, active, non-retracted/superseded facts only
+ * (docs/adr/0010-...md "truth snapshot filter").
+ */
+export type TruthSnapshotResponse = {
+    /**
+     * Facts
+     */
+    facts?: Array<ProfileFactResponse>;
+    /**
+     * Headline
+     */
+    headline?: string | null;
+    /**
+     * Profileversion
+     */
+    profileVersion: number;
+    /**
+     * Summary
+     */
+    summary?: string | null;
+    /**
+     * Targetroles
+     */
+    targetRoles?: Array<string>;
+    /**
+     * Userid
+     */
+    userId: string;
+};
+
+/**
+ * UpdateCareerProfileRequest
+ *
+ * HTTP-specific wrapper over `CareerProfilePatchCommand` (round-3 independent review
+ * "BLOCKER 1") -- adds `expectedProfileVersion` and camelCase wire aliasing only.
+ * `headline`/`summary`/`target_roles`'s own validation (trim/non-blank/control-character
+ * rejection/bounds/dedupe) and the "at least one mutable field" rule all live on the PARENT,
+ * inherited here, not duplicated: `service.update_career_profile` requires the SAME
+ * `CareerProfilePatchCommand` type directly, so a future channel adapter gets identical
+ * validation without going through this HTTP class at all.
+ *
+ * Optimistic-concurrency contract (docs/adr/0010-...md "optimistic concurrency"):
+ * `expectedProfileVersion` must match the profile's current version or the request fails with
+ * `PROFILE_VERSION_CONFLICT` (409) -- never a silent last-write-wins. Only fields actually present
+ * in the request body are touched (`model_fields_set` distinguishes "absent" from "explicit
+ * null"); the inherited `None` defaults exist only so a field CAN be omitted, not so sending it
+ * always clears it.
+ */
+export type UpdateCareerProfileRequest = {
+    /**
+     * Expectedprofileversion
+     */
+    expectedProfileVersion: number;
+    /**
+     * Headline
+     */
+    headline?: string | null;
+    /**
+     * Summary
+     */
+    summary?: string | null;
+    /**
+     * Targetroles
+     */
+    targetRoles?: Array<string> | null;
+};
 
 /**
  * UpdateUserSettingsRequest
@@ -291,6 +900,74 @@ export type ValidationErrorItem = {
      * Location
      */
     location: Array<string>;
+};
+
+/**
+ * WorkAuthorizationFactValue
+ *
+ * Sensitive/legal (docs/SECURITY_PRIVACY.md §5, docs/adr/0010-...md "work authorization"):
+ * `answer` is a bounded string, never a bare unscoped boolean -- it only has meaning paired with
+ * `jurisdiction`/`question_key`, and this WP invents no global legal-question catalog. The
+ * server never infers or defaults this value; it is only ever written by an explicit, confirmed
+ * user action (`service.py`'s `source_kind` enforcement).
+ */
+export type WorkAuthorizationFactValue = {
+    /**
+     * Answer
+     */
+    answer: string;
+    /**
+     * Jurisdiction
+     */
+    jurisdiction: string;
+    /**
+     * Kind
+     */
+    kind?: 'work_authorization';
+    /**
+     * Questionkey
+     */
+    questionKey: string;
+};
+
+/**
+ * WorkplaceType
+ */
+export type WorkplaceType = 'remote' | 'hybrid' | 'onsite';
+
+/**
+ * WorkplaceTypePreferenceValue
+ */
+export type WorkplaceTypePreferenceValue = {
+    /**
+     * Preferencekind
+     */
+    preferenceKind?: 'workplace_type';
+    /**
+     * Workplacetypes
+     */
+    workplaceTypes: Array<WorkplaceType>;
+};
+
+/**
+ * YearMonth
+ *
+ * Year/month precision only -- never a fabricated day
+ * (docs/adr/0010-...md "no invented date precision"). `month` absent means the user only knows
+ * the year -- NEVER treated as January (or any other specific month) for comparison purposes
+ * (round-2 independent review "BLOCKER 3": a prior `ordinal()` helper collapsed an unknown month
+ * to January, which made e.g. `start=2024-12`/`end=2024` falsely register as "start after end" --
+ * the user never asserted a January end, only a year).
+ */
+export type YearMonth = {
+    /**
+     * Month
+     */
+    month?: number | null;
+    /**
+     * Year
+     */
+    year: number;
 };
 
 export type BootstrapAccountData = {
@@ -403,6 +1080,84 @@ export type UpdateCurrentUserResponses = {
 };
 
 export type UpdateCurrentUserResponse = UpdateCurrentUserResponses[keyof UpdateCurrentUserResponses];
+
+export type GetCareerProfileData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/me/career-profile';
+};
+
+export type GetCareerProfileErrors = {
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Conta desativada.
+     */
+    403: ErrorResponse;
+    /**
+     * Conta ainda não inicializada.
+     */
+    404: ErrorResponse;
+};
+
+export type GetCareerProfileError = GetCareerProfileErrors[keyof GetCareerProfileErrors];
+
+export type GetCareerProfileResponses = {
+    /**
+     * Successful Response
+     */
+    200: CareerProfileResponse;
+};
+
+export type GetCareerProfileResponse = GetCareerProfileResponses[keyof GetCareerProfileResponses];
+
+export type UpdateCareerProfileData = {
+    body: UpdateCareerProfileRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/me/career-profile';
+};
+
+export type UpdateCareerProfileErrors = {
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Conta desativada.
+     */
+    403: ErrorResponse;
+    /**
+     * Conta ainda não inicializada.
+     */
+    404: ErrorResponse;
+    /**
+     * O perfil foi alterado por outra requisição.
+     */
+    409: ErrorResponse;
+    /**
+     * Dados inválidos.
+     */
+    422: ErrorResponse;
+    /**
+     * Muitas requisições.
+     */
+    429: ErrorResponse;
+};
+
+export type UpdateCareerProfileError = UpdateCareerProfileErrors[keyof UpdateCareerProfileErrors];
+
+export type UpdateCareerProfileResponses = {
+    /**
+     * Successful Response
+     */
+    200: CareerProfileResponse;
+};
+
+export type UpdateCareerProfileResponse = UpdateCareerProfileResponses[keyof UpdateCareerProfileResponses];
 
 export type ListConsentsData = {
     body?: never;
@@ -708,6 +1463,237 @@ export type RevokeDeviceResponses = {
 
 export type RevokeDeviceResponse = RevokeDeviceResponses[keyof RevokeDeviceResponses];
 
+export type ListProfileFactsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Facttype
+         */
+        factType?: FactType | null;
+    };
+    url: '/api/v1/me/profile-facts';
+};
+
+export type ListProfileFactsErrors = {
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Conta desativada.
+     */
+    403: ErrorResponse;
+    /**
+     * Conta ainda não inicializada.
+     */
+    404: ErrorResponse;
+    /**
+     * Dados inválidos.
+     */
+    422: ErrorResponse;
+};
+
+export type ListProfileFactsError = ListProfileFactsErrors[keyof ListProfileFactsErrors];
+
+export type ListProfileFactsResponses = {
+    /**
+     * Response Listprofilefacts
+     *
+     * Successful Response
+     */
+    200: Array<ProfileFactResponse>;
+};
+
+export type ListProfileFactsResponse = ListProfileFactsResponses[keyof ListProfileFactsResponses];
+
+export type AddProfileFactData = {
+    body: AddProfileFactRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/me/profile-facts';
+};
+
+export type AddProfileFactErrors = {
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Conta desativada.
+     */
+    403: ErrorResponse;
+    /**
+     * Conta ainda não inicializada.
+     */
+    404: ErrorResponse;
+    /**
+     * O perfil foi alterado por outra requisição.
+     */
+    409: ErrorResponse;
+    /**
+     * Dados inválidos.
+     */
+    422: ErrorResponse;
+    /**
+     * Muitas requisições.
+     */
+    429: ErrorResponse;
+};
+
+export type AddProfileFactError = AddProfileFactErrors[keyof AddProfileFactErrors];
+
+export type AddProfileFactResponses = {
+    /**
+     * Successful Response
+     */
+    201: ProfileFactResponse;
+};
+
+export type AddProfileFactResponse = AddProfileFactResponses[keyof AddProfileFactResponses];
+
+export type GetProfileFactData = {
+    body?: never;
+    path: {
+        /**
+         * Fact Id
+         */
+        fact_id: string;
+    };
+    query?: never;
+    url: '/api/v1/me/profile-facts/{fact_id}';
+};
+
+export type GetProfileFactErrors = {
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Conta desativada.
+     */
+    403: ErrorResponse;
+    /**
+     * Fato de perfil não encontrado.
+     */
+    404: ErrorResponse;
+    /**
+     * Dados inválidos.
+     */
+    422: ErrorResponse;
+};
+
+export type GetProfileFactError = GetProfileFactErrors[keyof GetProfileFactErrors];
+
+export type GetProfileFactResponses = {
+    /**
+     * Successful Response
+     */
+    200: ProfileFactResponse;
+};
+
+export type GetProfileFactResponse = GetProfileFactResponses[keyof GetProfileFactResponses];
+
+export type ReplaceProfileFactData = {
+    body: ReplaceProfileFactRequest;
+    path: {
+        /**
+         * Fact Id
+         */
+        fact_id: string;
+    };
+    query?: never;
+    url: '/api/v1/me/profile-facts/{fact_id}/replace';
+};
+
+export type ReplaceProfileFactErrors = {
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Conta desativada.
+     */
+    403: ErrorResponse;
+    /**
+     * Fato de perfil não encontrado.
+     */
+    404: ErrorResponse;
+    /**
+     * Este fato de perfil não está mais ativo (já substituído ou retratado).
+     */
+    409: ErrorResponse;
+    /**
+     * Dados inválidos.
+     */
+    422: ErrorResponse;
+    /**
+     * Muitas requisições.
+     */
+    429: ErrorResponse;
+};
+
+export type ReplaceProfileFactError = ReplaceProfileFactErrors[keyof ReplaceProfileFactErrors];
+
+export type ReplaceProfileFactResponses = {
+    /**
+     * Successful Response
+     */
+    200: ProfileFactResponse;
+};
+
+export type ReplaceProfileFactResponse = ReplaceProfileFactResponses[keyof ReplaceProfileFactResponses];
+
+export type RetractProfileFactData = {
+    body: RetractProfileFactRequest;
+    path: {
+        /**
+         * Fact Id
+         */
+        fact_id: string;
+    };
+    query?: never;
+    url: '/api/v1/me/profile-facts/{fact_id}/retract';
+};
+
+export type RetractProfileFactErrors = {
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Conta desativada.
+     */
+    403: ErrorResponse;
+    /**
+     * Fato de perfil não encontrado.
+     */
+    404: ErrorResponse;
+    /**
+     * Este fato de perfil não está mais ativo (já substituído ou retratado).
+     */
+    409: ErrorResponse;
+    /**
+     * Dados inválidos.
+     */
+    422: ErrorResponse;
+    /**
+     * Muitas requisições.
+     */
+    429: ErrorResponse;
+};
+
+export type RetractProfileFactError = RetractProfileFactErrors[keyof RetractProfileFactErrors];
+
+export type RetractProfileFactResponses = {
+    /**
+     * Successful Response
+     */
+    200: ProfileFactResponse;
+};
+
+export type RetractProfileFactResponse = RetractProfileFactResponses[keyof RetractProfileFactResponses];
+
 export type RevokeAllSessionsData = {
     body?: never;
     path?: never;
@@ -752,6 +1738,48 @@ export type RevokeAllSessionsResponses = {
 };
 
 export type RevokeAllSessionsResponse = RevokeAllSessionsResponses[keyof RevokeAllSessionsResponses];
+
+export type GetTruthSnapshotData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Profileversion
+         */
+        profileVersion?: number | null;
+    };
+    url: '/api/v1/me/truth-snapshot';
+};
+
+export type GetTruthSnapshotErrors = {
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Conta desativada.
+     */
+    403: ErrorResponse;
+    /**
+     * A versão de perfil solicitada ainda não existe.
+     */
+    404: ErrorResponse;
+    /**
+     * Dados inválidos.
+     */
+    422: ErrorResponse;
+};
+
+export type GetTruthSnapshotError = GetTruthSnapshotErrors[keyof GetTruthSnapshotErrors];
+
+export type GetTruthSnapshotResponses = {
+    /**
+     * Successful Response
+     */
+    200: TruthSnapshotResponse;
+};
+
+export type GetTruthSnapshotResponse = GetTruthSnapshotResponses[keyof GetTruthSnapshotResponses];
 
 export type GetHealthData = {
     body?: never;

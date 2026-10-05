@@ -50,6 +50,13 @@ class ErrorCode(StrEnum):
     REAUTHENTICATION_REQUIRED = "REAUTHENTICATION_REQUIRED"
     DEVICE_NOT_FOUND = "DEVICE_NOT_FOUND"
     IDENTITY_CONFLICT = "IDENTITY_CONFLICT"
+    # WP1.2 — career profile & professional truth store (docs/adr/0010-career-profile-truth-
+    # store.md): a small, coherent vocabulary for the optimistic-concurrency and fact-lifecycle
+    # invariants the mobile/WhatsApp client must branch on.
+    PROFILE_VERSION_CONFLICT = "PROFILE_VERSION_CONFLICT"
+    PROFILE_FACT_NOT_FOUND = "PROFILE_FACT_NOT_FOUND"
+    PROFILE_FACT_ALREADY_RETRACTED = "PROFILE_FACT_ALREADY_RETRACTED"
+    PROFILE_VERSION_NOT_FOUND = "PROFILE_VERSION_NOT_FOUND"
 
 
 # A status not explicitly raised anywhere yet (e.g. by a future connector/port) still needs a
@@ -95,6 +102,14 @@ _DEFAULT_MESSAGE_BY_CODE: dict[ErrorCode, str] = {
     ErrorCode.REAUTHENTICATION_REQUIRED: "É necessário autenticar-se novamente para esta ação.",
     ErrorCode.DEVICE_NOT_FOUND: "Dispositivo não encontrado.",
     ErrorCode.IDENTITY_CONFLICT: "Esta identidade já está associada a outra conta.",
+    ErrorCode.PROFILE_VERSION_CONFLICT: (
+        "O perfil foi alterado por outra requisição. Atualize e tente novamente."
+    ),
+    ErrorCode.PROFILE_FACT_NOT_FOUND: "Fato de perfil não encontrado.",
+    ErrorCode.PROFILE_FACT_ALREADY_RETRACTED: (
+        "Este fato de perfil não está mais ativo (já substituído ou retratado)."
+    ),
+    ErrorCode.PROFILE_VERSION_NOT_FOUND: ("A versão de perfil solicitada ainda não existe."),
 }
 
 

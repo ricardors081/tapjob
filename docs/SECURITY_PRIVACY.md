@@ -133,7 +133,11 @@ Never log:
 - full CPF;
 - full e-mail bodies by default;
 - complete resume text in generic logs;
-- LLM provider keys.
+- LLM provider keys;
+- a `ProfileFact`'s own content (`value`) in general logs or audit metadata — salary figures,
+  work-authorization answers, experience/education text included (WP1.2,
+  `docs/adr/0010-career-profile-truth-store.md` §H). Audit metadata for a Truth Store mutation is
+  allowlisted to field names, `fact_type`, `fact_id` and `profile_version` only.
 
 Use correlation IDs and redacted structured logs.
 

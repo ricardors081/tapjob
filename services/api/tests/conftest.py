@@ -15,13 +15,19 @@ from tapjob_api.main import create_app
 
 SettingsFactory = Callable[..., ApiSettings]
 
-# WP1.1 identity tables, in FK-safe TRUNCATE order (docs/adr/0009-identity-auth-user-account.md).
+# WP1.1 identity + WP1.2 career-profile tables, in FK-safe TRUNCATE order (docs/adr/0009-
+# identity-auth-user-account.md, docs/adr/0010-career-profile-truth-store.md). TRUNCATE ... CASCADE
+# does not actually require this order (CASCADE follows FKs regardless of list order), but it's
+# kept readable/explicit anyway.
 _IDENTITY_TABLES = (
     "account_audit_events",
     "account_deletion_requests",
     "consent_records",
     "user_devices",
     "external_identities",
+    "profile_facts",
+    "career_profile_revisions",
+    "career_profiles",
     "users",
 )
 _ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"

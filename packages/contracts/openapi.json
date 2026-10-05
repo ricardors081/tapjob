@@ -1,6 +1,72 @@
 {
   "components": {
     "schemas": {
+      "AddProfileFactRequest": {
+        "description": "`sourceKind`/`sourceRef`/`confidence`/`userConfirmed` are deliberately NOT accepted here --\nthe server always assigns `source_kind=USER_DIRECT`/`user_confirmed=True` for this endpoint\n(docs/adr/0010-...md \"provenance / no source spoofing\"); a public client can never choose its\nown provenance metadata.",
+        "properties": {
+          "expectedProfileVersion": {
+            "minimum": 0.0,
+            "title": "Expectedprofileversion",
+            "type": "integer"
+          },
+          "factType": {
+            "$ref": "#/components/schemas/FactType"
+          },
+          "value": {
+            "discriminator": {
+              "mapping": {
+                "certification": "#/components/schemas/CertificationFactValue",
+                "education": "#/components/schemas/EducationFactValue",
+                "experience": "#/components/schemas/ExperienceFactValue",
+                "language": "#/components/schemas/LanguageFactValue",
+                "link": "#/components/schemas/LinkFactValue",
+                "preference": "#/components/schemas/PreferenceFactValue",
+                "project": "#/components/schemas/ProjectFactValue",
+                "skill": "#/components/schemas/SkillFactValue",
+                "work_authorization": "#/components/schemas/WorkAuthorizationFactValue"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExperienceFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/EducationFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/SkillFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/CertificationFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/LanguageFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/LinkFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/PreferenceFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/WorkAuthorizationFactValue"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "expectedProfileVersion",
+          "factType",
+          "value"
+        ],
+        "title": "AddProfileFactRequest",
+        "type": "object"
+      },
       "BootstrapResponse": {
         "properties": {
           "created": {
@@ -16,6 +82,147 @@
           "created"
         ],
         "title": "BootstrapResponse",
+        "type": "object"
+      },
+      "CareerProfileResponse": {
+        "description": "A `User` with no `CareerProfile` row yet still gets a response here -- a virtual profile at\n`profileVersion: 0` (docs/adr/0010-...md \"profile creation\"), never a 404. `createdAt`/\n`updatedAt` are `null` only for that virtual case.",
+        "properties": {
+          "createdAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Createdat"
+          },
+          "headline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headline"
+          },
+          "profileVersion": {
+            "title": "Profileversion",
+            "type": "integer"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "targetRoles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Targetroles",
+            "type": "array"
+          },
+          "updatedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updatedat"
+          }
+        },
+        "required": [
+          "profileVersion"
+        ],
+        "title": "CareerProfileResponse",
+        "type": "object"
+      },
+      "CertificationFactValue": {
+        "properties": {
+          "credentialId": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credentialid"
+          },
+          "credentialUrl": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credentialurl"
+          },
+          "expires": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/YearMonth"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "issued": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/YearMonth"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "issuer": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Issuer",
+            "type": "string"
+          },
+          "kind": {
+            "const": "certification",
+            "default": "certification",
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "issuer"
+        ],
+        "title": "CertificationFactValue",
         "type": "object"
       },
       "ConsentDecision": {
@@ -259,6 +466,137 @@
         "title": "DeviceResponse",
         "type": "object"
       },
+      "EducationFactValue": {
+        "properties": {
+          "degree": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Degree"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/YearMonth"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fieldOfStudy": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fieldofstudy"
+          },
+          "institution": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Institution",
+            "type": "string"
+          },
+          "kind": {
+            "const": "education",
+            "default": "education",
+            "title": "Kind",
+            "type": "string"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/YearMonth"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EducationStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "institution"
+        ],
+        "title": "EducationFactValue",
+        "type": "object"
+      },
+      "EducationStatus": {
+        "enum": [
+          "in_progress",
+          "completed",
+          "incomplete"
+        ],
+        "title": "EducationStatus",
+        "type": "string"
+      },
+      "EmploymentType": {
+        "enum": [
+          "full_time",
+          "part_time",
+          "contract",
+          "internship",
+          "freelance"
+        ],
+        "title": "EmploymentType",
+        "type": "string"
+      },
+      "EmploymentTypePreferenceValue": {
+        "properties": {
+          "employmentTypes": {
+            "items": {
+              "$ref": "#/components/schemas/EmploymentType"
+            },
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Employmenttypes",
+            "type": "array"
+          },
+          "preferenceKind": {
+            "const": "employment_type",
+            "default": "employment_type",
+            "title": "Preferencekind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "employmentTypes"
+        ],
+        "title": "EmploymentTypePreferenceValue",
+        "type": "object"
+      },
       "Environment": {
         "enum": [
           "local",
@@ -292,7 +630,11 @@
           "ACCOUNT_DISABLED",
           "REAUTHENTICATION_REQUIRED",
           "DEVICE_NOT_FOUND",
-          "IDENTITY_CONFLICT"
+          "IDENTITY_CONFLICT",
+          "PROFILE_VERSION_CONFLICT",
+          "PROFILE_FACT_NOT_FOUND",
+          "PROFILE_FACT_ALREADY_RETRACTED",
+          "PROFILE_VERSION_NOT_FOUND"
         ],
         "title": "ErrorCode",
         "type": "string"
@@ -346,6 +688,121 @@
         "title": "ErrorResponse",
         "type": "object"
       },
+      "ExperienceFactValue": {
+        "properties": {
+          "achievements": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Achievements",
+            "type": "array"
+          },
+          "current": {
+            "default": false,
+            "title": "Current",
+            "type": "boolean"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "employer": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Employer",
+            "type": "string"
+          },
+          "employmentType": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EmploymentType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "end": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/YearMonth"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "const": "experience",
+            "default": "experience",
+            "title": "Kind",
+            "type": "string"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "start": {
+            "$ref": "#/components/schemas/YearMonth"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "employer",
+          "title",
+          "start"
+        ],
+        "title": "ExperienceFactValue",
+        "type": "object"
+      },
+      "FactStatus": {
+        "description": "A fact's lifecycle state (docs/adr/0010-...md \"retraction\"). `ACTIVE` facts are the only\nones a default `TruthSnapshot` ever returns. `SUPERSEDED`/`RETRACTED` facts are never\nhard-deleted -- they remain queryable for history/auditability.",
+        "enum": [
+          "active",
+          "superseded",
+          "retracted"
+        ],
+        "title": "FactStatus",
+        "type": "string"
+      },
+      "FactType": {
+        "description": "The canonical professional-claim categories WP1.2 must support\n(docs/IMPLEMENTATION_PLAN.md WP1.2 \"Deliver\"). `application_answer`-shaped facts are explicitly\nout of scope here -- that concept belongs to the future `ApplicationAnswer` entity\n(docs/DATA_MODEL.md), not this Truth Store.",
+        "enum": [
+          "experience",
+          "education",
+          "skill",
+          "certification",
+          "language",
+          "project",
+          "link",
+          "preference",
+          "work_authorization"
+        ],
+        "title": "FactType",
+        "type": "string"
+      },
       "HealthResponse": {
         "properties": {
           "environment": {
@@ -378,6 +835,433 @@
         ],
         "title": "HealthStatus",
         "type": "string"
+      },
+      "LanguageFactValue": {
+        "description": "`proficiency` is free-form, bounded text -- never forced into a CEFR scale the user never\nstated (docs/adr/0010-...md \"no invented proficiency scale\").",
+        "properties": {
+          "kind": {
+            "const": "language",
+            "default": "language",
+            "title": "Kind",
+            "type": "string"
+          },
+          "language": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Language",
+            "type": "string"
+          },
+          "proficiency": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proficiency"
+          }
+        },
+        "required": [
+          "language"
+        ],
+        "title": "LanguageFactValue",
+        "type": "object"
+      },
+      "LinkFactValue": {
+        "description": "Only `http`/`https` ever validates -- `pydantic.HttpUrl` structurally rejects\n`javascript:`/`data:`/`file:` and every other non-http(s) scheme\n(docs/adr/0010-...md \"link safety\"). No URL is ever fetched by this WP.",
+        "properties": {
+          "kind": {
+            "const": "link",
+            "default": "link",
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "linkType": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Linktype",
+            "type": "string"
+          },
+          "url": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "linkType",
+          "url"
+        ],
+        "title": "LinkFactValue",
+        "type": "object"
+      },
+      "LocationPreferenceValue": {
+        "description": "No geocoding, no coordinates (docs/adr/0010-...md \"no geocoding in WP1.2\") -- plain,\nbounded, user-supplied location text.",
+        "properties": {
+          "city": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country"
+          },
+          "preferenceKind": {
+            "const": "location",
+            "default": "location",
+            "title": "Preferencekind",
+            "type": "string"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
+          "workplaceTypes": {
+            "items": {
+              "$ref": "#/components/schemas/WorkplaceType"
+            },
+            "maxItems": 3,
+            "title": "Workplacetypes",
+            "type": "array"
+          }
+        },
+        "title": "LocationPreferenceValue",
+        "type": "object"
+      },
+      "PreferenceFactValue": {
+        "description": "`fact_type = preference`'s own payload is itself a discriminated union on\n`preference_kind` -- one `FactType` member deliberately covers several preference shapes\n(docs/adr/0010-...md \"preferences\"), since the canonical `fact_type` vocabulary\n(docs/IMPLEMENTATION_PLAN.md) names `preference` once, not once per kind.",
+        "properties": {
+          "kind": {
+            "const": "preference",
+            "default": "preference",
+            "title": "Kind",
+            "type": "string"
+          },
+          "preference": {
+            "discriminator": {
+              "mapping": {
+                "employment_type": "#/components/schemas/EmploymentTypePreferenceValue",
+                "location": "#/components/schemas/LocationPreferenceValue",
+                "salary": "#/components/schemas/SalaryPreferenceValue",
+                "workplace_type": "#/components/schemas/WorkplaceTypePreferenceValue"
+              },
+              "propertyName": "preferenceKind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SalaryPreferenceValue"
+              },
+              {
+                "$ref": "#/components/schemas/LocationPreferenceValue"
+              },
+              {
+                "$ref": "#/components/schemas/WorkplaceTypePreferenceValue"
+              },
+              {
+                "$ref": "#/components/schemas/EmploymentTypePreferenceValue"
+              }
+            ],
+            "title": "Preference"
+          }
+        },
+        "required": [
+          "preference"
+        ],
+        "title": "PreferenceFactValue",
+        "type": "object"
+      },
+      "ProfileFactResponse": {
+        "description": "`value` is the SAME typed `FactValue` discriminated union the request side uses (round-2\nindependent review \"BLOCKER 2\") -- never `dict[str, object]`/`Record<string, unknown>` on the\ngenerated TypeScript side. Pydantic validates the stored `value_json` dict against this union\non every construction, so a corrupted/incompatible DB row fails to build this response at all\n(an unhandled 500, never a 200 with inconsistent data) rather than silently passing through\nwhatever bytes happened to be stored.",
+        "properties": {
+          "activeFromProfileVersion": {
+            "title": "Activefromprofileversion",
+            "type": "integer"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "confirmedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmedat"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "evidenceRef": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidenceref"
+          },
+          "factType": {
+            "$ref": "#/components/schemas/FactType"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "inactiveFromProfileVersion": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inactivefromprofileversion"
+          },
+          "lineageId": {
+            "format": "uuid",
+            "title": "Lineageid",
+            "type": "string"
+          },
+          "sourceKind": {
+            "title": "Sourcekind",
+            "type": "string"
+          },
+          "sourceRef": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sourceref"
+          },
+          "status": {
+            "$ref": "#/components/schemas/FactStatus"
+          },
+          "supersedesFactId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedesfactid"
+          },
+          "userConfirmed": {
+            "title": "Userconfirmed",
+            "type": "boolean"
+          },
+          "value": {
+            "discriminator": {
+              "mapping": {
+                "certification": "#/components/schemas/CertificationFactValue",
+                "education": "#/components/schemas/EducationFactValue",
+                "experience": "#/components/schemas/ExperienceFactValue",
+                "language": "#/components/schemas/LanguageFactValue",
+                "link": "#/components/schemas/LinkFactValue",
+                "preference": "#/components/schemas/PreferenceFactValue",
+                "project": "#/components/schemas/ProjectFactValue",
+                "skill": "#/components/schemas/SkillFactValue",
+                "work_authorization": "#/components/schemas/WorkAuthorizationFactValue"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExperienceFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/EducationFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/SkillFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/CertificationFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/LanguageFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/LinkFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/PreferenceFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/WorkAuthorizationFactValue"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "id",
+          "factType",
+          "value",
+          "sourceKind",
+          "userConfirmed",
+          "status",
+          "lineageId",
+          "activeFromProfileVersion",
+          "createdAt"
+        ],
+        "title": "ProfileFactResponse",
+        "type": "object"
+      },
+      "ProjectFactValue": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/YearMonth"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "const": "project",
+            "default": "project",
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/YearMonth"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "technologies": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 30,
+            "title": "Technologies",
+            "type": "array"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ProjectFactValue",
+        "type": "object"
       },
       "ReadinessResponse": {
         "properties": {
@@ -414,6 +1298,299 @@
         ],
         "title": "ReadinessStatus",
         "type": "string"
+      },
+      "ReplaceProfileFactRequest": {
+        "description": "The replacement's `value` must match the ORIGINAL fact's `factType` -- enforced at the\nservice layer, not re-declared here (docs/adr/0010-...md \"replacement model\").",
+        "properties": {
+          "expectedProfileVersion": {
+            "minimum": 0.0,
+            "title": "Expectedprofileversion",
+            "type": "integer"
+          },
+          "value": {
+            "discriminator": {
+              "mapping": {
+                "certification": "#/components/schemas/CertificationFactValue",
+                "education": "#/components/schemas/EducationFactValue",
+                "experience": "#/components/schemas/ExperienceFactValue",
+                "language": "#/components/schemas/LanguageFactValue",
+                "link": "#/components/schemas/LinkFactValue",
+                "preference": "#/components/schemas/PreferenceFactValue",
+                "project": "#/components/schemas/ProjectFactValue",
+                "skill": "#/components/schemas/SkillFactValue",
+                "work_authorization": "#/components/schemas/WorkAuthorizationFactValue"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExperienceFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/EducationFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/SkillFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/CertificationFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/LanguageFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/LinkFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/PreferenceFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/WorkAuthorizationFactValue"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "expectedProfileVersion",
+          "value"
+        ],
+        "title": "ReplaceProfileFactRequest",
+        "type": "object"
+      },
+      "RetractProfileFactRequest": {
+        "properties": {
+          "expectedProfileVersion": {
+            "minimum": 0.0,
+            "title": "Expectedprofileversion",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expectedProfileVersion"
+        ],
+        "title": "RetractProfileFactRequest",
+        "type": "object"
+      },
+      "SalaryPeriod": {
+        "enum": [
+          "hourly",
+          "monthly",
+          "annual"
+        ],
+        "title": "SalaryPeriod",
+        "type": "string"
+      },
+      "SalaryPreferenceValue": {
+        "description": "Money is NEVER a float (docs/ENGINEERING_STANDARDS.md §11) -- integer minor units plus a\nseparate currency code, exactly `amountMinor`/`currency`'s documented shape. No currency\nconversion ever happens here.\n\n`currency` validates SHAPE only (three uppercase letters) -- NOT real ISO 4217 registry\nmembership. A well-formed but non-existent code (e.g. \"ABC\") is accepted (round-1 independent\nreview, \"currency validation policy\": implementing full registry validation would require a new\ndependency this WP has no concrete need for; this is a deliberate, documented choice, not an\noversight).",
+        "properties": {
+          "currency": {
+            "pattern": "^[A-Z]{3}$",
+            "title": "Currency",
+            "type": "string"
+          },
+          "minorUnitMax": {
+            "anyOf": [
+              {
+                "maximum": 1000000000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minorunitmax"
+          },
+          "minorUnitMin": {
+            "anyOf": [
+              {
+                "maximum": 1000000000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minorunitmin"
+          },
+          "period": {
+            "$ref": "#/components/schemas/SalaryPeriod"
+          },
+          "preferenceKind": {
+            "const": "salary",
+            "default": "salary",
+            "title": "Preferencekind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "currency",
+          "period"
+        ],
+        "title": "SalaryPreferenceValue",
+        "type": "object"
+      },
+      "SkillFactValue": {
+        "description": "No proficiency is ever inferred -- `proficiency` only exists when the user actually\nsupplied one (docs/adr/0010-...md \"no inferred proficiency\").",
+        "properties": {
+          "kind": {
+            "const": "skill",
+            "default": "skill",
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "proficiency": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proficiency"
+          },
+          "yearsExperience": {
+            "anyOf": [
+              {
+                "maximum": 80.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Yearsexperience"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "SkillFactValue",
+        "type": "object"
+      },
+      "TruthSnapshotResponse": {
+        "description": "The ONLY shape any future consumer (resume import review, matching, tailored resumes,\napplication answers, the Career Agent, WhatsApp) may use to ground generated external material\n(docs/AI_AGENT.md §6, AGENTS.md §6) -- confirmed, active, non-retracted/superseded facts only\n(docs/adr/0010-...md \"truth snapshot filter\").",
+        "properties": {
+          "facts": {
+            "items": {
+              "$ref": "#/components/schemas/ProfileFactResponse"
+            },
+            "title": "Facts",
+            "type": "array"
+          },
+          "headline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headline"
+          },
+          "profileVersion": {
+            "title": "Profileversion",
+            "type": "integer"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "targetRoles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Targetroles",
+            "type": "array"
+          },
+          "userId": {
+            "format": "uuid",
+            "title": "Userid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "userId",
+          "profileVersion"
+        ],
+        "title": "TruthSnapshotResponse",
+        "type": "object"
+      },
+      "UpdateCareerProfileRequest": {
+        "description": "HTTP-specific wrapper over `CareerProfilePatchCommand` (round-3 independent review\n\"BLOCKER 1\") -- adds `expectedProfileVersion` and camelCase wire aliasing only.\n`headline`/`summary`/`target_roles`'s own validation (trim/non-blank/control-character\nrejection/bounds/dedupe) and the \"at least one mutable field\" rule all live on the PARENT,\ninherited here, not duplicated: `service.update_career_profile` requires the SAME\n`CareerProfilePatchCommand` type directly, so a future channel adapter gets identical\nvalidation without going through this HTTP class at all.\n\nOptimistic-concurrency contract (docs/adr/0010-...md \"optimistic concurrency\"):\n`expectedProfileVersion` must match the profile's current version or the request fails with\n`PROFILE_VERSION_CONFLICT` (409) -- never a silent last-write-wins. Only fields actually present\nin the request body are touched (`model_fields_set` distinguishes \"absent\" from \"explicit\nnull\"); the inherited `None` defaults exist only so a field CAN be omitted, not so sending it\nalways clears it.",
+        "properties": {
+          "expectedProfileVersion": {
+            "minimum": 0.0,
+            "title": "Expectedprofileversion",
+            "type": "integer"
+          },
+          "headline": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headline"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "targetRoles": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Targetroles"
+          }
+        },
+        "required": [
+          "expectedProfileVersion"
+        ],
+        "title": "UpdateCareerProfileRequest",
+        "type": "object"
       },
       "UpdateUserSettingsRequest": {
         "properties": {
@@ -512,6 +1689,105 @@
           "code"
         ],
         "title": "ValidationErrorItem",
+        "type": "object"
+      },
+      "WorkAuthorizationFactValue": {
+        "description": "Sensitive/legal (docs/SECURITY_PRIVACY.md §5, docs/adr/0010-...md \"work authorization\"):\n`answer` is a bounded string, never a bare unscoped boolean -- it only has meaning paired with\n`jurisdiction`/`question_key`, and this WP invents no global legal-question catalog. The\nserver never infers or defaults this value; it is only ever written by an explicit, confirmed\nuser action (`service.py`'s `source_kind` enforcement).",
+        "properties": {
+          "answer": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Answer",
+            "type": "string"
+          },
+          "jurisdiction": {
+            "maxLength": 8,
+            "minLength": 1,
+            "title": "Jurisdiction",
+            "type": "string"
+          },
+          "kind": {
+            "const": "work_authorization",
+            "default": "work_authorization",
+            "title": "Kind",
+            "type": "string"
+          },
+          "questionKey": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z0-9_]+$",
+            "title": "Questionkey",
+            "type": "string"
+          }
+        },
+        "required": [
+          "jurisdiction",
+          "questionKey",
+          "answer"
+        ],
+        "title": "WorkAuthorizationFactValue",
+        "type": "object"
+      },
+      "WorkplaceType": {
+        "enum": [
+          "remote",
+          "hybrid",
+          "onsite"
+        ],
+        "title": "WorkplaceType",
+        "type": "string"
+      },
+      "WorkplaceTypePreferenceValue": {
+        "properties": {
+          "preferenceKind": {
+            "const": "workplace_type",
+            "default": "workplace_type",
+            "title": "Preferencekind",
+            "type": "string"
+          },
+          "workplaceTypes": {
+            "items": {
+              "$ref": "#/components/schemas/WorkplaceType"
+            },
+            "maxItems": 3,
+            "minItems": 1,
+            "title": "Workplacetypes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "workplaceTypes"
+        ],
+        "title": "WorkplaceTypePreferenceValue",
+        "type": "object"
+      },
+      "YearMonth": {
+        "description": "Year/month precision only -- never a fabricated day\n(docs/adr/0010-...md \"no invented date precision\"). `month` absent means the user only knows\nthe year -- NEVER treated as January (or any other specific month) for comparison purposes\n(round-2 independent review \"BLOCKER 3\": a prior `ordinal()` helper collapsed an unknown month\nto January, which made e.g. `start=2024-12`/`end=2024` falsely register as \"start after end\" --\nthe user never asserted a January end, only a year).",
+        "properties": {
+          "month": {
+            "anyOf": [
+              {
+                "maximum": 12.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Month"
+          },
+          "year": {
+            "maximum": 2100.0,
+            "minimum": 1950.0,
+            "title": "Year",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "year"
+        ],
+        "title": "YearMonth",
         "type": "object"
       }
     }
@@ -711,6 +1987,147 @@
         "summary": "Update Current User",
         "tags": [
           "identity"
+        ]
+      }
+    },
+    "/api/v1/me/career-profile": {
+      "get": {
+        "operationId": "getCareerProfile",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CareerProfileResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta desativada."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta ainda não inicializada."
+          }
+        },
+        "summary": "Get Career Profile",
+        "tags": [
+          "career-profile"
+        ]
+      },
+      "patch": {
+        "description": "`UpdateCareerProfileRequest` IS a `CareerProfilePatchCommand` (round-3 independent review\n\"BLOCKER 1\") -- passed straight through to `service.update_career_profile`, which owns every\ninvariant itself (trim/non-blank/control-character/bounds/dedupe, absent-vs-explicit-null via\n`model_fields_set`, the virtual-profile/same-value no-op decision). This router call is just\nthe HTTP entry point, never a second copy of that validation.",
+        "operationId": "updateCareerProfile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCareerProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CareerProfileResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta desativada."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta ainda não inicializada."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "O perfil foi alterado por outra requisição."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Dados inválidos."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Muitas requisições."
+          }
+        },
+        "summary": "Update Career Profile",
+        "tags": [
+          "career-profile"
         ]
       }
     },
@@ -1265,6 +2682,461 @@
         ]
       }
     },
+    "/api/v1/me/profile-facts": {
+      "get": {
+        "description": "Active (current-truth) facts only -- superseded/retracted history is reachable one fact at a\ntime via `GET /me/profile-facts/{factId}`, not this listing (docs/adr/0010-...md\n\"retraction\").",
+        "operationId": "listProfileFacts",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "factType",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/FactType"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Facttype"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProfileFactResponse"
+                  },
+                  "title": "Response Listprofilefacts",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta desativada."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta ainda não inicializada."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Dados inválidos."
+          }
+        },
+        "summary": "List Profile Facts",
+        "tags": [
+          "career-profile"
+        ]
+      },
+      "post": {
+        "operationId": "addProfileFact",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddProfileFactRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileFactResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta desativada."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta ainda não inicializada."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "O perfil foi alterado por outra requisição."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Dados inválidos."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Muitas requisições."
+          }
+        },
+        "summary": "Add Profile Fact",
+        "tags": [
+          "career-profile"
+        ]
+      }
+    },
+    "/api/v1/me/profile-facts/{fact_id}": {
+      "get": {
+        "description": "Ownership-scoped (docs/adr/0010-...md \"ownership / IDOR testing\"): a fact belonging to a\ndifferent user is indistinguishable from a nonexistent one -- both resolve to\n`PROFILE_FACT_NOT_FOUND`. Deliberately reachable regardless of `status` -- this is how a\nsuperseded/retracted fact's history stays readable.",
+        "operationId": "getProfileFact",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "fact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Fact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileFactResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta desativada."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Fato de perfil não encontrado."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Dados inválidos."
+          }
+        },
+        "summary": "Get Profile Fact",
+        "tags": [
+          "career-profile"
+        ]
+      }
+    },
+    "/api/v1/me/profile-facts/{fact_id}/replace": {
+      "post": {
+        "description": "The original fact's `value_json` is NEVER edited in place -- this creates a NEW fact in the\nsame lineage and marks the old one `SUPERSEDED`, permanently readable via its own id\n(docs/adr/0010-...md \"fact immutability\"). The ownership-scoped lookup and the `value.kind`/\n`factType` cross-check both happen INSIDE `service.replace_profile_fact` now (round-2\nindependent review \"BLOCKER 1\") -- this router no longer resolves the fact itself first.",
+        "operationId": "replaceProfileFact",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "fact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Fact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceProfileFactRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileFactResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta desativada."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Fato de perfil não encontrado."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Este fato de perfil não está mais ativo (já substituído ou retratado)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Dados inválidos."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Muitas requisições."
+          }
+        },
+        "summary": "Replace Profile Fact",
+        "tags": [
+          "career-profile"
+        ]
+      }
+    },
+    "/api/v1/me/profile-facts/{fact_id}/retract": {
+      "post": {
+        "description": "Logical retraction -- the row is never hard-deleted (docs/adr/0010-...md \"retraction\"). The\nownership-scoped lookup happens INSIDE `service.retract_profile_fact` now (round-2 independent\nreview \"BLOCKER 1\").",
+        "operationId": "retractProfileFact",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "fact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Fact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetractProfileFactRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileFactResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta desativada."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Fato de perfil não encontrado."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Este fato de perfil não está mais ativo (já substituído ou retratado)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Dados inválidos."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Muitas requisições."
+          }
+        },
+        "summary": "Retract Profile Fact",
+        "tags": [
+          "career-profile"
+        ]
+      }
+    },
     "/api/v1/me/sessions/revoke-all": {
       "post": {
         "description": "Revokes every Firebase refresh token for this account's linked identity (global, not\nper-device -- docs/adr/0009-...md \"per-device session revocation\"). The audit row reflects the\nACTUAL provider outcome: a success row is written only after Firebase confirms the revocation,\nand a failed provider call is recorded as a failure, never silently dropped\n(docs/adr/0009-...md \"audit transaction semantics\"). Because `IdentityTokenVerifier` always\nverifies with `check_revoked=True` (see `tapjob_api.identity.firebase`'s module docstring,\ncorrected 2026 independent-review finding 5), this backend rejects an already-issued ID token\non the very next request after this call, not merely after that token's own natural expiry --\nthe only thing that can lag is the CLIENT noticing (its local Firebase SDK session keeps using\nits cached token until it next refreshes or itself observes revocation); this endpoint's own\nserver-side enforcement is immediate.",
@@ -1337,6 +3209,87 @@
         "summary": "Revoke All Sessions",
         "tags": [
           "identity"
+        ]
+      }
+    },
+    "/api/v1/me/truth-snapshot": {
+      "get": {
+        "description": "The ONLY shape any future consumer may use to ground generated external material\n(docs/AI_AGENT.md §6, AGENTS.md §6) -- confirmed, active facts only, never an unconfirmed\ncandidate or another user's fact (docs/adr/0010-...md \"truth snapshot filter\"). A\n`profileVersion` greater than the profile's real current version is `404\nPROFILE_VERSION_NOT_FOUND` -- never a fabricated snapshot for a version that was never actually\nreached (round-1 independent review \"future version error\").",
+        "operationId": "getTruthSnapshot",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "profileVersion",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Profileversion"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TruthSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta desativada."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A versão de perfil solicitada ainda não existe."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Dados inválidos."
+          }
+        },
+        "summary": "Get Truth Snapshot",
+        "tags": [
+          "career-profile"
         ]
       }
     },

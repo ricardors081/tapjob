@@ -26,9 +26,10 @@ def test_health_and_ready_have_explicit_camel_case_operation_ids() -> None:
     assert schema["paths"]["/ready"]["get"]["operationId"] == "getReadiness"
 
 
-def test_schema_exposes_the_wp1_1_identity_routes_under_api_v1() -> None:
-    # WP1.1 is the first business feature (docs/adr/0009-identity-auth-user-account.md); every
-    # business route lives under /api/v1 (validate_api_v1_scoping enforces this structurally too).
+def test_schema_exposes_the_wp1_1_and_wp1_2_routes_under_api_v1() -> None:
+    # WP1.1 (docs/adr/0009-identity-auth-user-account.md) was the first business feature; WP1.2
+    # (docs/adr/0010-career-profile-truth-store.md) is the second. Every business route lives
+    # under /api/v1 (validate_api_v1_scoping enforces this structurally too).
     schema = build_openapi_schema()
 
     assert set(schema["paths"]) == {
@@ -41,6 +42,12 @@ def test_schema_exposes_the_wp1_1_identity_routes_under_api_v1() -> None:
         "/api/v1/me/devices/{device_id}",
         "/api/v1/me/consents",
         "/api/v1/me/deletion-request",
+        "/api/v1/me/career-profile",
+        "/api/v1/me/profile-facts",
+        "/api/v1/me/profile-facts/{fact_id}",
+        "/api/v1/me/profile-facts/{fact_id}/replace",
+        "/api/v1/me/profile-facts/{fact_id}/retract",
+        "/api/v1/me/truth-snapshot",
     }
 
 
