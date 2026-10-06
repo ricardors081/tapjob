@@ -538,3 +538,60 @@ integration, including the new concurrency and direct-service/command tests); `n
 `check:py` clean across the repo; migration unchanged this round (no schema change was needed);
 security audit-gate 94/94 self-test, real gate PASS, both pre-existing exceptions unchanged, no
 third HIGH/CRITICAL advisory.
+
+## Addendum — round 4 (post-merge hotfix: `update_career_profile`'s stale identity map)
+
+WP1.2 merged, then a real post-merge CI failure under genuine concurrent load on GitHub's hosted
+runners (`test_concurrent_conflicting_writes_at_a_non_zero_version_never_lose_an_update`, 6 threads,
+`expectedProfileVersion=1` against an already-existing profile) exposed a structural defect in the
+exact row-locking mechanism round 2's addendum above introduced and described.
+
+**Root cause.** `SELECT ... FOR UPDATE` genuinely serializes two concurrent Postgres transactions at
+the SQL level -- that part of round 2's claim was correct. What round 2's wording did NOT
+distinguish is a SEPARATE guarantee: whether the Python ORM object a caller reads back afterward is
+refreshed from that newly-fetched row, or is the SAME already-identity-mapped object SQLAlchemy was
+already holding for that primary key. By default it is the latter. The pre-hotfix
+`update_career_profile` ran an un-locked `select(CareerProfile).where(CareerProfile.user_id == ...)`
+immediately before its own lock query, in the common "profile already exists" path -- this
+populated the session's identity map with a `CareerProfile` instance at the PRE-mutation
+`profile_version`. The subsequent `SELECT ... FOR UPDATE` on the SAME primary key then waited
+correctly at the SQL level, but by default returned that SAME, now-stale Python object rather than
+one refreshed from the row it had just waited to read -- so a loser could wake up after the winner's
+commit and still see the winner's OWN pre-commit `profile_version`, pass an `expected_version` check
+it should have failed, and race the winner to write the identical new version -- surfaced as an
+unhandled `psycopg.errors.UniqueViolation` on `uq_career_profile_revisions_version` (a real `500`)
+instead of a clean `409 PROFILE_VERSION_CONFLICT`. **The two guarantees -- "Postgres serializes
+concurrent writers" and "the ORM object in hand reflects the row's current state" -- are
+independent; round 2's wording conflated them.**
+
+**Fixed, structurally, two ways (not a caught-and-converted exception):**
+1. The existence check ahead of the lock no longer loads a full `CareerProfile` entity --
+   `select(CareerProfile.id)` resolves only the scalar primary key, so the common "profile already
+   exists" path never populates the identity map before the lock query runs at all.
+2. The lock query itself now passes `.execution_options(populate_existing=True)`, which forces
+   SQLAlchemy to overwrite an already-identity-mapped object's attributes from the freshly fetched
+   row -- an independent safety net covering the one remaining path where a full entity IS loaded
+   unlocked first (`_get_or_create_career_profile`'s own necessarily-unlocked lookup, which the
+   first-write race still requires), so the lock query is refresh-safe regardless of what loaded the
+   row into the identity map beforehand.
+
+`uq_career_profile_revisions_version` is unchanged -- it correctly did its job as the last-resort
+backstop; the fix makes the application-level race that could reach it structurally impossible
+instead of loosening or removing it. No `IntegrityError` is caught-and-converted anywhere; a stale
+version is now rejected by the `expected_version` comparison itself, before any write is attempted,
+so the unique constraint is never actually contended by two "winners" again.
+
+A new deterministic (non-probabilistic, no thread timing) regression test
+(`test_a_stale_identity_mapped_profile_is_refreshed_by_the_lock_query_before_the_version_check`,
+`test_career_profile_concurrency_integration.py`) proves this directly with two real `Session`
+objects against real PostgreSQL: session B loads a `CareerProfile` unlocked at version 1; session A
+commits a real mutation taking the row to version 2; session B's own subsequent
+`update_career_profile` call, called with its own stale `expected_version=1`, must now raise
+`ProfileVersionConflictError` -- proving the lock query refreshed past session B's own
+already-cached, stale object. This test fails deterministically against the pre-fix code, every
+run, independent of thread scheduling. All three existing concurrency tests (first-write race,
+non-zero-version race, virtual-no-op-vs-real-first-mutation race) are unchanged in thread count and
+shape and continue to pass.
+
+No migration change was needed -- the schema's `UNIQUE` constraint was already correct; this was
+purely an application/ORM-layer defect.

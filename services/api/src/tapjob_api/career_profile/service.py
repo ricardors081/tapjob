@@ -199,20 +199,41 @@ def update_career_profile(
     (a concurrently-created row's real version silently ignored). A virtual no-op never writes
     anything at all, so it never participates in any lock and can never corrupt a concurrent REAL
     first-mutation for the same user (`_get_or_create_career_profile`'s own SAVEPOINT/
-    `IntegrityError`-retry remains the sole first-write-race guard, unchanged). Two concurrent
-    requests for the same, already-existing profile serialize on the `FOR UPDATE` lock rather than
-    racing a fail-fast conditional UPDATE -- a different latency characteristic, not a different
-    correctness guarantee: the loser still observes the winner's new version and still conflicts
-    correctly."""
+    `IntegrityError`-retry remains the sole first-write-race guard, unchanged).
+
+    Post-merge hotfix (docs/adr/0010-...md addendum, round 4): the existence check below resolves
+    only the scalar `id` column, never a full `CareerProfile` entity -- a prior draft of this
+    function ran an un-locked `select(CareerProfile)` here, which SQLAlchemy's identity map then
+    treated as the authoritative in-memory state for that primary key. A concurrent winner's commit
+    plus this session's own `SELECT ... FOR UPDATE` on the SAME row does NOT, by itself, overwrite
+    an already-identity-mapped object's attributes -- the Postgres row lock genuinely serializes the
+    two transactions at the SQL level, but the ORM-level Python object a caller reads afterward is a
+    SEPARATE guarantee that `FOR UPDATE` alone does not provide. A loser could therefore wait on the
+    lock, wake up after the winner committed, and still see the WINNER's own pre-commit
+    `profile_version` on a stale object, passing an `expected_version` check it should have failed
+    and racing the winner to the same new version -- surfaced in practice as an unhandled
+    `UniqueViolation` on `uq_career_profile_revisions_version` instead of a clean `409`. The lock
+    query itself now also passes `execution_options(populate_existing=True)`, which forces
+    SQLAlchemy to overwrite any already-mapped instance's attributes from the freshly fetched row --
+    a second, independent safety net in case `_get_or_create_career_profile`'s own (necessarily
+    un-locked, for the first-write race it protects) full-entity load already populated the identity
+    map before the lock query below ever runs. Two concurrent requests for the same, already-
+    existing profile serialize on the `FOR UPDATE` lock rather than racing a fail-fast conditional
+    UPDATE -- a different latency characteristic, not a different correctness guarantee: the loser
+    now genuinely observes the winner's new version (never a stale in-memory copy of its own) and
+    still conflicts correctly."""
     present = command.model_fields_set
     headline = command.headline if "headline" in present else None
     summary = command.summary if "summary" in present else None
     # `None` on the wire/command means "clear to an empty list" -- the column is NOT NULL.
     target_roles = (command.target_roles or []) if "target_roles" in present else None
 
-    existing = session.scalar(select(CareerProfile).where(CareerProfile.user_id == user.id))
+    # Scalar-only: never materializes a `CareerProfile` entity into the identity map just to check
+    # existence, so the lock query below is free to be this session's first (and only) full-entity
+    # load of this row in the common "profile already exists" case.
+    existing_id = session.scalar(select(CareerProfile.id).where(CareerProfile.user_id == user.id))
 
-    if existing is None:
+    if existing_id is None:
         tentative_change = (
             ("headline" in present and headline is not None)
             or ("summary" in present and summary is not None)
@@ -226,10 +247,13 @@ def update_career_profile(
         # profile has ever been created" -- resolve/lock the REAL row (creating it if truly nobody
         # has yet) and re-validate against ITS actual version below, never the pre-materialization
         # assumption above.
-        existing = _get_or_create_career_profile(session, user=user)
+        existing_id = _get_or_create_career_profile(session, user=user).id
 
     locked = session.execute(
-        select(CareerProfile).where(CareerProfile.id == existing.id).with_for_update()
+        select(CareerProfile)
+        .where(CareerProfile.id == existing_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     ).scalar_one()
     if locked.profile_version != expected_version:
         raise ProfileVersionConflictError
