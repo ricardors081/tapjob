@@ -30,7 +30,7 @@
 name: tapjob-deploy
 
 x-backend: &backend
-  image: ghcr.io/ricardoo081/tapjob-backend@${BACKEND_IMAGE_DIGEST:?set BACKEND_IMAGE_DIGEST to sha256:<64 lowercase hex characters> -- never a tag, never a full reference -- see tools/deploy/validate_image_ref.mjs's validateImageDigest}
+  image: ghcr.io/ricardo081683/tapjob-backend@${BACKEND_IMAGE_DIGEST:?set BACKEND_IMAGE_DIGEST to sha256:<64 lowercase hex characters> -- never a tag, never a full reference -- see tools/deploy/validate_image_ref.mjs's validateImageDigest}
   restart: unless-stopped
 
 x-backend-env: &backend-env

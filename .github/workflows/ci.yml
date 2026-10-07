@@ -219,7 +219,7 @@ jobs:
             echo "$images" >&2
             exit 1
           fi
-          expected="ghcr.io/ricardoo081/tapjob-backend@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+          expected="ghcr.io/ricardo081683/tapjob-backend@sha256:0000000000000000000000000000000000000000000000000000000000000000"
           resolved=$(echo "$images" | head -n 1)
           if [ "$resolved" != "$expected" ]; then
             echo "resolved image did not match the fixed canonical repository + digest" >&2
