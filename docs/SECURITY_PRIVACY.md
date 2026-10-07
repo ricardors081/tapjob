@@ -164,7 +164,7 @@ Uploads:
 - signed URLs;
 - metadata stripping where appropriate.
 
-**WP1.3 — Resume Import (`docs/adr/0011-resume-import.md`), implementation status:** real binary
+**WP1.3 — Resume Import (`docs/adr/0011-resume-import.md`), implementation status (VERIFIED):** real binary
 signature/container validation (never trusting `Content-Type`/extension alone), size limits, ZIP-
 bomb-style compression/member-count bounds inspected from archive metadata before any
 decompression, randomized server-generated storage keys, and a private Cloudflare R2 bucket are all
@@ -173,6 +173,9 @@ a structural-integrity check, not a malware scan, and this document does not cla
 scanner integration remains a documented, open gap for this capability, to be added when a concrete
 need/incident justifies the added infrastructure, not implemented speculatively. Signed URLs are not
 issued by this checkpoint (no download endpoint exists in WP1.3's accepted API surface).
+**Pre-production gate:** raw uploaded source blob retention/deletion lifecycle is not yet implemented
+end-to-end (account deletion skeleton does not yet reach stored source blobs in R2/local storage; see
+ADR-0011 and Gate 1).
 
 ## 13. External API trust
 
