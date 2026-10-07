@@ -8,8 +8,21 @@ from typing import Any
 
 from celery import Celery, signals
 
+from tapjob_api.core.database import create_database_engine
 from tapjob_api.core.logging import configure_logging
 from tapjob_api.core.observability import init_sentry
+from tapjob_api.db.session import create_session_factory
+
+# Importing this module (for `configure_resume_import_worker`) also registers the
+# `resume_import.process`/`resume_import.sweep_stale_dispatches` shared tasks against this
+# process's Celery app as a side effect of module execution (WP1.3,
+# docs/adr/0011-resume-import.md "async processing").
+from tapjob_api.resume_import.limits import RESUME_IMPORT_SWEEP_INTERVAL_SECONDS
+from tapjob_api.resume_import.storage import create_storage_adapter
+from tapjob_api.resume_import.tasks import (
+    RESUME_IMPORT_SWEEP_TASK_NAME,
+    configure_resume_import_worker,
+)
 from tapjob_worker.config import WorkerSettings
 from tapjob_worker.correlation import connect_correlation_signals
 
@@ -20,6 +33,15 @@ TASK_SERIALIZER = "json"
 def create_celery_app(settings: WorkerSettings) -> Celery:
     init_sentry(settings, service=SERVICE_NAME)
     app = Celery(SERVICE_NAME, broker=str(settings.redis_url))
+
+    # One engine/session-factory/storage-adapter per worker process (docs/ENGINEERING_STANDARDS.md
+    # §23), the same "construct once, reuse" discipline `tapjob_api.main`'s lifespan applies to
+    # `app.state.db_engine` -- WP1.3 is the first checkpoint whose worker tasks need direct
+    # PostgreSQL access.
+    engine = create_database_engine(str(settings.database_url), connect_timeout_seconds=5.0)
+    configure_resume_import_worker(
+        session_factory=create_session_factory(engine), storage=create_storage_adapter(settings)
+    )
     app.conf.update(
         # Only JSON crosses the broker: no pickle deserialization of queue payloads.
         task_serializer=TASK_SERIALIZER,
@@ -48,4 +70,18 @@ def create_celery_app(settings: WorkerSettings) -> Celery:
         _configure_worker_logging, weak=False, dispatch_uid="tapjob_worker.setup_logging"
     )
     connect_correlation_signals()
+
+    def _kick_off_resume_import_sweep(**_: Any) -> None:
+        # Round-2 independent review "Finding 4": kicked off exactly ONCE per worker process, when
+        # the worker has finished booting and is ready to consume -- the self-rescheduling task
+        # itself (`tasks.sweep_stale_resume_import_dispatches_task`) schedules every subsequent run,
+        # never this signal handler again. A multi-replica deployment would have each replica
+        # independently start its own sweep chain -- always safe (duplicate dispatch is idempotent
+        # via the worker's own claim), merely redundant, and this checkpoint's own documented
+        # topology (`infra/compose.yaml`) runs exactly one `worker` container.
+        app.send_task(RESUME_IMPORT_SWEEP_TASK_NAME, countdown=RESUME_IMPORT_SWEEP_INTERVAL_SECONDS)
+
+    signals.worker_ready.connect(
+        _kick_off_resume_import_sweep, weak=False, dispatch_uid="tapjob_worker.resume_import_sweep"
+    )
     return app

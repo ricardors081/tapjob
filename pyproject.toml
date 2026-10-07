@@ -84,6 +84,19 @@ module = ["celery", "celery.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+# boto3/botocore ship without inline type stubs (WP1.3, docs/adr/0011-resume-import.md).
+# tapjob_api.resume_import.storage is the ONLY module that imports them, so this gap stays
+# contained to one small, reviewable adapter file -- same precedent as firebase-admin below.
+module = ["boto3", "boto3.*", "botocore", "botocore.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# docx (python-docx) ships without inline type stubs (WP1.3). tapjob_api.resume_import.extraction
+# is the ONLY module that imports it.
+module = ["docx", "docx.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 # firebase-admin ships without a py.typed marker (WP1.1, docs/adr/0009-identity-auth-user-
 # account.md). tapjob_api.identity.firebase is the ONLY module that imports it, so this gap stays
 # contained to one small, reviewable adapter file.

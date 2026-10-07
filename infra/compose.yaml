@@ -22,6 +22,19 @@ x-database-env: &database-env
   REDIS_URL: redis://redis:6379/0
   # Optional; Sentry stays disabled when empty (docs/FOUNDATION_DECISIONS.md "Technical observability").
   SENTRY_DSN: ${SENTRY_DSN:-}
+  # WP1.3 resume-import object storage (docs/adr/0011-resume-import.md "object storage", round-1
+  # independent review "Finding 1"): unset R2_* below means `api`/`worker` both fall back to THIS
+  # shared Docker volume -- a genuinely durable, genuinely cross-process local/development
+  # storage, never a process-local in-memory fake pretending to be shared between two separate
+  # containers.
+  RESUME_IMPORT_LOCAL_STORAGE_DIR: /data/resume-imports
+  R2_ENDPOINT_URL: ${R2_ENDPOINT_URL:-}
+  R2_BUCKET: ${R2_BUCKET:-}
+  R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+  R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+
+x-resume-storage-volume: &resume-storage-volume
+  - resume-storage-data:/data/resume-imports
 
 services:
   postgres:
@@ -66,6 +79,7 @@ services:
     <<: *backend
     environment:
       <<: *database-env
+    volumes: *resume-storage-volume
     ports:
       - "127.0.0.1:${API_HOST_PORT:?}:8000"
     depends_on:
@@ -87,11 +101,11 @@ services:
     <<: *backend
     command: ["celery", "-A", "tapjob_worker.main:app", "worker", "--loglevel", "${LOG_LEVEL:?}"]
     environment:
-      APP_ENV: ${APP_ENV:?}
-      LOG_LEVEL: ${LOG_LEVEL:?}
-      REDIS_URL: redis://redis:6379/0
-      SENTRY_DSN: ${SENTRY_DSN:-}
+      <<: *database-env
+    volumes: *resume-storage-volume
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     healthcheck:
@@ -103,3 +117,4 @@ services:
 
 volumes:
   postgres-data:
+  resume-storage-data:

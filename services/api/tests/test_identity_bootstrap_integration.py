@@ -16,6 +16,7 @@ from tapjob_api.core.config import ApiSettings
 from tapjob_api.identity.dependencies import get_identity_verifier
 from tapjob_api.identity.models import AccountAuditEvent, ExternalIdentity, User
 from tapjob_api.main import create_app
+from tapjob_api.resume_import.storage import InMemoryObjectStorage
 
 pytestmark = pytest.mark.integration
 
@@ -221,7 +222,7 @@ def test_concurrent_first_bootstraps_for_the_same_identity_create_exactly_one_us
     this test needs several concurrent independent client instances against the SAME database."""
     settings = ApiSettings()
     fake_identity_verifier.issue_token("race-token", make_identity(subject="race-uid"))
-    app = create_app(settings)
+    app = create_app(settings, resume_storage_override=InMemoryObjectStorage())
     app.dependency_overrides[get_identity_verifier] = lambda: fake_identity_verifier
 
     results: list[int] = []

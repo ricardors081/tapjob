@@ -67,6 +67,20 @@
         "title": "AddProfileFactRequest",
         "type": "object"
       },
+      "Body_createResumeImport": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_createResumeImport",
+        "type": "object"
+      },
       "BootstrapResponse": {
         "properties": {
           "created": {
@@ -83,6 +97,45 @@
         ],
         "title": "BootstrapResponse",
         "type": "object"
+      },
+      "CandidateReviewDecision": {
+        "properties": {
+          "candidateId": {
+            "format": "uuid",
+            "title": "Candidateid",
+            "type": "string"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/ReviewDecisionKind"
+          },
+          "editedValue": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Editedvalue"
+          }
+        },
+        "required": [
+          "candidateId",
+          "decision"
+        ],
+        "title": "CandidateReviewDecision",
+        "type": "object"
+      },
+      "CandidateReviewState": {
+        "enum": [
+          "pending",
+          "accepted",
+          "rejected"
+        ],
+        "title": "CandidateReviewState",
+        "type": "string"
       },
       "CareerProfileResponse": {
         "description": "A `User` with no `CareerProfile` row yet still gets a response here -- a virtual profile at\n`profileVersion: 0` (docs/adr/0010-...md \"profile creation\"), never a 404. `createdAt`/\n`updatedAt` are `null` only for that virtual case.",
@@ -634,7 +687,14 @@
           "PROFILE_VERSION_CONFLICT",
           "PROFILE_FACT_NOT_FOUND",
           "PROFILE_FACT_ALREADY_RETRACTED",
-          "PROFILE_VERSION_NOT_FOUND"
+          "PROFILE_VERSION_NOT_FOUND",
+          "UNSUPPORTED_DOCUMENT_TYPE",
+          "DOCUMENT_TOO_LARGE",
+          "MALFORMED_DOCUMENT",
+          "ENCRYPTED_DOCUMENT",
+          "TEXT_NOT_EXTRACTABLE",
+          "RESUME_IMPORT_NOT_FOUND",
+          "RESUME_IMPORT_NOT_READY"
         ],
         "title": "ErrorCode",
         "type": "string"
@@ -803,6 +863,119 @@
         "title": "FactType",
         "type": "string"
       },
+      "FinalizeResumeImportCommand": {
+        "description": "`decisions` must cover EVERY `PENDING` candidate of the target import, no more and no fewer\n(docs/adr/0011-...md \"review decisions\": \"no acceptance by omission\") -- enforced in\n`service.py` once the real pending set is known, not here. Each `candidateId` appearing at\nmost ONCE, and the list never exceeding `MAX_CANDIDATES_PER_IMPORT`, ARE enforced here, at the\ncommand boundary itself -- round-1 independent review \"Finding 4\": a duplicate `candidateId`\n(e.g. `[ACCEPT, REJECT]` for the SAME id) previously survived `service.py`'s own coverage check\nunnoticed, because `{decision.candidate_id for decision in command.decisions}` is a set and\nsilently collapses duplicates -- the LAST decision for a duplicated id would win in the\ndict-building loop while an EARLIER one may already have mutated `accepted_fact_candidates`,\nrisking a candidate whose own `review_state` ends up `rejected` while a `ProfileFact` was still\ncreated from it. Rejecting duplicates here means `service.py` never needs to reason about this\ncase at all -- it is structurally unreachable once this command validates.",
+        "properties": {
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateReviewDecision"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Decisions",
+            "type": "array"
+          },
+          "expectedProfileVersion": {
+            "minimum": 0.0,
+            "title": "Expectedprofileversion",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expectedProfileVersion",
+          "decisions"
+        ],
+        "title": "FinalizeResumeImportCommand",
+        "type": "object"
+      },
+      "FinalizeResumeImportResponse": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "factIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Factids",
+            "type": "array"
+          },
+          "headline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headline"
+          },
+          "profileVersion": {
+            "title": "Profileversion",
+            "type": "integer"
+          },
+          "resumeId": {
+            "format": "uuid",
+            "title": "Resumeid",
+            "type": "string"
+          },
+          "resumeVersionId": {
+            "format": "uuid",
+            "title": "Resumeversionid",
+            "type": "string"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "resumeId",
+          "resumeVersionId",
+          "version",
+          "profileVersion",
+          "headline",
+          "summary",
+          "factIds",
+          "createdAt"
+        ],
+        "title": "FinalizeResumeImportResponse",
+        "type": "object"
+      },
+      "HeadlineCandidateValue": {
+        "description": "The WP1.3-only top-level `headline` candidate shape -- never a `ProfileFact`, maps to\n`CareerProfile.headline` instead (docs/adr/0011-...md \"career profile top-level fields\").\nCarries its own `kind` so it can share ONE discriminated union with the nine `FactValue`\nmodels below (round-1 independent review \"Finding 5\").",
+        "properties": {
+          "kind": {
+            "const": "headline",
+            "default": "headline",
+            "title": "Kind",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "HeadlineCandidateValue",
+        "type": "object"
+      },
       "HealthResponse": {
         "properties": {
           "environment": {
@@ -834,6 +1007,32 @@
           "ok"
         ],
         "title": "HealthStatus",
+        "type": "string"
+      },
+      "ImportFailureCode": {
+        "description": "Normalized reason codes (docs/adr/0011-...md \"error taxonomy\") -- never a raw parser/library\nexception message persisted or returned to a client.",
+        "enum": [
+          "unsupported_document_type",
+          "document_too_large",
+          "malformed_document",
+          "encrypted_document",
+          "text_not_extractable",
+          "no_reviewable_candidates",
+          "internal_error"
+        ],
+        "title": "ImportFailureCode",
+        "type": "string"
+      },
+      "ImportStatus": {
+        "description": "Lifecycle of one resume import (docs/adr/0011-...md \"import lifecycle\"). `QUEUED` ->\n`PROCESSING` is claimed atomically by the worker via a conditional `UPDATE` that ALSO matches\nan already-`PROCESSING` row whose `processing_lease_expires_at` has passed -- a lease, not a\none-way latch (round-1 independent review \"Finding 2\"): a worker that crashes after claiming a\nrow leaves it reclaimable once the lease expires, rather than stuck in `PROCESSING` forever.\nRedelivery of the SAME task while the lease is still active is never silently treated as a\nno-op success -- it raises `ImportLeaseActiveError`, which the Celery task wrapper turns into\nan explicit, bounded retry. `READY_FOR_REVIEW` -> `FINALIZED` is claimed the same way by\n`finalize_resume_import` (a single-request, non-leased claim -- finalize has no long-running\nwork between claim and commit, so no lease is needed there), which is how two concurrent\nfinalize requests resolve to exactly one winner without a separate idempotency-key table.",
+        "enum": [
+          "queued",
+          "processing",
+          "ready_for_review",
+          "finalized",
+          "failed"
+        ],
+        "title": "ImportStatus",
         "type": "string"
       },
       "LanguageFactValue": {
@@ -967,6 +1166,79 @@
           }
         },
         "title": "LocationPreferenceValue",
+        "type": "object"
+      },
+      "MasterResumeResponse": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "factIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Factids",
+            "type": "array"
+          },
+          "generatedBy": {
+            "title": "Generatedby",
+            "type": "string"
+          },
+          "headline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headline"
+          },
+          "profileVersion": {
+            "title": "Profileversion",
+            "type": "integer"
+          },
+          "resumeId": {
+            "format": "uuid",
+            "title": "Resumeid",
+            "type": "string"
+          },
+          "resumeVersionId": {
+            "format": "uuid",
+            "title": "Resumeversionid",
+            "type": "string"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "resumeId",
+          "resumeVersionId",
+          "version",
+          "profileVersion",
+          "headline",
+          "summary",
+          "factIds",
+          "generatedBy",
+          "createdAt"
+        ],
+        "title": "MasterResumeResponse",
         "type": "object"
       },
       "PreferenceFactValue": {
@@ -1361,6 +1633,199 @@
         "title": "ReplaceProfileFactRequest",
         "type": "object"
       },
+      "ResumeImportCandidateResponse": {
+        "properties": {
+          "candidateKind": {
+            "title": "Candidatekind",
+            "type": "string"
+          },
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "reviewState": {
+            "$ref": "#/components/schemas/CandidateReviewState"
+          },
+          "sourceExcerpt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sourceexcerpt"
+          },
+          "value": {
+            "discriminator": {
+              "mapping": {
+                "certification": "#/components/schemas/CertificationFactValue",
+                "education": "#/components/schemas/EducationFactValue",
+                "experience": "#/components/schemas/ExperienceFactValue",
+                "headline": "#/components/schemas/HeadlineCandidateValue",
+                "language": "#/components/schemas/LanguageFactValue",
+                "link": "#/components/schemas/LinkFactValue",
+                "preference": "#/components/schemas/PreferenceFactValue",
+                "project": "#/components/schemas/ProjectFactValue",
+                "skill": "#/components/schemas/SkillFactValue",
+                "summary": "#/components/schemas/SummaryCandidateValue",
+                "work_authorization": "#/components/schemas/WorkAuthorizationFactValue"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExperienceFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/EducationFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/SkillFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/CertificationFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/LanguageFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/LinkFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/PreferenceFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/WorkAuthorizationFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/HeadlineCandidateValue"
+              },
+              {
+                "$ref": "#/components/schemas/SummaryCandidateValue"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "id",
+          "candidateKind",
+          "value",
+          "confidence",
+          "reviewState",
+          "createdAt"
+        ],
+        "title": "ResumeImportCandidateResponse",
+        "type": "object"
+      },
+      "ResumeImportResponse": {
+        "properties": {
+          "byteSize": {
+            "title": "Bytesize",
+            "type": "integer"
+          },
+          "candidates": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ResumeImportCandidateResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidates"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "failureCode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImportFailureCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finalizedResumeId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finalizedresumeid"
+          },
+          "finalizedResumeVersionId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finalizedresumeversionid"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "mediaType": {
+            "title": "Mediatype",
+            "type": "string"
+          },
+          "originalFilename": {
+            "title": "Originalfilename",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ImportStatus"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "originalFilename",
+          "mediaType",
+          "byteSize",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "ResumeImportResponse",
+        "type": "object"
+      },
       "RetractProfileFactRequest": {
         "properties": {
           "expectedProfileVersion": {
@@ -1374,6 +1839,15 @@
         ],
         "title": "RetractProfileFactRequest",
         "type": "object"
+      },
+      "ReviewDecisionKind": {
+        "enum": [
+          "accept",
+          "reject",
+          "edit_accept"
+        ],
+        "title": "ReviewDecisionKind",
+        "type": "string"
       },
       "SalaryPeriod": {
         "enum": [
@@ -1480,6 +1954,26 @@
           "name"
         ],
         "title": "SkillFactValue",
+        "type": "object"
+      },
+      "SummaryCandidateValue": {
+        "description": "The WP1.3-only top-level `summary` candidate shape -- see `HeadlineCandidateValue`.",
+        "properties": {
+          "kind": {
+            "const": "summary",
+            "default": "summary",
+            "title": "Kind",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "SummaryCandidateValue",
         "type": "object"
       },
       "TruthSnapshotResponse": {
@@ -3134,6 +3628,316 @@
         "summary": "Retract Profile Fact",
         "tags": [
           "career-profile"
+        ]
+      }
+    },
+    "/api/v1/me/resume-imports": {
+      "post": {
+        "description": "Validate + store synchronously; extraction/parsing is enqueued to the worker AFTER this\nrequest's own transaction commits (docs/adr/0011-...md \"async processing\") -- never before, so\na fast worker can never look up a row this transaction has not actually persisted yet.",
+        "operationId": "createResumeImport",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_createResumeImport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResumeImportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta desativada."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta ainda não inicializada."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "O arquivo enviado não pôde ser aceito."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Muitas requisições."
+          }
+        },
+        "summary": "Create Resume Import",
+        "tags": [
+          "resume-import"
+        ]
+      }
+    },
+    "/api/v1/me/resume-imports/{import_id}": {
+      "get": {
+        "description": "A pure read, with no dispatch side effect (round-2 independent review \"Finding 4\": a `GET`\nused to also re-enqueue a stale import as a side effect of being polled, which both made an\nordinary read cause operational broker traffic and left a row with no recovery path at all if\nthe client simply never polled again). Stale-dispatch recovery is now entirely server-owned --\nsee `tasks.sweep_stale_resume_import_dispatches_task`.",
+        "operationId": "getResumeImport",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "import_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Import Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResumeImportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta desativada."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Importação de currículo não encontrada."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Dados inválidos."
+          }
+        },
+        "summary": "Get Resume Import",
+        "tags": [
+          "resume-import"
+        ]
+      }
+    },
+    "/api/v1/me/resume-imports/{import_id}/finalize": {
+      "post": {
+        "operationId": "finalizeResumeImport",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "import_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Import Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FinalizeResumeImportCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinalizeResumeImportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta desativada."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Importação de currículo não encontrada."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "O perfil mudou ou a importação não está pronta."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Dados inválidos."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Muitas requisições."
+          }
+        },
+        "summary": "Finalize Resume Import",
+        "tags": [
+          "resume-import"
+        ]
+      }
+    },
+    "/api/v1/me/resumes/master": {
+      "get": {
+        "operationId": "getMasterResume",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MasterResumeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conta desativada."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Nenhum currículo mestre."
+          }
+        },
+        "summary": "Get Master Resume",
+        "tags": [
+          "resume-import"
         ]
       }
     },

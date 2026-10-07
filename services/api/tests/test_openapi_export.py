@@ -26,10 +26,11 @@ def test_health_and_ready_have_explicit_camel_case_operation_ids() -> None:
     assert schema["paths"]["/ready"]["get"]["operationId"] == "getReadiness"
 
 
-def test_schema_exposes_the_wp1_1_and_wp1_2_routes_under_api_v1() -> None:
+def test_schema_exposes_the_wp1_1_wp1_2_and_wp1_3_routes_under_api_v1() -> None:
     # WP1.1 (docs/adr/0009-identity-auth-user-account.md) was the first business feature; WP1.2
-    # (docs/adr/0010-career-profile-truth-store.md) is the second. Every business route lives
-    # under /api/v1 (validate_api_v1_scoping enforces this structurally too).
+    # (docs/adr/0010-career-profile-truth-store.md) is the second; WP1.3
+    # (docs/adr/0011-resume-import.md) is the third. Every business route lives under /api/v1
+    # (validate_api_v1_scoping enforces this structurally too).
     schema = build_openapi_schema()
 
     assert set(schema["paths"]) == {
@@ -48,6 +49,10 @@ def test_schema_exposes_the_wp1_1_and_wp1_2_routes_under_api_v1() -> None:
         "/api/v1/me/profile-facts/{fact_id}/replace",
         "/api/v1/me/profile-facts/{fact_id}/retract",
         "/api/v1/me/truth-snapshot",
+        "/api/v1/me/resume-imports",
+        "/api/v1/me/resume-imports/{import_id}",
+        "/api/v1/me/resume-imports/{import_id}/finalize",
+        "/api/v1/me/resumes/master",
     }
 
 

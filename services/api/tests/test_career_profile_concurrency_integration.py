@@ -23,6 +23,7 @@ from tapjob_api.core.config import ApiSettings
 from tapjob_api.identity.dependencies import get_identity_verifier
 from tapjob_api.identity.models import AccountAuditEvent, User
 from tapjob_api.main import create_app
+from tapjob_api.resume_import.storage import InMemoryObjectStorage
 
 pytestmark = pytest.mark.integration
 
@@ -38,7 +39,7 @@ _TRUNCATE_SQL = (
 
 def _make_client(verifier: FakeIdentityVerifier) -> TestClient:
     settings = ApiSettings()
-    app = create_app(settings)
+    app = create_app(settings, resume_storage_override=InMemoryObjectStorage())
     app.dependency_overrides[get_identity_verifier] = lambda: verifier
     return TestClient(app)
 

@@ -73,8 +73,12 @@ names the fixed canonical repository (`ghcr.io/ricardoo081/tapjob-backend`); `BA
 supplies only the digest, never a repository or a tag (§3 above).
 
 `<environment>.env` holds that environment's `APP_ENV`, `DATABASE_URL`, `REDIS_URL`,
-`POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`, optional `SENTRY_DSN` — held by the operator,
-outside this repository, never committed (§7).
+`POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`, `R2_ENDPOINT_URL`/`R2_BUCKET`/
+`R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` (WP1.3, docs/adr/0011-resume-import.md "object storage"
+— required in every environment this file describes; `infra/compose.deploy.yaml` itself refuses to
+resolve without all four, and `tapjob_api.resume_import.storage.create_storage_adapter` fails fast
+at process startup as a second, independent gate if they are ever unset or only partially set),
+optional `SENTRY_DSN` — held by the operator, outside this repository, never committed (§7).
 
 Ordering is enforced by `infra/compose.deploy.yaml`'s own `depends_on`, not by operator discipline:
 `migrate` must complete successfully on the given digest before `api`/`worker` start.

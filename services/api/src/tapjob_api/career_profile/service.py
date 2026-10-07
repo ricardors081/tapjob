@@ -76,7 +76,7 @@ class ProfileVersionNotFoundError(Exception):
     snapshot filter", round-1 independent review "future version error")."""
 
 
-def _record_profile_revision(session: Session, *, profile: CareerProfile) -> None:
+def record_profile_revision(session: Session, *, profile: CareerProfile) -> None:
     """Captures the profile's own top-level truth (`headline`/`summary`/`target_roles`) AT its
     current `profile_version` (docs/adr/0010-...md "historical top-level revision"). Called once
     when the row is first created (`profile_version=0`, the empty initial state) and once per
@@ -114,7 +114,7 @@ def _get_or_create_career_profile(session: Session, *, user: User) -> CareerProf
             # The initial (empty) revision at profile_version=0 -- same SAVEPOINT as the profile
             # row itself, so a losing concurrent racer's rollback also discards this, never leaving
             # an orphaned revision for a profile row that didn't actually win the race.
-            _record_profile_revision(session, profile=profile)
+            record_profile_revision(session, profile=profile)
             session.flush()
     except IntegrityError:
         resolved = session.scalar(select(CareerProfile).where(CareerProfile.user_id == user.id))
@@ -131,24 +131,55 @@ def get_career_profile(session: Session, *, user: User) -> CareerProfile | None:
     return session.scalar(select(CareerProfile).where(CareerProfile.user_id == user.id))
 
 
-def _bump_profile_version(session: Session, *, user: User, expected_version: int) -> CareerProfile:
+# Sentinel distinguishing "top-level field not provided" from "explicitly clear to None" in
+# `bump_profile_version` below -- the same `model_fields_set` problem `CareerProfilePatchCommand`
+# solves for the PATCH command, needed again here because a plain `None` default would be
+# indistinguishable from "clear this field".
+_NOT_PROVIDED = object()
+
+
+def bump_profile_version(
+    session: Session,
+    *,
+    user: User,
+    expected_version: int,
+    headline: str | object | None = _NOT_PROVIDED,
+    summary: str | object | None = _NOT_PROVIDED,
+) -> CareerProfile:
     """The one real concurrency guard for every logical mutation (docs/adr/0010-...md "aggregate
     versioning"): a single atomic conditional `UPDATE ... WHERE profile_version = :expected
     ... RETURNING`. Postgres's own row lock on the matched row is what actually serializes two
     concurrent conflicting writes -- the loser's `WHERE` clause simply no longer matches once the
     winner commits, never a lost update. Ensures the profile row exists first (idempotent) so a
-    fact can be added before any top-level profile field was ever set."""
+    fact can be added before any top-level profile field was ever set.
+
+    Public (unlike the rest of this module's internal helpers) because WP1.3's resume-import
+    finalization (`docs/adr/0011-resume-import.md` "atomic profile update") needs to bump the
+    version AND set `headline`/`summary` in the exact SAME atomic statement -- one logical
+    finalization must be one profile_version transition, never a version bump followed by a
+    separate top-level PATCH. `headline`/`summary` are omitted from the `UPDATE ... SET` entirely
+    when left at the sentinel default, so a caller that only ever adds facts (every existing
+    call site in this module) never touches these columns at all."""
     _get_or_create_career_profile(session, user=user)
+    values: dict[str, object] = {"profile_version": CareerProfile.profile_version + 1}
+    if headline is not _NOT_PROVIDED:
+        values["headline"] = headline
+    if summary is not _NOT_PROVIDED:
+        values["summary"] = summary
     updated = session.execute(
         update(CareerProfile)
         .where(CareerProfile.user_id == user.id, CareerProfile.profile_version == expected_version)
-        .values(profile_version=CareerProfile.profile_version + 1)
+        .values(**values)
         .returning(CareerProfile)
     )
     profile = updated.scalars().one_or_none()
     if profile is None:
         raise ProfileVersionConflictError
     return profile
+
+
+def _bump_profile_version(session: Session, *, user: User, expected_version: int) -> CareerProfile:
+    return bump_profile_version(session, user=user, expected_version=expected_version)
 
 
 class ProfileUpdateResult:
@@ -280,7 +311,7 @@ def update_career_profile(
     # A new revision captures the post-mutation top-level state at the NEW profile_version -- the
     # only place besides profile creation where headline/summary/target_roles actually change
     # (docs/adr/0010-...md "historical top-level revision").
-    _record_profile_revision(session, profile=locked)
+    record_profile_revision(session, profile=locked)
     session.flush()
     return ProfileUpdateResult(profile=locked, fields_changed=fields_changed)
 

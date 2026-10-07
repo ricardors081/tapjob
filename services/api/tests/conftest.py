@@ -12,19 +12,24 @@ from sqlalchemy import create_engine, text
 from tapjob_api.core.config import ApiSettings, Environment
 from tapjob_api.identity.dependencies import get_identity_verifier
 from tapjob_api.main import create_app
+from tapjob_api.resume_import.storage import InMemoryObjectStorage
 
 SettingsFactory = Callable[..., ApiSettings]
 
-# WP1.1 identity + WP1.2 career-profile tables, in FK-safe TRUNCATE order (docs/adr/0009-
-# identity-auth-user-account.md, docs/adr/0010-career-profile-truth-store.md). TRUNCATE ... CASCADE
-# does not actually require this order (CASCADE follows FKs regardless of list order), but it's
-# kept readable/explicit anyway.
+# WP1.1 identity + WP1.2 career-profile + WP1.3 resume-import tables, in FK-safe TRUNCATE order
+# (docs/adr/0009-identity-auth-user-account.md, docs/adr/0010-career-profile-truth-store.md,
+# docs/adr/0011-resume-import.md). TRUNCATE ... CASCADE does not actually require this order
+# (CASCADE follows FKs regardless of list order), but it's kept readable/explicit anyway.
 _IDENTITY_TABLES = (
     "account_audit_events",
     "account_deletion_requests",
     "consent_records",
     "user_devices",
     "external_identities",
+    "resume_import_candidates",
+    "resume_imports",
+    "resume_versions",
+    "resumes",
     "profile_facts",
     "career_profile_revisions",
     "career_profiles",
@@ -59,7 +64,10 @@ def make_settings(database_url: str, redis_url: str) -> SettingsFactory:
 
 @pytest.fixture
 def client(make_settings: SettingsFactory) -> Iterator[TestClient]:
-    with TestClient(create_app(make_settings())) as test_client:
+    # `InMemoryObjectStorage` is injected explicitly here (round-2 independent review "Finding 5")
+    # -- `create_storage_adapter` itself never returns one implicitly any more.
+    app = create_app(make_settings(), resume_storage_override=InMemoryObjectStorage())
+    with TestClient(app) as test_client:
         yield test_client
 
 
@@ -102,7 +110,7 @@ def identity_client(
 ) -> Iterator[TestClient]:
     settings = ApiSettings()
     _flush_rate_limit_keys(str(settings.redis_url))
-    app = create_app(settings)
+    app = create_app(settings, resume_storage_override=InMemoryObjectStorage())
     app.dependency_overrides[get_identity_verifier] = lambda: fake_identity_verifier
     try:
         with TestClient(app) as test_client:

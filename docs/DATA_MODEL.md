@@ -126,14 +126,19 @@ mutation. Zero matched rows → `409 PROFILE_VERSION_CONFLICT` — never a silen
 more than one version bump per logical mutation.
 
 ### Resume
-Logical resume family.
+Logical resume family. Implemented in WP1.3 (`docs/adr/0011-resume-import.md`) exactly as sketched
+below, plus a real DB invariant: at most one `is_master=true` row per user (a partial unique index
+on `user_id WHERE is_master`, not only application logic).
 - id
 - user_id
 - title
 - is_master
 
 ### ResumeVersion
-Immutable rendered/content snapshot.
+Immutable rendered/content snapshot. Implemented in WP1.3 exactly as sketched below.
+`content_json` is a bounded, typed `MasterResumeSnapshot` (headline/summary/`fact_ids`/
+`source_import_id`) — every claim it carries traces back to a confirmed `ProfileFact` id, never a
+copy of fact text divorced from its own provenance.
 - resume_id
 - version
 - target_job_id optional
@@ -143,11 +148,36 @@ Immutable rendered/content snapshot.
 - created_at
 
 ### ResumeArtifact
+Rendered PDF/DOCX output. **Not yet implemented** — WP1.3 only imports/parses a source document and
+creates a master `Resume`/`ResumeVersion`; it never renders one. Deferred to a future Resume
+Studio/renderer work package.
 - pdf/docx
 - storage_key
 - checksum
 - mime
 - size
+
+### ResumeImport (WP1.3)
+One upload-to-review lifecycle — new in WP1.3, not previously sketched here
+(`docs/adr/0011-resume-import.md` "import record"). `storage_key` is random/server-generated, never
+derived from `original_filename` (retained only as display metadata).
+- id, user_id
+- status (`queued` / `processing` / `ready_for_review` / `finalized` / `failed`)
+- original_filename, media_type, byte_size, checksum_sha256, storage_key
+- parser_identity
+- failure_code (nullable, normalized reason)
+- finalized_resume_id, finalized_resume_version_id (nullable)
+- created_at, updated_at
+
+### ResumeImportCandidate (WP1.3)
+A reviewable, UNCONFIRMED extraction result — never a `ProfileFact` until explicit finalization
+accepts it (`docs/adr/0011-...md` "candidate data").
+- id, resume_import_id, user_id
+- candidate_kind (the nine canonical `FactType` values, plus WP1.3-only `headline`/`summary`)
+- value (already fail-closed validated against the matching `FactValue` shape)
+- confidence, source_excerpt (hard-truncated)
+- review_state (`pending` / `accepted` / `rejected`)
+- created_at
 
 ### Company
 Canonical employer.

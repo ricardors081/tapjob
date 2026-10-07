@@ -6,10 +6,20 @@ from tapjob_worker.celery_app import create_celery_app
 from tapjob_worker.config import WorkerSettings
 
 REDIS_URL = "redis://localhost:6379/0"
+DATABASE_URL = "postgresql+psycopg://user:pass@localhost:5432/test"
 
 
 def _settings() -> WorkerSettings:
-    return WorkerSettings(app_env=Environment.LOCAL, redis_url=REDIS_URL)  # type: ignore[arg-type]
+    return WorkerSettings(
+        app_env=Environment.LOCAL,
+        redis_url=REDIS_URL,  # type: ignore[arg-type]
+        database_url=DATABASE_URL,  # type: ignore[arg-type]
+        # `create_storage_adapter` fails fast in local/development with neither R2 nor a shared
+        # local directory configured (round-2 independent review "Finding 5") -- these tests only
+        # exercise `create_celery_app`'s own Celery config, not real storage I/O, so a dummy
+        # directory value is enough to satisfy the config gate.
+        resume_import_local_storage_dir="/tmp/resume-imports-test",  # noqa: S108 -- never touched
+    )
 
 
 def test_celery_app_uses_configured_broker() -> None:

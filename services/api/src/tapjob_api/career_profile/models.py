@@ -37,13 +37,15 @@ class FactType(StrEnum):
 
 
 class FactSourceKind(StrEnum):
-    """Only `user_direct` exists in WP1.2 -- the server assigns it itself, never trusting a
-    client-supplied value (docs/adr/0010-...md "provenance / no source spoofing"). Future sources
-    (`resume_import`, `whatsapp_user_statement`, `agent_suggestion`) are expected to join this enum
-    later, each written only by its own internal trusted use case, mirroring how WP1.1's
-    `IdentityProvider` started with only `firebase`."""
+    """`user_direct` is WP1.2's own source; `resume_import` is added by WP1.3
+    (docs/adr/0011-resume-import.md) -- both are server-assigned only, never trusted from a client
+    (docs/adr/0010-...md "provenance / no source spoofing"). Further future sources
+    (`whatsapp_user_statement`, `agent_suggestion`) are expected to join this enum later, each
+    written only by its own internal trusted use case, mirroring how WP1.1's `IdentityProvider`
+    started with only `firebase`."""
 
     USER_DIRECT = "user_direct"
+    RESUME_IMPORT = "resume_import"
 
 
 class FactStatus(StrEnum):

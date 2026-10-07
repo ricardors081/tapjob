@@ -49,6 +49,29 @@ class RuntimeSettings(BaseSettings):
         default=DEFAULT_SENTRY_TRACES_SAMPLE_RATE, ge=0.0, le=1.0
     )
 
+    # Cloudflare R2 (docs/ARCHITECTURE.md §3 "Storage", WP1.3 docs/adr/0011-resume-import.md
+    # "object storage"). All four unset is valid ONLY in `local`/`development`
+    # (`tapjob_api.resume_import.storage.create_storage_adapter` fails fast otherwise -- round-1
+    # independent review "Finding 1": staging/production must never silently fall back to a
+    # process-local storage adapter). A PARTIAL set (some but not all four) is never valid in any
+    # environment. `r2_secret_access_key` is a true secret (docs/ENGINEERING_STANDARDS.md §3.3):
+    # server-side environment only, never `EXPO_PUBLIC_*`, never logged.
+    r2_endpoint_url: str | None = None
+    r2_bucket: str | None = None
+    r2_access_key_id: str | None = None
+    r2_secret_access_key: str | None = None
+
+    # Local/development ONLY durable storage when R2 is unset (round-1 independent review
+    # "Finding 1"): a shared filesystem directory BOTH the `api` and `worker` processes mount (a
+    # Docker named volume in `infra/compose.yaml`), so an object the API process writes is actually
+    # readable by a genuinely separate worker process -- never a process-local in-memory fake
+    # pretending to be shared. Unset means `create_storage_adapter` FAILS FAST with
+    # `ObjectStorageConfigError` in `local`/`development` too (round-2 independent review
+    # "Finding 5") -- it no longer falls back to an in-memory fake implicitly. Every test process
+    # leaves this unset AND injects `InMemoryObjectStorage` explicitly instead
+    # (`tapjob_api.main.create_app`'s `resume_storage_override` parameter).
+    resume_import_local_storage_dir: str | None = None
+
 
 class ApiSettings(RuntimeSettings):
     """HTTP API and migration settings."""

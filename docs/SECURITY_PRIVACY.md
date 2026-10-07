@@ -164,6 +164,16 @@ Uploads:
 - signed URLs;
 - metadata stripping where appropriate.
 
+**WP1.3 — Resume Import (`docs/adr/0011-resume-import.md`), implementation status:** real binary
+signature/container validation (never trusting `Content-Type`/extension alone), size limits, ZIP-
+bomb-style compression/member-count bounds inspected from archive metadata before any
+decompression, randomized server-generated storage keys, and a private Cloudflare R2 bucket are all
+implemented. **Malware scanning is NOT implemented.** File-format/container-structure validation is
+a structural-integrity check, not a malware scan, and this document does not claim otherwise — a
+scanner integration remains a documented, open gap for this capability, to be added when a concrete
+need/incident justifies the added infrastructure, not implemented speculatively. Signed URLs are not
+issued by this checkpoint (no download endpoint exists in WP1.3's accepted API surface).
+
 ## 13. External API trust
 
 Every connector must have:

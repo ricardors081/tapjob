@@ -13,6 +13,7 @@ import tapjob_api.http.readiness as readiness
 from tapjob_api.core.config import ApiSettings, Environment
 from tapjob_api.http.readiness import READY_PATH, DependencyName, DependencyStatus, ReadinessStatus
 from tapjob_api.main import create_app
+from tapjob_api.resume_import.storage import InMemoryObjectStorage
 
 
 def _ok(*_: object, **__: object) -> None:
@@ -25,7 +26,8 @@ def _failing(*_: object, **__: object) -> None:
 
 @pytest.fixture
 def ready_client(make_settings: Callable[..., ApiSettings]) -> Iterator[TestClient]:
-    with TestClient(create_app(make_settings())) as client:
+    app = create_app(make_settings(), resume_storage_override=InMemoryObjectStorage())
+    with TestClient(app) as client:
         yield client
 
 
@@ -100,7 +102,8 @@ def test_ready_times_out_a_hanging_dependency_instead_of_blocking(
         redis_url=redis_url,  # type: ignore[arg-type]
         readiness_timeout_seconds=0.02,
     )
-    with TestClient(create_app(settings)) as client:
+    app = create_app(settings, resume_storage_override=InMemoryObjectStorage())
+    with TestClient(app) as client:
         response = client.get(READY_PATH)
 
     assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE

@@ -204,6 +204,10 @@ jobs:
           POSTGRES_USER: dummy
           POSTGRES_PASSWORD: dummy
           POSTGRES_DB: dummy
+          R2_ENDPOINT_URL: https://dummy.r2.cloudflarestorage.com
+          R2_BUCKET: dummy-bucket
+          R2_ACCESS_KEY_ID: dummy
+          R2_SECRET_ACCESS_KEY: dummy
         run: docker compose -f infra/compose.deploy.yaml config
       - name: Confirm the resolved image is the canonical repository at the given digest
         run: |
@@ -232,6 +236,41 @@ jobs:
           POSTGRES_USER: dummy
           POSTGRES_PASSWORD: dummy
           POSTGRES_DB: dummy
+          R2_ENDPOINT_URL: https://dummy.r2.cloudflarestorage.com
+          R2_BUCKET: dummy-bucket
+          R2_ACCESS_KEY_ID: dummy
+          R2_SECRET_ACCESS_KEY: dummy
+      - name: Confirm R2 object storage config reaches both api and worker (WP1.3, round-1 review "Finding 1")
+        # Staging/production must never silently fall back to process-local storage -- this proves
+        # the deploy Compose contract itself actually wires all four R2 settings into BOTH
+        # services, never only one of them, as a second, static gate alongside
+        # `tapjob_api.resume_import.storage.create_storage_adapter`'s own runtime fail-fast check.
+        run: |
+          docker compose -f infra/compose.deploy.yaml config --format json | \
+            python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)
+          required = ('R2_ENDPOINT_URL', 'R2_BUCKET', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY')
+          for service in ('api', 'worker'):
+            env = d['services'][service]['environment']
+            missing = [key for key in required if not env.get(key)]
+            if missing:
+              print(f'{service} is missing R2 config: {missing}', file=sys.stderr)
+              sys.exit(1)
+          "
+        env:
+          BACKEND_IMAGE_DIGEST: sha256:0000000000000000000000000000000000000000000000000000000000000000
+          APP_ENV: staging
+          LOG_LEVEL: INFO
+          DATABASE_URL: postgresql+psycopg://dummy:dummy@postgres:5432/dummy
+          REDIS_URL: redis://redis:6379/0
+          POSTGRES_USER: dummy
+          POSTGRES_PASSWORD: dummy
+          POSTGRES_DB: dummy
+          R2_ENDPOINT_URL: https://dummy.r2.cloudflarestorage.com
+          R2_BUCKET: dummy-bucket
+          R2_ACCESS_KEY_ID: dummy
+          R2_SECRET_ACCESS_KEY: dummy
 
   security:
     name: Secret scan and dependency audit

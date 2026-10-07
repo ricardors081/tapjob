@@ -57,6 +57,15 @@ class ErrorCode(StrEnum):
     PROFILE_FACT_NOT_FOUND = "PROFILE_FACT_NOT_FOUND"
     PROFILE_FACT_ALREADY_RETRACTED = "PROFILE_FACT_ALREADY_RETRACTED"
     PROFILE_VERSION_NOT_FOUND = "PROFILE_VERSION_NOT_FOUND"
+    # WP1.3 — resume import (docs/adr/0011-resume-import.md): normalized upload/parsing/review
+    # failure codes, never a raw parser/library exception.
+    UNSUPPORTED_DOCUMENT_TYPE = "UNSUPPORTED_DOCUMENT_TYPE"
+    DOCUMENT_TOO_LARGE = "DOCUMENT_TOO_LARGE"
+    MALFORMED_DOCUMENT = "MALFORMED_DOCUMENT"
+    ENCRYPTED_DOCUMENT = "ENCRYPTED_DOCUMENT"
+    TEXT_NOT_EXTRACTABLE = "TEXT_NOT_EXTRACTABLE"
+    RESUME_IMPORT_NOT_FOUND = "RESUME_IMPORT_NOT_FOUND"
+    RESUME_IMPORT_NOT_READY = "RESUME_IMPORT_NOT_READY"
 
 
 # A status not explicitly raised anywhere yet (e.g. by a future connector/port) still needs a
@@ -110,6 +119,15 @@ _DEFAULT_MESSAGE_BY_CODE: dict[ErrorCode, str] = {
         "Este fato de perfil não está mais ativo (já substituído ou retratado)."
     ),
     ErrorCode.PROFILE_VERSION_NOT_FOUND: ("A versão de perfil solicitada ainda não existe."),
+    ErrorCode.UNSUPPORTED_DOCUMENT_TYPE: "Apenas arquivos PDF ou DOCX são aceitos.",
+    ErrorCode.DOCUMENT_TOO_LARGE: "O arquivo enviado excede o tamanho máximo permitido.",
+    ErrorCode.MALFORMED_DOCUMENT: "O arquivo enviado está corrompido ou em formato inválido.",
+    ErrorCode.ENCRYPTED_DOCUMENT: "Este arquivo está protegido por senha e não pode ser lido.",
+    ErrorCode.TEXT_NOT_EXTRACTABLE: (
+        "Não foi possível extrair texto deste arquivo (pode ser uma digitalização de imagem)."
+    ),
+    ErrorCode.RESUME_IMPORT_NOT_FOUND: "Importação de currículo não encontrada.",
+    ErrorCode.RESUME_IMPORT_NOT_READY: "Esta importação ainda não está pronta para revisão.",
 }
 
 

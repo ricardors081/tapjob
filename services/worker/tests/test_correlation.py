@@ -25,10 +25,18 @@ from tapjob_worker.correlation import (
 )
 
 REDIS_URL = "redis://localhost:6379/0"
+DATABASE_URL = "postgresql+psycopg://user:pass@localhost:5432/test"
 
 
 def _settings() -> WorkerSettings:
-    return WorkerSettings(app_env=Environment.LOCAL, redis_url=REDIS_URL)  # type: ignore[arg-type]
+    return WorkerSettings(
+        app_env=Environment.LOCAL,
+        redis_url=REDIS_URL,  # type: ignore[arg-type]
+        database_url=DATABASE_URL,  # type: ignore[arg-type]
+        # `create_storage_adapter` fails fast in local/development with neither R2 nor a shared
+        # local directory configured (round-2 independent review "Finding 5").
+        resume_import_local_storage_dir="/tmp/resume-imports-test",  # noqa: S108 -- never touched
+    )
 
 
 def _fake_request(

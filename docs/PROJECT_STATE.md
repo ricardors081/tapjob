@@ -3,7 +3,7 @@
 **As of:** 2026-10-06  
 **Repository:** `ricardoo081/tapjob`  
 **Phase:** 0 — Foundation (VERIFIED, complete); 1 — IN PROGRESS  
-**Code status:** WP0.1 VERIFIED. WP0.2 VERIFIED (WP0.2-A, WP0.2-B Checkpoint A, WP0.2-B Checkpoint B all VERIFIED). WP1.1 — Identity & User Account **VERIFIED** (PR #17, squash commit `bc269d8dd99f1455d1d44cf8b3abb4ba8d7915e7`, CI green pre- and post-merge). WP1.2 — Career Profile & Truth Store is **VERIFIED**: implemented and independently reviewed across three rounds, merged via squash as PR #19 (`5c06c805ea2a68fcf100ec56cff5eaf715e962c2`); real post-merge CI (run `37364799439`, attempt 2) exposed a genuine concurrency defect (SQLAlchemy identity-map staleness after `SELECT ... FOR UPDATE` — `docs/adr/0010-career-profile-truth-store.md` "Addendum — round 4"); a structural fix was independently reviewed and merged via squash as corrective PR #20 (`f30590577cf25733de63025f987c251ebe0e89af`); post-merge CI on the resulting `main` (run `37397784331`) is green 8/8, including `Backend integration` re-proving the concurrency tests that originally failed. WP1.3 — Resume Import is **NOT STARTED / NEXT AUTHORIZED WORK PACKAGE**. Downstream work packages remain NOT AUTHORIZED until their own dependencies are independently verified.
+**Code status:** WP0.1 VERIFIED. WP0.2 VERIFIED (WP0.2-A, WP0.2-B Checkpoint A, WP0.2-B Checkpoint B all VERIFIED). WP1.1 — Identity & User Account **VERIFIED** (PR #17, squash commit `bc269d8dd99f1455d1d44cf8b3abb4ba8d7915e7`, CI green pre- and post-merge). WP1.2 — Career Profile & Truth Store is **VERIFIED**: implemented and independently reviewed across three rounds, merged via squash as PR #19 (`5c06c805ea2a68fcf100ec56cff5eaf715e962c2`); real post-merge CI (run `37364799439`, attempt 2) exposed a genuine concurrency defect (SQLAlchemy identity-map staleness after `SELECT ... FOR UPDATE` — `docs/adr/0010-career-profile-truth-store.md` "Addendum — round 4"); a structural fix was independently reviewed and merged via squash as corrective PR #20 (`f30590577cf25733de63025f987c251ebe0e89af`); post-merge CI on the resulting `main` (run `37397784331`) is green 8/8, including `Backend integration` re-proving the concurrency tests that originally failed. WP1.3 — Resume Import is **IMPLEMENTED, pending independent review** (branch `feat/wp1-3-resume-import`, not yet merged, **NOT VERIFIED**): PDF/DOCX upload, bounded/signature-validated file security, private R2 object storage, bounded non-OCR PDF/DOCX text extraction, a deterministic (non-AI) candidate parser, fail-closed candidate validation against WP1.2's canonical `FactValue` union, explicit user review/finalization, master `Resume`/`ResumeVersion` creation grounded in confirmed facts — see `docs/adr/0011-resume-import.md` (D-053). WP2.x and downstream work packages remain NOT AUTHORIZED until their own dependencies are independently verified.
 
 This file must reflect reality only.
 
@@ -169,13 +169,56 @@ See `docs/adr/0010-career-profile-truth-store.md` (D-052). Merged to `main` via 
 - source reuse: `career-ops-hq/career-ops` (provenance/evidence concept, PORT — in-place mutation explicitly rejected) and `roysahar11/appliable` (Source-of-Truth-Discipline concept, ADAPT — filesystem-as-database explicitly rejected), both recorded in `docs/SOURCE_REUSE_LEDGER.md`;
 - zero AI/LLM calls, zero Resume Import, zero WhatsApp adapter, zero full mobile profile UI, zero real deploy, zero real migration.
 
+### Resume Import — WP1.3 (IMPLEMENTED, pending independent review — NOT VERIFIED)
+See `docs/adr/0011-resume-import.md` (D-053). Implemented end-to-end on branch
+`feat/wp1-3-resume-import`, not yet merged, not yet independently reviewed, not yet VERIFIED.
+- PDF/DOCX upload, streamed in bounded chunks; real binary signature/container validation (never
+  `Content-Type`/extension alone); ZIP-bomb-style DOCX archives rejected from archive metadata
+  alone, before any decompression; legacy OLE/encrypted containers detected explicitly;
+- private Cloudflare R2 object storage behind a local, internal `ObjectStoragePort` (not a WP0.2-B
+  canonical port), random server-generated `storage_key` never derived from the original filename;
+  in-memory fake adapter in local/CI, zero real R2 mutation in any test;
+- bounded, non-OCR `pypdf`/`python-docx` text extraction; a scanned/image-only document is detected
+  and reported, never silently presented as a successful empty extraction;
+- a deterministic, non-AI heuristic parser (`AiPurpose.RESUME_EXTRACTION` already exists on the
+  canonical `AiGateway` port, but no provider adapter is implemented in this checkpoint — stated
+  honestly, not implied); `ports.resume_parser.ExtractedFact.value` widened to a bounded recursive
+  JSON type without coupling the port to `career_profile`'s own typed `FactValue` union;
+- every candidate is fail-closed validated against WP1.2's canonical `FactValue` union before ever
+  being persisted as a reviewable, UNCONFIRMED `ResumeImportCandidate` — zero confirmed
+  `ProfileFact` before explicit user review and finalization;
+- `FactSourceKind.RESUME_IMPORT` joins `user_direct` (migration `0004` extends the existing CHECK
+  constraint); never infers `target_roles`, salary/location preference, or work authorization from
+  resume text; never builds a contact-profile model from extracted contact information;
+- finalization is one atomic `profile_version` transition producing confirmed facts plus at most
+  one master `Resume`/immutable `ResumeVersion` per user (a real partial-unique-index DB invariant),
+  grounded via `fact_ids` back to confirmed `ProfileFact`s; idempotent under both sequential retry
+  and a genuine 6-thread concurrent race (`SELECT ... FOR UPDATE`, verified refresh-safe by
+  construction — structurally distinct from the WP1.2 post-merge identity-map hotfix);
+- the first real Celery task in the codebase (`resume_import.process`); claims its row via the same
+  atomic-conditional-UPDATE pattern `bump_profile_version` uses, making task redelivery a safe
+  no-op, verified by a dedicated test;
+- new schema (migration `0004`, chained off `0003`): `resumes`, `resume_versions`,
+  `resume_imports`, `resume_import_candidates`;
+- OpenAPI/TypeScript contract regenerated (4 new operations under `/api/v1/me/resume-imports`,
+  `/api/v1/me/resumes/master`);
+- source reuse: `Gsync/jobsync` (resume-import prompt/eval discipline, PORT — schema/code
+  explicitly rejected) and `AbhishekMandapmalvi/AutoApply` (heading-synonym-map concept, ADAPT —
+  Markdown/regex machinery explicitly rejected), both recorded in `docs/SOURCE_REUSE_LEDGER.md`;
+- no malware scanner integrated (documented limitation, `docs/SECURITY_PRIVACY.md` §12);
+- zero real AI/LLM provider calls, zero PDF/resume rendering, zero signed-URL/download endpoint,
+  zero Resume Studio/ATS/tailoring/applications/jobs/matching/WhatsApp/Career Agent/browser
+  extension, zero full mobile import UI, zero real deploy, zero real R2 mutation, zero real
+  migration execution.
+
 ## 2. Not implemented
 
-No production feature beyond WP1.1's identity/account foundation and WP1.2's Career Profile/Truth
-Store exists yet. The mobile app has only a minimal auth technical surface, no product screens.
+No production feature beyond WP1.1's identity/account foundation, WP1.2's Career Profile/Truth
+Store, and WP1.3's Resume Import (pending independent review) exists yet. The mobile app has only a
+minimal auth technical surface, no product screens.
 
 Specifically NOT implemented:
-- Resume Import (WP1.3 — authorized, NOT STARTED); Jobs/Matching, WhatsApp adapter, Apply Engine, Browser Extension (downstream of WP1.3 — NOT AUTHORIZED);
+- Jobs/Matching, WhatsApp adapter, Apply Engine, Browser Extension (downstream of WP1.3 — NOT AUTHORIZED); Resume Import's backend (WP1.3) is IMPLEMENTED pending independent review (see §1 above) — a full mobile resume-import UI is explicitly deferred, same as WP1.2's profile UI;
 - Sentry Expo config plugin, Metro source-map upload, EAS release wiring (deferred from WP0.1-B, see `docs/adr/0002-mobile-foundation.md`);
 - `es`/`en` translations (architecture is ready; only `pt-BR` strings exist);
 - web app;
@@ -287,7 +330,15 @@ ADRs/contracts, not production feature claims. Both WP0.2-B checkpoints are inde
 The first authorized product work package. See section 1 above and `docs/adr/0009-identity-auth-user-account.md` (D-051). Independently reviewed and merged via squash (PR #17, `main` commit `bc269d8dd99f1455d1d44cf8b3abb4ba8d7915e7`); CI green pre-merge (run `37254156902`, 8/8) and post-merge (run `37312677497`, 8/8).
 
 ### WP1.2 — Career Profile & Truth Store (VERIFIED)
-See section 1 above and `docs/adr/0010-career-profile-truth-store.md` (D-052). Implemented end-to-end (CareerProfile, ProfileFact, typed fact values, optimistic concurrency, truth snapshot, provenance, audit, migration `0003`, OpenAPI/contracts regenerated), independently reviewed across three rounds, merged via squash as PR #19 (`main` commit `5c06c805ea2a68fcf100ec56cff5eaf715e962c2`). Real post-merge CI (run `37364799439`, attempt 2) exposed a genuine concurrency defect (identity-map staleness under `SELECT ... FOR UPDATE`, ADR-0010 "Addendum — round 4"); the structural fix was independently reviewed and merged via squash as corrective PR #20 (`main` commit `f30590577cf25733de63025f987c251ebe0e89af`); post-merge CI on the resulting `main` (run `37397784331`) is green 8/8, with `Backend integration` re-proving the previously-failing concurrency test alongside a new deterministic regression test. **WP1.2 is VERIFIED.** WP1.3 — Resume Import is NOT STARTED and is the next authorized work package. Every further downstream work package remains NOT AUTHORIZED.
+See section 1 above and `docs/adr/0010-career-profile-truth-store.md` (D-052). Implemented end-to-end (CareerProfile, ProfileFact, typed fact values, optimistic concurrency, truth snapshot, provenance, audit, migration `0003`, OpenAPI/contracts regenerated), independently reviewed across three rounds, merged via squash as PR #19 (`main` commit `5c06c805ea2a68fcf100ec56cff5eaf715e962c2`). Real post-merge CI (run `37364799439`, attempt 2) exposed a genuine concurrency defect (identity-map staleness under `SELECT ... FOR UPDATE`, ADR-0010 "Addendum — round 4"); the structural fix was independently reviewed and merged via squash as corrective PR #20 (`main` commit `f30590577cf25733de63025f987c251ebe0e89af`); post-merge CI on the resulting `main` (run `37397784331`) is green 8/8, with `Backend integration` re-proving the previously-failing concurrency test alongside a new deterministic regression test. **WP1.2 is VERIFIED.**
+
+### WP1.3 — Resume Import (IMPLEMENTED, pending independent review — NOT VERIFIED)
+See section 1 above and `docs/adr/0011-resume-import.md` (D-053). Implemented end-to-end on branch
+`feat/wp1-3-resume-import` (PDF/DOCX upload, file security, object storage, bounded extraction,
+deterministic candidate parsing, fail-closed validation, review/finalization, provenance, master
+resume creation, migration `0004`, OpenAPI/contracts regenerated). Not yet independently reviewed,
+not yet merged, **not yet VERIFIED**. WP2.x and every further downstream work package remain NOT
+AUTHORIZED until WP1.3's own dependencies are independently verified in turn.
 
 ## 5. Phase gates
 
@@ -328,4 +379,6 @@ WP0.1 is independently reviewed, merged and verified with green CI on `main`. Ga
 
 WP1.1 (Identity & User Account) — internal canonical `User` UUID, Firebase `ExternalIdentity` linking (never auto-linked by email, concurrency-safe), token verification with `check_revoked=True`, account bootstrap/settings/devices/consent/deletion-skeleton/session-revocation endpoints, fail-closed rate limiting, and a minimal mobile auth technical surface on React Native Firebase + an Expo Development Build — is independently reviewed across three rounds (5 blocking findings, then 6 operational-hardening findings, then one concentrated session-retry-semantics blocker, all resolved), merged via squash into `main` as PR #17 (squash commit `bc269d8dd99f1455d1d44cf8b3abb4ba8d7915e7`); CI green at latest HEAD before merge (run `37254156902`, 8/8) and CI green post-merge on `main` (run `37312677497`, 8/8). **WP1.1 is VERIFIED.** This does not mean any real external provider is configured, any native build has been executed, or any deploy has happened — those remain documented operational prerequisites (ADR-0009 §I1/§I2), not a code-verification gap.
 
-WP1.2 (Career Profile & Professional Truth Store) — `CareerProfile`/`ProfileFact` typed truth store, optimistic concurrency, truth snapshot, provenance, audit, migration `0003` — is independently reviewed across three rounds, merged via squash into `main` as PR #19 (squash commit `5c06c805ea2a68fcf100ec56cff5eaf715e962c2`). Real post-merge CI (run `37364799439`, attempt 2) then exposed a genuine SQLAlchemy identity-map-staleness concurrency defect under `SELECT ... FOR UPDATE` (ADR-0010 "Addendum — round 4"), fixed structurally and independently reviewed as corrective PR #20, merged via squash into `main` (squash commit `f30590577cf25733de63025f987c251ebe0e89af`); post-merge CI on the resulting `main` (run `37397784331`) is green 8/8, with `Backend integration` re-proving the previously-failing concurrency test. **WP1.2 is VERIFIED.** This does not mean any real deploy, real migration execution, or full mobile profile UI exists — those remain explicitly out of scope/deferred (ADR-0010). **WP1.3 — Resume Import is NOT STARTED and is the next authorized work package.** WP2.x and every further downstream work package remain NOT AUTHORIZED until their own dependencies are independently verified — WP1.2 being verified authorizes only WP1.3 to begin, not the rest of WP1.x/WP2+.
+WP1.2 (Career Profile & Professional Truth Store) — `CareerProfile`/`ProfileFact` typed truth store, optimistic concurrency, truth snapshot, provenance, audit, migration `0003` — is independently reviewed across three rounds, merged via squash into `main` as PR #19 (squash commit `5c06c805ea2a68fcf100ec56cff5eaf715e962c2`). Real post-merge CI (run `37364799439`, attempt 2) then exposed a genuine SQLAlchemy identity-map-staleness concurrency defect under `SELECT ... FOR UPDATE` (ADR-0010 "Addendum — round 4"), fixed structurally and independently reviewed as corrective PR #20, merged via squash into `main` (squash commit `f30590577cf25733de63025f987c251ebe0e89af`); post-merge CI on the resulting `main` (run `37397784331`) is green 8/8, with `Backend integration` re-proving the previously-failing concurrency test. **WP1.2 is VERIFIED.** This does not mean any real deploy, real migration execution, or full mobile profile UI exists — those remain explicitly out of scope/deferred (ADR-0010). WP1.2 being verified authorized WP1.3 to begin, not the rest of WP1.x/WP2+.
+
+WP1.3 (Resume Import) — PDF/DOCX upload, bounded/signature-validated file security, private R2 object storage, bounded non-OCR extraction, a deterministic (non-AI) candidate parser, fail-closed `FactValue` validation, explicit review/finalization, provenance (`FactSourceKind.RESUME_IMPORT`), master `Resume`/`ResumeVersion` creation grounded in confirmed facts, migration `0004` — is implemented end-to-end on branch `feat/wp1-3-resume-import` (`docs/adr/0011-resume-import.md`, D-053). Not yet independently reviewed, not yet merged. **WP1.3 is IMPLEMENTED, pending independent review — NOT VERIFIED.** WP2.x and every further downstream work package remain NOT AUTHORIZED until WP1.3's own dependencies are independently verified in turn.

@@ -77,6 +77,10 @@ class AuditEventType(StrEnum):
     PROFILE_FACT_ADDED = "profile_fact_added"
     PROFILE_FACT_REPLACED = "profile_fact_replaced"
     PROFILE_FACT_RETRACTED = "profile_fact_retracted"
+    # WP1.3 (docs/adr/0011-resume-import.md "audit"): same append-only mechanism again -- never
+    # resume text, a candidate's own value, or a signed URL in `metadata`.
+    RESUME_IMPORT_CREATED = "resume_import_created"
+    RESUME_IMPORT_FINALIZED = "resume_import_finalized"
 
 
 class AuditOutcome(StrEnum):

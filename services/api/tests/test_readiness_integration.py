@@ -11,11 +11,13 @@ from fastapi.testclient import TestClient
 from tapjob_api.core.config import ApiSettings
 from tapjob_api.http.readiness import READY_PATH, DependencyName, DependencyStatus
 from tapjob_api.main import create_app
+from tapjob_api.resume_import.storage import InMemoryObjectStorage
 
 
 @pytest.mark.integration
 def test_ready_is_200_against_real_postgresql_and_redis() -> None:
-    with TestClient(create_app(ApiSettings())) as client:
+    app = create_app(ApiSettings(), resume_storage_override=InMemoryObjectStorage())
+    with TestClient(app) as client:
         response = client.get(READY_PATH)
 
     assert response.status_code == HTTPStatus.OK
@@ -35,7 +37,8 @@ def test_ready_is_503_when_redis_is_unreachable() -> None:
         readiness_timeout_seconds=1.0,
     )
 
-    with TestClient(create_app(settings)) as client:
+    app = create_app(settings, resume_storage_override=InMemoryObjectStorage())
+    with TestClient(app) as client:
         response = client.get(READY_PATH)
 
     assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE

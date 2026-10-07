@@ -43,6 +43,16 @@ export type AddProfileFactRequest = {
 };
 
 /**
+ * Body_createResumeImport
+ */
+export type BodyCreateResumeImport = {
+    /**
+     * File
+     */
+    file: Blob | File;
+};
+
+/**
  * BootstrapResponse
  */
 export type BootstrapResponse = {
@@ -52,6 +62,28 @@ export type BootstrapResponse = {
     created: boolean;
     user: UserResponse;
 };
+
+/**
+ * CandidateReviewDecision
+ */
+export type CandidateReviewDecision = {
+    /**
+     * Candidateid
+     */
+    candidateId: string;
+    decision: ReviewDecisionKind;
+    /**
+     * Editedvalue
+     */
+    editedValue?: {
+        [key: string]: unknown;
+    } | null;
+};
+
+/**
+ * CandidateReviewState
+ */
+export type CandidateReviewState = 'pending' | 'accepted' | 'rejected';
 
 /**
  * CareerProfileResponse
@@ -310,7 +342,7 @@ export type Environment = 'local' | 'development' | 'staging' | 'production';
  *
  * Machine-readable error vocabulary. Clients localize/branch on this, never on ``message``.
  */
-export type ErrorCode = 'INVALID_REQUEST' | 'VALIDATION_FAILED' | 'AUTHENTICATION_REQUIRED' | 'PERMISSION_DENIED' | 'RESOURCE_NOT_FOUND' | 'METHOD_NOT_ALLOWED' | 'CONFLICT' | 'RATE_LIMITED' | 'SERVICE_UNAVAILABLE' | 'UPSTREAM_FAILED' | 'UPSTREAM_TIMEOUT' | 'INVALID_CURSOR' | 'INTERNAL_ERROR' | 'AUTH_TOKEN_MISSING' | 'AUTH_TOKEN_INVALID' | 'AUTH_TOKEN_REVOKED' | 'ACCOUNT_NOT_BOOTSTRAPPED' | 'ACCOUNT_DISABLED' | 'REAUTHENTICATION_REQUIRED' | 'DEVICE_NOT_FOUND' | 'IDENTITY_CONFLICT' | 'PROFILE_VERSION_CONFLICT' | 'PROFILE_FACT_NOT_FOUND' | 'PROFILE_FACT_ALREADY_RETRACTED' | 'PROFILE_VERSION_NOT_FOUND';
+export type ErrorCode = 'INVALID_REQUEST' | 'VALIDATION_FAILED' | 'AUTHENTICATION_REQUIRED' | 'PERMISSION_DENIED' | 'RESOURCE_NOT_FOUND' | 'METHOD_NOT_ALLOWED' | 'CONFLICT' | 'RATE_LIMITED' | 'SERVICE_UNAVAILABLE' | 'UPSTREAM_FAILED' | 'UPSTREAM_TIMEOUT' | 'INVALID_CURSOR' | 'INTERNAL_ERROR' | 'AUTH_TOKEN_MISSING' | 'AUTH_TOKEN_INVALID' | 'AUTH_TOKEN_REVOKED' | 'ACCOUNT_NOT_BOOTSTRAPPED' | 'ACCOUNT_DISABLED' | 'REAUTHENTICATION_REQUIRED' | 'DEVICE_NOT_FOUND' | 'IDENTITY_CONFLICT' | 'PROFILE_VERSION_CONFLICT' | 'PROFILE_FACT_NOT_FOUND' | 'PROFILE_FACT_ALREADY_RETRACTED' | 'PROFILE_VERSION_NOT_FOUND' | 'UNSUPPORTED_DOCUMENT_TYPE' | 'DOCUMENT_TOO_LARGE' | 'MALFORMED_DOCUMENT' | 'ENCRYPTED_DOCUMENT' | 'TEXT_NOT_EXTRACTABLE' | 'RESUME_IMPORT_NOT_FOUND' | 'RESUME_IMPORT_NOT_READY';
 
 /**
  * ErrorResponse
@@ -396,6 +428,90 @@ export type FactStatus = 'active' | 'superseded' | 'retracted';
 export type FactType = 'experience' | 'education' | 'skill' | 'certification' | 'language' | 'project' | 'link' | 'preference' | 'work_authorization';
 
 /**
+ * FinalizeResumeImportCommand
+ *
+ * `decisions` must cover EVERY `PENDING` candidate of the target import, no more and no fewer
+ * (docs/adr/0011-...md "review decisions": "no acceptance by omission") -- enforced in
+ * `service.py` once the real pending set is known, not here. Each `candidateId` appearing at
+ * most ONCE, and the list never exceeding `MAX_CANDIDATES_PER_IMPORT`, ARE enforced here, at the
+ * command boundary itself -- round-1 independent review "Finding 4": a duplicate `candidateId`
+ * (e.g. `[ACCEPT, REJECT]` for the SAME id) previously survived `service.py`'s own coverage check
+ * unnoticed, because `{decision.candidate_id for decision in command.decisions}` is a set and
+ * silently collapses duplicates -- the LAST decision for a duplicated id would win in the
+ * dict-building loop while an EARLIER one may already have mutated `accepted_fact_candidates`,
+ * risking a candidate whose own `review_state` ends up `rejected` while a `ProfileFact` was still
+ * created from it. Rejecting duplicates here means `service.py` never needs to reason about this
+ * case at all -- it is structurally unreachable once this command validates.
+ */
+export type FinalizeResumeImportCommand = {
+    /**
+     * Decisions
+     */
+    decisions: Array<CandidateReviewDecision>;
+    /**
+     * Expectedprofileversion
+     */
+    expectedProfileVersion: number;
+};
+
+/**
+ * FinalizeResumeImportResponse
+ */
+export type FinalizeResumeImportResponse = {
+    /**
+     * Createdat
+     */
+    createdAt: string;
+    /**
+     * Factids
+     */
+    factIds: Array<string>;
+    /**
+     * Headline
+     */
+    headline: string | null;
+    /**
+     * Profileversion
+     */
+    profileVersion: number;
+    /**
+     * Resumeid
+     */
+    resumeId: string;
+    /**
+     * Resumeversionid
+     */
+    resumeVersionId: string;
+    /**
+     * Summary
+     */
+    summary: string | null;
+    /**
+     * Version
+     */
+    version: number;
+};
+
+/**
+ * HeadlineCandidateValue
+ *
+ * The WP1.3-only top-level `headline` candidate shape -- never a `ProfileFact`, maps to
+ * `CareerProfile.headline` instead (docs/adr/0011-...md "career profile top-level fields").
+ * Carries its own `kind` so it can share ONE discriminated union with the nine `FactValue`
+ * models below (round-1 independent review "Finding 5").
+ */
+export type HeadlineCandidateValue = {
+    /**
+     * Kind
+     */
+    kind?: 'headline';
+    /**
+     * Text
+     */
+    text: string;
+};
+
+/**
  * HealthResponse
  */
 export type HealthResponse = {
@@ -415,6 +531,31 @@ export type HealthResponse = {
  * HealthStatus
  */
 export type HealthStatus = 'ok';
+
+/**
+ * ImportFailureCode
+ *
+ * Normalized reason codes (docs/adr/0011-...md "error taxonomy") -- never a raw parser/library
+ * exception message persisted or returned to a client.
+ */
+export type ImportFailureCode = 'unsupported_document_type' | 'document_too_large' | 'malformed_document' | 'encrypted_document' | 'text_not_extractable' | 'no_reviewable_candidates' | 'internal_error';
+
+/**
+ * ImportStatus
+ *
+ * Lifecycle of one resume import (docs/adr/0011-...md "import lifecycle"). `QUEUED` ->
+ * `PROCESSING` is claimed atomically by the worker via a conditional `UPDATE` that ALSO matches
+ * an already-`PROCESSING` row whose `processing_lease_expires_at` has passed -- a lease, not a
+ * one-way latch (round-1 independent review "Finding 2"): a worker that crashes after claiming a
+ * row leaves it reclaimable once the lease expires, rather than stuck in `PROCESSING` forever.
+ * Redelivery of the SAME task while the lease is still active is never silently treated as a
+ * no-op success -- it raises `ImportLeaseActiveError`, which the Celery task wrapper turns into
+ * an explicit, bounded retry. `READY_FOR_REVIEW` -> `FINALIZED` is claimed the same way by
+ * `finalize_resume_import` (a single-request, non-leased claim -- finalize has no long-running
+ * work between claim and commit, so no lease is needed there), which is how two concurrent
+ * finalize requests resolve to exactly one winner without a separate idempotency-key table.
+ */
+export type ImportStatus = 'queued' | 'processing' | 'ready_for_review' | 'finalized' | 'failed';
 
 /**
  * LanguageFactValue
@@ -490,6 +631,48 @@ export type LocationPreferenceValue = {
      * Workplacetypes
      */
     workplaceTypes?: Array<WorkplaceType>;
+};
+
+/**
+ * MasterResumeResponse
+ */
+export type MasterResumeResponse = {
+    /**
+     * Createdat
+     */
+    createdAt: string;
+    /**
+     * Factids
+     */
+    factIds: Array<string>;
+    /**
+     * Generatedby
+     */
+    generatedBy: string;
+    /**
+     * Headline
+     */
+    headline: string | null;
+    /**
+     * Profileversion
+     */
+    profileVersion: number;
+    /**
+     * Resumeid
+     */
+    resumeId: string;
+    /**
+     * Resumeversionid
+     */
+    resumeVersionId: string;
+    /**
+     * Summary
+     */
+    summary: string | null;
+    /**
+     * Version
+     */
+    version: number;
 };
 
 /**
@@ -694,6 +877,103 @@ export type ReplaceProfileFactRequest = {
 };
 
 /**
+ * ResumeImportCandidateResponse
+ */
+export type ResumeImportCandidateResponse = {
+    /**
+     * Candidatekind
+     */
+    candidateKind: string;
+    /**
+     * Confidence
+     */
+    confidence: number;
+    /**
+     * Createdat
+     */
+    createdAt: string;
+    /**
+     * Id
+     */
+    id: string;
+    reviewState: CandidateReviewState;
+    /**
+     * Sourceexcerpt
+     */
+    sourceExcerpt?: string | null;
+    /**
+     * Value
+     */
+    value: ({
+        kind: 'experience';
+    } & ExperienceFactValue) | ({
+        kind: 'education';
+    } & EducationFactValue) | ({
+        kind: 'skill';
+    } & SkillFactValue) | ({
+        kind: 'certification';
+    } & CertificationFactValue) | ({
+        kind: 'language';
+    } & LanguageFactValue) | ({
+        kind: 'project';
+    } & ProjectFactValue) | ({
+        kind: 'link';
+    } & LinkFactValue) | ({
+        kind: 'preference';
+    } & PreferenceFactValue) | ({
+        kind: 'work_authorization';
+    } & WorkAuthorizationFactValue) | ({
+        kind: 'headline';
+    } & HeadlineCandidateValue) | ({
+        kind: 'summary';
+    } & SummaryCandidateValue);
+};
+
+/**
+ * ResumeImportResponse
+ */
+export type ResumeImportResponse = {
+    /**
+     * Bytesize
+     */
+    byteSize: number;
+    /**
+     * Candidates
+     */
+    candidates?: Array<ResumeImportCandidateResponse> | null;
+    /**
+     * Createdat
+     */
+    createdAt: string;
+    failureCode?: ImportFailureCode | null;
+    /**
+     * Finalizedresumeid
+     */
+    finalizedResumeId?: string | null;
+    /**
+     * Finalizedresumeversionid
+     */
+    finalizedResumeVersionId?: string | null;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Mediatype
+     */
+    mediaType: string;
+    /**
+     * Originalfilename
+     */
+    originalFilename: string;
+    status: ImportStatus;
+    /**
+     * Updatedat
+     */
+    updatedAt: string;
+};
+
+/**
  * RetractProfileFactRequest
  */
 export type RetractProfileFactRequest = {
@@ -702,6 +982,11 @@ export type RetractProfileFactRequest = {
      */
     expectedProfileVersion: number;
 };
+
+/**
+ * ReviewDecisionKind
+ */
+export type ReviewDecisionKind = 'accept' | 'reject' | 'edit_accept';
 
 /**
  * SalaryPeriod
@@ -764,6 +1049,22 @@ export type SkillFactValue = {
      * Yearsexperience
      */
     yearsExperience?: number | null;
+};
+
+/**
+ * SummaryCandidateValue
+ *
+ * The WP1.3-only top-level `summary` candidate shape -- see `HeadlineCandidateValue`.
+ */
+export type SummaryCandidateValue = {
+    /**
+     * Kind
+     */
+    kind?: 'summary';
+    /**
+     * Text
+     */
+    text: string;
 };
 
 /**
@@ -1693,6 +1994,172 @@ export type RetractProfileFactResponses = {
 };
 
 export type RetractProfileFactResponse = RetractProfileFactResponses[keyof RetractProfileFactResponses];
+
+export type CreateResumeImportData = {
+    body: BodyCreateResumeImport;
+    path?: never;
+    query?: never;
+    url: '/api/v1/me/resume-imports';
+};
+
+export type CreateResumeImportErrors = {
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Conta desativada.
+     */
+    403: ErrorResponse;
+    /**
+     * Conta ainda não inicializada.
+     */
+    404: ErrorResponse;
+    /**
+     * O arquivo enviado não pôde ser aceito.
+     */
+    422: ErrorResponse;
+    /**
+     * Muitas requisições.
+     */
+    429: ErrorResponse;
+};
+
+export type CreateResumeImportError = CreateResumeImportErrors[keyof CreateResumeImportErrors];
+
+export type CreateResumeImportResponses = {
+    /**
+     * Successful Response
+     */
+    202: ResumeImportResponse;
+};
+
+export type CreateResumeImportResponse = CreateResumeImportResponses[keyof CreateResumeImportResponses];
+
+export type GetResumeImportData = {
+    body?: never;
+    path: {
+        /**
+         * Import Id
+         */
+        import_id: string;
+    };
+    query?: never;
+    url: '/api/v1/me/resume-imports/{import_id}';
+};
+
+export type GetResumeImportErrors = {
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Conta desativada.
+     */
+    403: ErrorResponse;
+    /**
+     * Importação de currículo não encontrada.
+     */
+    404: ErrorResponse;
+    /**
+     * Dados inválidos.
+     */
+    422: ErrorResponse;
+};
+
+export type GetResumeImportError = GetResumeImportErrors[keyof GetResumeImportErrors];
+
+export type GetResumeImportResponses = {
+    /**
+     * Successful Response
+     */
+    200: ResumeImportResponse;
+};
+
+export type GetResumeImportResponse = GetResumeImportResponses[keyof GetResumeImportResponses];
+
+export type FinalizeResumeImportData = {
+    body: FinalizeResumeImportCommand;
+    path: {
+        /**
+         * Import Id
+         */
+        import_id: string;
+    };
+    query?: never;
+    url: '/api/v1/me/resume-imports/{import_id}/finalize';
+};
+
+export type FinalizeResumeImportErrors = {
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Conta desativada.
+     */
+    403: ErrorResponse;
+    /**
+     * Importação de currículo não encontrada.
+     */
+    404: ErrorResponse;
+    /**
+     * O perfil mudou ou a importação não está pronta.
+     */
+    409: ErrorResponse;
+    /**
+     * Dados inválidos.
+     */
+    422: ErrorResponse;
+    /**
+     * Muitas requisições.
+     */
+    429: ErrorResponse;
+};
+
+export type FinalizeResumeImportError = FinalizeResumeImportErrors[keyof FinalizeResumeImportErrors];
+
+export type FinalizeResumeImportResponses = {
+    /**
+     * Successful Response
+     */
+    200: FinalizeResumeImportResponse;
+};
+
+export type FinalizeResumeImportResponse2 = FinalizeResumeImportResponses[keyof FinalizeResumeImportResponses];
+
+export type GetMasterResumeData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/me/resumes/master';
+};
+
+export type GetMasterResumeErrors = {
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Conta desativada.
+     */
+    403: ErrorResponse;
+    /**
+     * Nenhum currículo mestre.
+     */
+    404: ErrorResponse;
+};
+
+export type GetMasterResumeError = GetMasterResumeErrors[keyof GetMasterResumeErrors];
+
+export type GetMasterResumeResponses = {
+    /**
+     * Successful Response
+     */
+    200: MasterResumeResponse;
+};
+
+export type GetMasterResumeResponse = GetMasterResumeResponses[keyof GetMasterResumeResponses];
 
 export type RevokeAllSessionsData = {
     body?: never;

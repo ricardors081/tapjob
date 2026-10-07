@@ -39,6 +39,16 @@ x-backend-env: &backend-env
   DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL -- staging and production never share a database}
   REDIS_URL: ${REDIS_URL:?set REDIS_URL}
   SENTRY_DSN: ${SENTRY_DSN:-}
+  # WP1.3 resume-import object storage (docs/adr/0011-resume-import.md "object storage", round-1
+  # independent review "Finding 1"): required here, not optional -- staging/production must never
+  # start without real R2 configured, and `tapjob_api.resume_import.storage.create_storage_adapter`
+  # ALSO fails fast at the application layer if these are ever unset or only partially set, as a
+  # second, independent gate. `docker compose`'s own `:?` substitution failure is the FIRST gate,
+  # catching a missing value before the container even starts.
+  R2_ENDPOINT_URL: ${R2_ENDPOINT_URL:?set R2_ENDPOINT_URL}
+  R2_BUCKET: ${R2_BUCKET:?set R2_BUCKET}
+  R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:?set R2_ACCESS_KEY_ID}
+  R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:?set R2_SECRET_ACCESS_KEY}
 
 services:
   # PostgreSQL/Redis are listed here only for the topology this checkpoint documents (docs/
