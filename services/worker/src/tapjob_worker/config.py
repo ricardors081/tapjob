@@ -12,3 +12,6 @@ class WorkerSettings(RuntimeSettings):
 
     redis_url: RedisDsn
     database_url: PostgresDsn
+
+    # WP2.1-B hosted ATS job sources configuration JSON string (or unset for zero sources)
+    hosted_ats_sources: str | None = None

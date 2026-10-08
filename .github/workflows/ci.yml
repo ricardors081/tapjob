@@ -150,7 +150,7 @@ jobs:
       - name: Build images
         run: docker compose -f infra/compose.yaml build
       - name: Start stack
-        run: docker compose -f infra/compose.yaml up --detach --wait --wait-timeout 180 postgres redis api worker
+        run: docker compose -f infra/compose.yaml up --detach --wait --wait-timeout 180 postgres redis api worker beat
       - name: Health and readiness checks through published port
         run: |
           set -a; . infra/.env; set +a
@@ -212,10 +212,10 @@ jobs:
       - name: Confirm the resolved image is the canonical repository at the given digest
         run: |
           images=$(docker compose -f infra/compose.deploy.yaml config --format json | \
-            python3 -c "import json,sys; d=json.load(sys.stdin); print('\n'.join(d['services'][s]['image'] for s in ('api','worker','migrate')))")
+            python3 -c "import json,sys; d=json.load(sys.stdin); print('\n'.join(d['services'][s]['image'] for s in ('api','worker','migrate','beat')))")
           unique_count=$(echo "$images" | sort -u | wc -l)
           if [ "$unique_count" -ne 1 ]; then
-            echo "api/worker/migrate must all resolve to the exact same image reference" >&2
+            echo "api/worker/migrate/beat must all resolve to the exact same image reference" >&2
             echo "$images" >&2
             exit 1
           fi

@@ -169,8 +169,29 @@ def classify_workplace_type(
     title: str,
     description: str,
     location: str | None = None,
+    workplace_hint: str | None = None,
 ) -> JobWorkplaceType:
-    """Classify workplace type from title, location and description keywords."""
+    """Classify workplace type from explicit provider hint, title, location,
+    and description keywords.
+    """
+    if workplace_hint and workplace_hint.strip():
+        hint_clean = workplace_hint.strip().lower()
+        if _HYBRID_RE.search(hint_clean) or "hybrid" in hint_clean or "híbrido" in hint_clean:
+            return JobWorkplaceType.HYBRID
+        if _REMOTE_RE.search(hint_clean) or "remote" in hint_clean or "remoto" in hint_clean:
+            return JobWorkplaceType.REMOTE
+        onsite_terms = (
+            "on-site",
+            "onsite",
+            "in-office",
+            "inoffice",
+            "in-person",
+            "inperson",
+            "presencial",
+        )
+        if _ONSITE_RE.search(hint_clean) or any(k in hint_clean for k in onsite_terms):
+            return JobWorkplaceType.ON_SITE
+
     combined_header = f"{title} {location or ''}".lower()
 
     # Title/location has higher precedence

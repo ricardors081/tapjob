@@ -41,6 +41,9 @@ class DiscoveredJob:
     title: str
     company_name: str
     posted_at: datetime | None
+    location_raw: str | None = None
+    additional_locations_raw: tuple[str, ...] = ()
+    workplace_type_hint: str | None = None
 
     def __post_init__(self) -> None:
         normalize_utc_field(self, "posted_at", optional=True)

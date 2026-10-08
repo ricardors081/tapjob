@@ -32,6 +32,7 @@ x-database-env: &database-env
   R2_BUCKET: ${R2_BUCKET:-}
   R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
   R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+  HOSTED_ATS_SOURCES: ${HOSTED_ATS_SOURCES:-}
 
 x-resume-storage-volume: &resume-storage-volume
   - resume-storage-data:/data/resume-imports
@@ -114,6 +115,18 @@ services:
       timeout: 15s
       retries: 3
       start_period: 20s
+
+  beat:
+    <<: *backend
+    command: ["celery", "-A", "tapjob_worker.main:app", "beat", "--loglevel", "${LOG_LEVEL:?}"]
+    environment:
+      <<: *database-env
+    volumes: *resume-storage-volume
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
 
 volumes:
   postgres-data:

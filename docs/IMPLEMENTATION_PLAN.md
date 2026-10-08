@@ -244,10 +244,14 @@ Divided into two sequential checkpoints:
   - Authenticated safe URL intake (`POST /api/v1/jobs/intake/url`, 15 req/h rate limit);
   - Authenticated job detail retrieval (`GET /api/v1/jobs/{jobId}`).
   - See `docs/adr/0012-jobs-domain-manual-intake.md` (D-054).
-- **WP2.1-B — External Hosted ATS Connectors & Ingestion Scheduler (PENDING AUTHORIZATION):**
-  - Greenhouse, Lever, Ashby adapter implementations conforming to `JobSource` port;
-  - Ingestion scheduler and periodic Beat tasks;
-  - Connector capability registry and source health tracking.
+- **WP2.1-B — External Hosted ATS Connectors & Ingestion Scheduler (IMPLEMENTED):**
+  - Greenhouse, Lever, Ashby adapter implementations conforming strictly to `JobSource` port protocol;
+  - Base ATS HTTP client with deadline budgeting, 5s connect / 10s read bounded timeouts, 5 MiB payload limits, `trust_env=False`, and normalized `PortError` mapping;
+  - Connector capability registry (`JobSourceRegistry`) and source health tracking;
+  - Ingestion pipeline (`ingest_job_source`) persisting global discovery into `Company`, `Job` (`created_by_user_id=None`), and `JobOrigin` (`(provider, external_id)`) with corporate domain sanitization;
+  - Liveness consensus: absence reconciliation tracking missing jobs (`consecutive_not_found_count`) and transitioning to `CLOSED` after 3-strike threshold;
+  - Celery worker tasks `jobs.ingest_source` and periodic `jobs.sweep_scheduled_ingestion` in `tapjob_worker`.
+  - See `docs/adr/0013-external-ats-connectors-ingestion.md` (D-055).
 
 ### Reuse plan
 - ADAPT JobBot's normalization utilities, text cleanup, and workplace keywords (`docs/SOURCE_REUSE_LEDGER.md`).
