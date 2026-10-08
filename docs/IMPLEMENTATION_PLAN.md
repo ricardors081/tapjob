@@ -233,26 +233,26 @@ API surface).
 
 ## WP2.1 — Jobs Domain & Connector Framework
 
-### Deliver
-- Company;
-- Job;
-- JobSource;
-- connector capability registry;
-- scheduler;
-- ingestion;
-- dedupe;
-- source health.
+Divided into two sequential checkpoints:
+- **WP2.1-A — Jobs Domain, Manual Intake & Normalization Foundation (IMPLEMENTED):**
+  - Canonical `Company`, `Job`, `JobOrigin`, `IdempotencyKey` entities (migration `0005`);
+  - Strong identity via `(provider, external_id)` with nullable `external_id` for manual intakes;
+  - Corporate domain identity protection against multi-tenant ATS hostnames;
+  - Deterministic text normalization, workplace type classification, and non-unique similarity fingerprint;
+  - `SafeHttpClient` SSRF security boundary (DNS pre-resolution, IP allowlist, connection pinning, SNI/TLS preservation, 2 MiB streaming decoded limit, manual redirects);
+  - Authenticated manual paste intake (`POST /api/v1/jobs/intake/paste`, 30 req/h rate limit);
+  - Authenticated safe URL intake (`POST /api/v1/jobs/intake/url`, 15 req/h rate limit);
+  - Authenticated job detail retrieval (`GET /api/v1/jobs/{jobId}`).
+  - See `docs/adr/0012-jobs-domain-manual-intake.md` (D-054).
+- **WP2.1-B — External Hosted ATS Connectors & Ingestion Scheduler (PENDING AUTHORIZATION):**
+  - Greenhouse, Lever, Ashby adapter implementations conforming to `JobSource` port;
+  - Ingestion scheduler and periodic Beat tasks;
+  - Connector capability registry and source health tracking.
 
 ### Reuse plan
-- IMPORT/ADAPT JobBot's Python `JobSource` contract, normalization utilities and Greenhouse/Lever/Ashby adapters as primary implementation.
-- PORT JobSync timeout/pagination/rate-limit edge cases and connector tests.
-- Use Appliable dedupe cases as supplemental fixtures, not a second ingestion stack.
-
-### First adapters
-- Greenhouse;
-- Lever;
-- Ashby;
-- manual URL/paste import.
+- ADAPT JobBot's normalization utilities, text cleanup, and workplace keywords (`docs/SOURCE_REUSE_LEDGER.md`).
+- PORT JobSync candidate dedupe heuristics and test cases.
+- PORT Appliable dedupe cases as supplemental fixtures.
 
 ---
 

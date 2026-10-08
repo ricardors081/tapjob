@@ -66,6 +66,19 @@ class ErrorCode(StrEnum):
     TEXT_NOT_EXTRACTABLE = "TEXT_NOT_EXTRACTABLE"
     RESUME_IMPORT_NOT_FOUND = "RESUME_IMPORT_NOT_FOUND"
     RESUME_IMPORT_NOT_READY = "RESUME_IMPORT_NOT_READY"
+    # WP2.1-A — jobs manual intake & SSRF boundaries
+    JOB_TEXT_TOO_SHORT = "JOB_TEXT_TOO_SHORT"
+    JOB_TEXT_TOO_LONG = "JOB_TEXT_TOO_LONG"
+    JOB_URL_INVALID = "JOB_URL_INVALID"
+    JOB_URL_DESTINATION_FORBIDDEN = "JOB_URL_DESTINATION_FORBIDDEN"
+    JOB_URL_UNREACHABLE = "JOB_URL_UNREACHABLE"
+    JOB_URL_TLS_FAILED = "JOB_URL_TLS_FAILED"
+    JOB_URL_TOO_LARGE = "JOB_URL_TOO_LARGE"
+    JOB_CONTENT_TYPE_UNSUPPORTED = "JOB_CONTENT_TYPE_UNSUPPORTED"
+    JOB_PAGE_REQUIRES_MANUAL_PASTE = "JOB_PAGE_REQUIRES_MANUAL_PASTE"
+    JOB_NOT_FOUND = "JOB_NOT_FOUND"
+    IDEMPOTENCY_KEY_PAYLOAD_MISMATCH = "IDEMPOTENCY_KEY_PAYLOAD_MISMATCH"
+    CONCURRENT_REQUEST_IN_PROGRESS = "CONCURRENT_REQUEST_IN_PROGRESS"
 
 
 # A status not explicitly raised anywhere yet (e.g. by a future connector/port) still needs a
@@ -128,6 +141,28 @@ _DEFAULT_MESSAGE_BY_CODE: dict[ErrorCode, str] = {
     ),
     ErrorCode.RESUME_IMPORT_NOT_FOUND: "Importação de currículo não encontrada.",
     ErrorCode.RESUME_IMPORT_NOT_READY: "Esta importação ainda não está pronta para revisão.",
+    ErrorCode.JOB_TEXT_TOO_SHORT: "O texto da descrição da vaga é muito curto.",
+    ErrorCode.JOB_TEXT_TOO_LONG: "O texto da descrição da vaga excede o tamanho máximo permitido.",
+    ErrorCode.JOB_URL_INVALID: "A URL informada para a vaga é inválida.",
+    ErrorCode.JOB_URL_DESTINATION_FORBIDDEN: "O destino da URL informada não é permitido.",
+    ErrorCode.JOB_URL_UNREACHABLE: "Não foi possível conectar ao servidor da URL informada.",
+    ErrorCode.JOB_URL_TLS_FAILED: (
+        "Falha na validação do certificado de segurança (TLS/SSL) da URL."
+    ),
+    ErrorCode.JOB_URL_TOO_LARGE: "A página da vaga excede o limite máximo de tamanho permitido.",
+    ErrorCode.JOB_CONTENT_TYPE_UNSUPPORTED: (
+        "O tipo de conteúdo retornado pela URL não é suportado."
+    ),
+    ErrorCode.JOB_PAGE_REQUIRES_MANUAL_PASTE: (
+        "Esta página depende de execução dinâmica de JavaScript. Cole a descrição manualmente."
+    ),
+    ErrorCode.JOB_NOT_FOUND: "Vaga não encontrada.",
+    ErrorCode.IDEMPOTENCY_KEY_PAYLOAD_MISMATCH: (
+        "A chave de idempotência já foi utilizada com outro conteúdo nesta operação."
+    ),
+    ErrorCode.CONCURRENT_REQUEST_IN_PROGRESS: (
+        "Uma requisição com esta chave de idempotência já está em andamento. Aguarde."
+    ),
 }
 
 

@@ -105,3 +105,29 @@ def test_downgrading_0004_with_a_resume_import_sourced_profile_fact_fails_fast()
             session.execute(delete(User).where(User.id == user_id))
             session.commit()
         engine.dispose()
+
+
+@pytest.mark.integration
+def test_migration_0005_upgrade_downgrade_cycle() -> None:
+    """Explicit upgrade -> downgrade -> upgrade cycle for migration 0005 (jobs foundation)."""
+    config = _alembic_config()
+    settings = ApiSettings()
+    engine = create_engine(str(settings.database_url))
+    try:
+        command.upgrade(config, "0005")
+        tables = inspect(engine).get_table_names()
+        for t in ("companies", "jobs", "job_origins", "idempotency_keys"):
+            assert t in tables
+
+        command.downgrade(config, "0004")
+        tables_after_downgrade = inspect(engine).get_table_names()
+        for t in ("companies", "jobs", "job_origins", "idempotency_keys"):
+            assert t not in tables_after_downgrade
+
+        command.upgrade(config, "head")
+        tables_after_reupgrade = inspect(engine).get_table_names()
+        for t in ("companies", "jobs", "job_origins", "idempotency_keys"):
+            assert t in tables_after_reupgrade
+    finally:
+        command.upgrade(config, "head")
+        engine.dispose()

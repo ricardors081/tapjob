@@ -148,6 +148,38 @@ export type CertificationFactValue = {
 };
 
 /**
+ * CompanyDto
+ *
+ * Canonical representation of an organization.
+ */
+export type CompanyDto = {
+    /**
+     * Createdat
+     */
+    createdAt: string;
+    /**
+     * Domain
+     */
+    domain?: string | null;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Namenormalized
+     */
+    nameNormalized: string;
+    /**
+     * Updatedat
+     */
+    updatedAt: string;
+};
+
+/**
  * ConsentDecision
  */
 export type ConsentDecision = 'granted' | 'withdrawn';
@@ -342,7 +374,7 @@ export type Environment = 'local' | 'development' | 'staging' | 'production';
  *
  * Machine-readable error vocabulary. Clients localize/branch on this, never on ``message``.
  */
-export type ErrorCode = 'INVALID_REQUEST' | 'VALIDATION_FAILED' | 'AUTHENTICATION_REQUIRED' | 'PERMISSION_DENIED' | 'RESOURCE_NOT_FOUND' | 'METHOD_NOT_ALLOWED' | 'CONFLICT' | 'RATE_LIMITED' | 'SERVICE_UNAVAILABLE' | 'UPSTREAM_FAILED' | 'UPSTREAM_TIMEOUT' | 'INVALID_CURSOR' | 'INTERNAL_ERROR' | 'AUTH_TOKEN_MISSING' | 'AUTH_TOKEN_INVALID' | 'AUTH_TOKEN_REVOKED' | 'ACCOUNT_NOT_BOOTSTRAPPED' | 'ACCOUNT_DISABLED' | 'REAUTHENTICATION_REQUIRED' | 'DEVICE_NOT_FOUND' | 'IDENTITY_CONFLICT' | 'PROFILE_VERSION_CONFLICT' | 'PROFILE_FACT_NOT_FOUND' | 'PROFILE_FACT_ALREADY_RETRACTED' | 'PROFILE_VERSION_NOT_FOUND' | 'UNSUPPORTED_DOCUMENT_TYPE' | 'DOCUMENT_TOO_LARGE' | 'MALFORMED_DOCUMENT' | 'ENCRYPTED_DOCUMENT' | 'TEXT_NOT_EXTRACTABLE' | 'RESUME_IMPORT_NOT_FOUND' | 'RESUME_IMPORT_NOT_READY';
+export type ErrorCode = 'INVALID_REQUEST' | 'VALIDATION_FAILED' | 'AUTHENTICATION_REQUIRED' | 'PERMISSION_DENIED' | 'RESOURCE_NOT_FOUND' | 'METHOD_NOT_ALLOWED' | 'CONFLICT' | 'RATE_LIMITED' | 'SERVICE_UNAVAILABLE' | 'UPSTREAM_FAILED' | 'UPSTREAM_TIMEOUT' | 'INVALID_CURSOR' | 'INTERNAL_ERROR' | 'AUTH_TOKEN_MISSING' | 'AUTH_TOKEN_INVALID' | 'AUTH_TOKEN_REVOKED' | 'ACCOUNT_NOT_BOOTSTRAPPED' | 'ACCOUNT_DISABLED' | 'REAUTHENTICATION_REQUIRED' | 'DEVICE_NOT_FOUND' | 'IDENTITY_CONFLICT' | 'PROFILE_VERSION_CONFLICT' | 'PROFILE_FACT_NOT_FOUND' | 'PROFILE_FACT_ALREADY_RETRACTED' | 'PROFILE_VERSION_NOT_FOUND' | 'UNSUPPORTED_DOCUMENT_TYPE' | 'DOCUMENT_TOO_LARGE' | 'MALFORMED_DOCUMENT' | 'ENCRYPTED_DOCUMENT' | 'TEXT_NOT_EXTRACTABLE' | 'RESUME_IMPORT_NOT_FOUND' | 'RESUME_IMPORT_NOT_READY' | 'JOB_TEXT_TOO_SHORT' | 'JOB_TEXT_TOO_LONG' | 'JOB_URL_INVALID' | 'JOB_URL_DESTINATION_FORBIDDEN' | 'JOB_URL_UNREACHABLE' | 'JOB_URL_TLS_FAILED' | 'JOB_URL_TOO_LARGE' | 'JOB_CONTENT_TYPE_UNSUPPORTED' | 'JOB_PAGE_REQUIRES_MANUAL_PASTE' | 'JOB_NOT_FOUND' | 'IDEMPOTENCY_KEY_PAYLOAD_MISMATCH' | 'CONCURRENT_REQUEST_IN_PROGRESS';
 
 /**
  * ErrorResponse
@@ -558,6 +590,196 @@ export type ImportFailureCode = 'unsupported_document_type' | 'document_too_larg
 export type ImportStatus = 'queued' | 'processing' | 'ready_for_review' | 'finalized' | 'failed';
 
 /**
+ * JobOriginDto
+ *
+ * Observation and discovery origin of a job.
+ */
+export type JobOriginDto = {
+    /**
+     * Canonicalurl
+     */
+    canonicalUrl?: string | null;
+    /**
+     * Consecutivenotfoundcount
+     */
+    consecutiveNotFoundCount: number;
+    /**
+     * Createdat
+     */
+    createdAt: string;
+    /**
+     * Externalid
+     */
+    externalId?: string | null;
+    /**
+     * Firstobservedat
+     */
+    firstObservedAt: string;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Jobid
+     */
+    jobId: string;
+    /**
+     * Lastobservedat
+     */
+    lastObservedAt: string;
+    observationStatus: ObservationStatus;
+    /**
+     * Provenancemetadata
+     */
+    provenanceMetadata: {
+        [key: string]: unknown;
+    };
+    /**
+     * Provider
+     */
+    provider: string;
+    /**
+     * Sourceurl
+     */
+    sourceUrl?: string | null;
+    /**
+     * Updatedat
+     */
+    updatedAt: string;
+};
+
+/**
+ * JobPasteIntakeRequest
+ *
+ * Payload for manual paste intake.
+ */
+export type JobPasteIntakeRequest = {
+    /**
+     * Companyname
+     */
+    companyName: string;
+    /**
+     * Description
+     */
+    description: string;
+    /**
+     * Locationraw
+     */
+    locationRaw?: string | null;
+    /**
+     * Sourceurl
+     */
+    sourceUrl?: string | null;
+    /**
+     * Title
+     */
+    title: string;
+};
+
+/**
+ * JobProvenanceSummary
+ *
+ * Bounded, typed breakdown of field provenance.
+ */
+export type JobProvenanceSummary = {
+    company: ProvenanceFieldSource;
+    description: ProvenanceFieldSource;
+    location?: ProvenanceFieldSource | null;
+    title: ProvenanceFieldSource;
+    workplaceType: ProvenanceFieldSource;
+};
+
+/**
+ * JobResponse
+ *
+ * Canonical job posting wire representation.
+ */
+export type JobResponse = {
+    company: CompanyDto;
+    /**
+     * Companyid
+     */
+    companyId: string;
+    /**
+     * Createdat
+     */
+    createdAt: string;
+    /**
+     * Descriptioncleaned
+     */
+    descriptionCleaned: string;
+    /**
+     * Descriptionraw
+     */
+    descriptionRaw: string;
+    /**
+     * Expiresat
+     */
+    expiresAt?: string | null;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Locationnormalized
+     */
+    locationNormalized?: string | null;
+    /**
+     * Locationraw
+     */
+    locationRaw?: string | null;
+    /**
+     * Origins
+     */
+    origins?: Array<JobOriginDto>;
+    provenanceSummary: JobProvenanceSummary;
+    /**
+     * Similarityfingerprint
+     */
+    similarityFingerprint: string;
+    status: JobStatus;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Titlenormalized
+     */
+    titleNormalized: string;
+    /**
+     * Updatedat
+     */
+    updatedAt: string;
+    workplaceType: JobWorkplaceType;
+};
+
+/**
+ * JobStatus
+ *
+ * Canonical lifecycle and market liveness state of a Job.
+ */
+export type JobStatus = 'active' | 'unavailable' | 'closed' | 'expired' | 'unknown';
+
+/**
+ * JobUrlIntakeRequest
+ *
+ * Payload for safe URL intake.
+ */
+export type JobUrlIntakeRequest = {
+    /**
+     * Url
+     */
+    url: string;
+};
+
+/**
+ * JobWorkplaceType
+ *
+ * Standardized workplace arrangement.
+ */
+export type JobWorkplaceType = 'remote' | 'hybrid' | 'on_site' | 'unknown';
+
+/**
  * LanguageFactValue
  *
  * `proficiency` is free-form, bounded text -- never forced into a CEFR scale the user never
@@ -674,6 +896,13 @@ export type MasterResumeResponse = {
      */
     version: number;
 };
+
+/**
+ * ObservationStatus
+ *
+ * Observation status for an individual job origin.
+ */
+export type ObservationStatus = 'active' | 'unavailable' | 'closed' | 'unknown';
 
 /**
  * PreferenceFactValue
@@ -818,6 +1047,13 @@ export type ProjectFactValue = {
      */
     url?: string | null;
 };
+
+/**
+ * ProvenanceFieldSource
+ *
+ * Origin category of a normalized field value.
+ */
+export type ProvenanceFieldSource = 'source_declared' | 'heuristic_extracted' | 'user_direct';
 
 /**
  * ReadinessResponse
@@ -1303,6 +1539,206 @@ export type BootstrapAccountResponses = {
 };
 
 export type BootstrapAccountResponse = BootstrapAccountResponses[keyof BootstrapAccountResponses];
+
+export type IntakeJobPasteData = {
+    body: JobPasteIntakeRequest;
+    headers?: {
+        /**
+         * Idempotency-Key
+         */
+        'Idempotency-Key'?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/jobs/intake/paste';
+};
+
+export type IntakeJobPasteErrors = {
+    /**
+     * Requisição inválida.
+     */
+    400: ErrorResponse;
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Acesso não autorizado ou destino proibido.
+     */
+    403: ErrorResponse;
+    /**
+     * Recurso não encontrado.
+     */
+    404: ErrorResponse;
+    /**
+     * Conflito de concorrência ou operação em andamento.
+     */
+    409: ErrorResponse;
+    /**
+     * Conteúdo da resposta excede o limite máximo.
+     */
+    413: ErrorResponse;
+    /**
+     * Tipo de conteúdo não suportado.
+     */
+    415: ErrorResponse;
+    /**
+     * Validação de dados ou payload inválido.
+     */
+    422: ErrorResponse;
+    /**
+     * Limite de requisições excedido.
+     */
+    429: ErrorResponse;
+    /**
+     * Servidor de destino inalcançável ou falha TLS.
+     */
+    502: ErrorResponse;
+};
+
+export type IntakeJobPasteError = IntakeJobPasteErrors[keyof IntakeJobPasteErrors];
+
+export type IntakeJobPasteResponses = {
+    /**
+     * Successful Response
+     */
+    201: JobResponse;
+};
+
+export type IntakeJobPasteResponse = IntakeJobPasteResponses[keyof IntakeJobPasteResponses];
+
+export type IntakeJobUrlData = {
+    body: JobUrlIntakeRequest;
+    headers?: {
+        /**
+         * Idempotency-Key
+         */
+        'Idempotency-Key'?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/jobs/intake/url';
+};
+
+export type IntakeJobUrlErrors = {
+    /**
+     * Requisição inválida.
+     */
+    400: ErrorResponse;
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Acesso não autorizado ou destino proibido.
+     */
+    403: ErrorResponse;
+    /**
+     * Recurso não encontrado.
+     */
+    404: ErrorResponse;
+    /**
+     * Conflito de concorrência ou operação em andamento.
+     */
+    409: ErrorResponse;
+    /**
+     * Conteúdo da resposta excede o limite máximo.
+     */
+    413: ErrorResponse;
+    /**
+     * Tipo de conteúdo não suportado.
+     */
+    415: ErrorResponse;
+    /**
+     * Validação de dados ou payload inválido.
+     */
+    422: ErrorResponse;
+    /**
+     * Limite de requisições excedido.
+     */
+    429: ErrorResponse;
+    /**
+     * Servidor de destino inalcançável ou falha TLS.
+     */
+    502: ErrorResponse;
+};
+
+export type IntakeJobUrlError = IntakeJobUrlErrors[keyof IntakeJobUrlErrors];
+
+export type IntakeJobUrlResponses = {
+    /**
+     * Successful Response
+     */
+    201: JobResponse;
+};
+
+export type IntakeJobUrlResponse = IntakeJobUrlResponses[keyof IntakeJobUrlResponses];
+
+export type GetJobByIdData = {
+    body?: never;
+    path: {
+        /**
+         * Job Id
+         */
+        job_id: string;
+    };
+    query?: never;
+    url: '/api/v1/jobs/{job_id}';
+};
+
+export type GetJobByIdErrors = {
+    /**
+     * Requisição inválida.
+     */
+    400: ErrorResponse;
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Acesso não autorizado ou destino proibido.
+     */
+    403: ErrorResponse;
+    /**
+     * Recurso não encontrado.
+     */
+    404: ErrorResponse;
+    /**
+     * Conflito de concorrência ou operação em andamento.
+     */
+    409: ErrorResponse;
+    /**
+     * Conteúdo da resposta excede o limite máximo.
+     */
+    413: ErrorResponse;
+    /**
+     * Tipo de conteúdo não suportado.
+     */
+    415: ErrorResponse;
+    /**
+     * Validação de dados ou payload inválido.
+     */
+    422: ErrorResponse;
+    /**
+     * Limite de requisições excedido.
+     */
+    429: ErrorResponse;
+    /**
+     * Servidor de destino inalcançável ou falha TLS.
+     */
+    502: ErrorResponse;
+};
+
+export type GetJobByIdError = GetJobByIdErrors[keyof GetJobByIdErrors];
+
+export type GetJobByIdResponses = {
+    /**
+     * Successful Response
+     */
+    200: JobResponse;
+};
+
+export type GetJobByIdResponse = GetJobByIdResponses[keyof GetJobByIdResponses];
 
 export type GetCurrentUserData = {
     body?: never;

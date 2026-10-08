@@ -132,6 +132,7 @@ export default defineConfig([
     "**/dist/**",
     "**/.expo/**",
     "**/coverage/**",
+    "**/.kilo/**",
     "packages/design-tokens/generated/**",
     "packages/contracts/src/generated/**",
   ]),

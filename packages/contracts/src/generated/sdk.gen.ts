@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, formDataBodySerializer, type Options as Options2, type RequestResult, type TDataShape } from './client';
 import { client } from './client.gen';
-import type { AddProfileFactData, AddProfileFactErrors, AddProfileFactResponses, BootstrapAccountData, BootstrapAccountErrors, BootstrapAccountResponses, CancelAccountDeletionData, CancelAccountDeletionErrors, CancelAccountDeletionResponses, CreateResumeImportData, CreateResumeImportErrors, CreateResumeImportResponses, FinalizeResumeImportData, FinalizeResumeImportErrors, FinalizeResumeImportResponses, GetAccountDeletionRequestData, GetAccountDeletionRequestErrors, GetAccountDeletionRequestResponses, GetCareerProfileData, GetCareerProfileErrors, GetCareerProfileResponses, GetCurrentUserData, GetCurrentUserErrors, GetCurrentUserResponses, GetHealthData, GetHealthErrors, GetHealthResponses, GetMasterResumeData, GetMasterResumeErrors, GetMasterResumeResponses, GetProfileFactData, GetProfileFactErrors, GetProfileFactResponses, GetReadinessData, GetReadinessErrors, GetReadinessResponses, GetResumeImportData, GetResumeImportErrors, GetResumeImportResponses, GetTruthSnapshotData, GetTruthSnapshotErrors, GetTruthSnapshotResponses, ListConsentsData, ListConsentsErrors, ListConsentsResponses, ListProfileFactsData, ListProfileFactsErrors, ListProfileFactsResponses, RecordConsentData, RecordConsentErrors, RecordConsentResponses, RegisterDeviceData, RegisterDeviceErrors, RegisterDeviceResponses, ReplaceProfileFactData, ReplaceProfileFactErrors, ReplaceProfileFactResponses, RequestAccountDeletionData, RequestAccountDeletionErrors, RequestAccountDeletionResponses, RetractProfileFactData, RetractProfileFactErrors, RetractProfileFactResponses, RevokeAllSessionsData, RevokeAllSessionsErrors, RevokeAllSessionsResponses, RevokeDeviceData, RevokeDeviceErrors, RevokeDeviceResponses, UpdateCareerProfileData, UpdateCareerProfileErrors, UpdateCareerProfileResponses, UpdateCurrentUserData, UpdateCurrentUserErrors, UpdateCurrentUserResponses } from './types.gen';
+import type { AddProfileFactData, AddProfileFactErrors, AddProfileFactResponses, BootstrapAccountData, BootstrapAccountErrors, BootstrapAccountResponses, CancelAccountDeletionData, CancelAccountDeletionErrors, CancelAccountDeletionResponses, CreateResumeImportData, CreateResumeImportErrors, CreateResumeImportResponses, FinalizeResumeImportData, FinalizeResumeImportErrors, FinalizeResumeImportResponses, GetAccountDeletionRequestData, GetAccountDeletionRequestErrors, GetAccountDeletionRequestResponses, GetCareerProfileData, GetCareerProfileErrors, GetCareerProfileResponses, GetCurrentUserData, GetCurrentUserErrors, GetCurrentUserResponses, GetHealthData, GetHealthErrors, GetHealthResponses, GetJobByIdData, GetJobByIdErrors, GetJobByIdResponses, GetMasterResumeData, GetMasterResumeErrors, GetMasterResumeResponses, GetProfileFactData, GetProfileFactErrors, GetProfileFactResponses, GetReadinessData, GetReadinessErrors, GetReadinessResponses, GetResumeImportData, GetResumeImportErrors, GetResumeImportResponses, GetTruthSnapshotData, GetTruthSnapshotErrors, GetTruthSnapshotResponses, IntakeJobPasteData, IntakeJobPasteErrors, IntakeJobPasteResponses, IntakeJobUrlData, IntakeJobUrlErrors, IntakeJobUrlResponses, ListConsentsData, ListConsentsErrors, ListConsentsResponses, ListProfileFactsData, ListProfileFactsErrors, ListProfileFactsResponses, RecordConsentData, RecordConsentErrors, RecordConsentResponses, RegisterDeviceData, RegisterDeviceErrors, RegisterDeviceResponses, ReplaceProfileFactData, ReplaceProfileFactErrors, ReplaceProfileFactResponses, RequestAccountDeletionData, RequestAccountDeletionErrors, RequestAccountDeletionResponses, RetractProfileFactData, RetractProfileFactErrors, RetractProfileFactResponses, RevokeAllSessionsData, RevokeAllSessionsErrors, RevokeAllSessionsResponses, RevokeDeviceData, RevokeDeviceErrors, RevokeDeviceResponses, UpdateCareerProfileData, UpdateCareerProfileErrors, UpdateCareerProfileResponses, UpdateCurrentUserData, UpdateCurrentUserErrors, UpdateCurrentUserResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -30,6 +30,41 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
  * independent-review "account-created audit transaction").
  */
 export const bootstrapAccount = <ThrowOnError extends boolean = false>(options?: Options<BootstrapAccountData, ThrowOnError>): RequestResult<BootstrapAccountResponses, BootstrapAccountErrors, ThrowOnError> => (options?.client ?? client).post<BootstrapAccountResponses, BootstrapAccountErrors, ThrowOnError>({ url: '/api/v1/auth/bootstrap', ...options });
+
+/**
+ * Intake Job Paste
+ *
+ * Ingest a job description supplied via manual paste.
+ */
+export const intakeJobPaste = <ThrowOnError extends boolean = false>(options: Options<IntakeJobPasteData, ThrowOnError>): RequestResult<IntakeJobPasteResponses, IntakeJobPasteErrors, ThrowOnError> => (options.client ?? client).post<IntakeJobPasteResponses, IntakeJobPasteErrors, ThrowOnError>({
+    url: '/api/v1/jobs/intake/paste',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Intake Job Url
+ *
+ * Ingest a job by fetching and parsing an untrusted URL through SSRF safety boundaries.
+ */
+export const intakeJobUrl = <ThrowOnError extends boolean = false>(options: Options<IntakeJobUrlData, ThrowOnError>): RequestResult<IntakeJobUrlResponses, IntakeJobUrlErrors, ThrowOnError> => (options.client ?? client).post<IntakeJobUrlResponses, IntakeJobUrlErrors, ThrowOnError>({
+    url: '/api/v1/jobs/intake/url',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Get Job By Id
+ *
+ * Retrieve canonical job posting by ID.
+ */
+export const getJobById = <ThrowOnError extends boolean = false>(options: Options<GetJobByIdData, ThrowOnError>): RequestResult<GetJobByIdResponses, GetJobByIdErrors, ThrowOnError> => (options.client ?? client).get<GetJobByIdResponses, GetJobByIdErrors, ThrowOnError>({ url: '/api/v1/jobs/{job_id}', ...options });
 
 /**
  * Get Current User

@@ -33,6 +33,10 @@ _IDENTITY_TABLES = (
     "profile_facts",
     "career_profile_revisions",
     "career_profiles",
+    "idempotency_keys",
+    "job_origins",
+    "jobs",
+    "companies",
     "users",
 )
 _ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"

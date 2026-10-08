@@ -5,6 +5,7 @@ is the FastAPI dependency every route/service function uses to get a `Session` -
 """
 
 from collections.abc import Iterator
+from typing import cast
 
 from fastapi import Request
 from sqlalchemy import Engine
@@ -16,6 +17,10 @@ def create_session_factory(engine: Engine) -> sessionmaker[Session]:
     # in the same response after committing; the default expire-on-commit would force a second,
     # unnecessary round-trip to re-fetch them.
     return sessionmaker(bind=engine, expire_on_commit=False)
+
+
+def get_session_factory(request: Request) -> sessionmaker[Session]:
+    return cast(sessionmaker[Session], request.app.state.db_session_factory)
 
 
 def get_db_session(request: Request) -> Iterator[Session]:
