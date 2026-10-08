@@ -234,7 +234,7 @@ API surface).
 ## WP2.1 — Jobs Domain & Connector Framework
 
 Divided into two sequential checkpoints:
-- **WP2.1-A — Jobs Domain, Manual Intake & Normalization Foundation (IMPLEMENTED):**
+- **WP2.1-A — Jobs Domain, Manual Intake & Normalization Foundation (VERIFIED):**
   - Canonical `Company`, `Job`, `JobOrigin`, `IdempotencyKey` entities (migration `0005`);
   - Strong identity via `(provider, external_id)` with nullable `external_id` for manual intakes;
   - Corporate domain identity protection against multi-tenant ATS hostnames;
@@ -243,15 +243,15 @@ Divided into two sequential checkpoints:
   - Authenticated manual paste intake (`POST /api/v1/jobs/intake/paste`, 30 req/h rate limit);
   - Authenticated safe URL intake (`POST /api/v1/jobs/intake/url`, 15 req/h rate limit);
   - Authenticated job detail retrieval (`GET /api/v1/jobs/{jobId}`).
-  - See `docs/adr/0012-jobs-domain-manual-intake.md` (D-054).
-- **WP2.1-B — External Hosted ATS Connectors & Ingestion Scheduler (IMPLEMENTED):**
+  - See `docs/adr/0012-jobs-domain-manual-intake.md` (D-054). Independently reviewed, merged via squash into `main` (PR #25, squash commit `38da12050d9613f502bce956edc7167c8427f3df`), post-merge CI run `37716255293` 8/8 green. **WP2.1-A is VERIFIED.**
+- **WP2.1-B — External Hosted ATS Connectors & Ingestion Scheduler (VERIFIED):**
   - Greenhouse, Lever, Ashby adapter implementations conforming strictly to `JobSource` port protocol;
   - Base ATS HTTP client with deadline budgeting, 5s connect / 10s read bounded timeouts, 5 MiB payload limits, `trust_env=False`, and normalized `PortError` mapping;
   - Connector capability registry (`JobSourceRegistry`) and source health tracking;
   - Ingestion pipeline (`ingest_job_source`) persisting global discovery into `Company`, `Job` (`created_by_user_id=None`), and `JobOrigin` (`(provider, external_id)`) with corporate domain sanitization;
   - Liveness consensus: absence reconciliation tracking missing jobs (`consecutive_not_found_count`) and transitioning to `CLOSED` after 3-strike threshold;
-  - Celery worker tasks `jobs.ingest_source` and periodic `jobs.sweep_scheduled_ingestion` in `tapjob_worker`.
-  - See `docs/adr/0013-external-ats-connectors-ingestion.md` (D-055).
+  - Celery worker tasks `jobs.ingest_source` and periodic `jobs.sweep_scheduled_ingestion` in `tapjob_worker` with centralized Celery Beat scheduler, stable task-ID-derived `cycle_id`, and dedicated-connection PostgreSQL advisory locks.
+  - See `docs/adr/0013-external-ats-connectors-ingestion.md` (D-055). Independently reviewed, merged via squash into `main` (PR #36, squash commit `fccc14bcdf581245bdefd7b67395ca96eafcf2f7`, approved PR HEAD `8586c759f8ee28cfcead9310f4740f479cf4dfde`). CI green pre-merge (run `37800774060`, 8/8) and post-merge (run `37822195467`, 8/8). Tree equivalence confirmed (`e86f20fb132438725128a582638dfc8cf338e8d6`). **WP2.1-B is VERIFIED.**
 
 ### Reuse plan
 - ADAPT JobBot's normalization utilities, text cleanup, and workplace keywords (`docs/SOURCE_REUSE_LEDGER.md`).
@@ -569,20 +569,12 @@ Can progress alongside WPs when they do not alter contracts:
 
 ## First authorized next step
 
-**WP1.3 — Resume Import (IMPLEMENTED, pending independent review — NOT VERIFIED).**
-WP0.1, WP0.2 (both WP0.2-A and all of WP0.2-B), WP1.1 and WP1.2 are all independently verified,
-merged, and post-merge CI verified. WP1.1 — Identity & User Account is **VERIFIED**
-(`docs/adr/0009-identity-auth-user-account.md`, D-051; PR #17, squash commit
-`bc269d8dd99f1455d1d44cf8b3abb4ba8d7915e7`; CI green pre-merge run `37254156902` 8/8 and post-merge
-run `37312677497` 8/8), which authorized WP1.2 to begin. WP1.2 — Career Profile & Truth Store
-(`docs/adr/0010-career-profile-truth-store.md`, D-052) is **VERIFIED**: implemented end-to-end,
-independently reviewed across three rounds, merged via squash as PR #19 (squash commit
-`5c06c805ea2a68fcf100ec56cff5eaf715e962c2`); real post-merge CI (run `37364799439`, attempt 2)
-exposed a genuine SQLAlchemy identity-map-staleness concurrency defect under
-`SELECT ... FOR UPDATE` (ADR-0010 "Addendum — round 4"), fixed structurally and independently
-reviewed as corrective PR #20, merged via squash (squash commit
-`f30590577cf25733de63025f987c251ebe0e89af`); post-merge CI on the resulting `main`
-(run `37397784331`) is green 8/8, with `Backend integration` re-proving the previously-failing
-concurrency test. WP1.2 being verified authorized WP1.3 to begin. WP1.3 — Resume Import (`docs/adr/0011-resume-import.md`, D-053) is **VERIFIED**: implemented end-to-end, independently reviewed across two rounds (10 findings in Round 1, 7 findings + 2 hardening items in Round 2), rebased cleanly over Expo maintenance PR #23, merged via squash into `main` as PR #22 (squash commit `db1754acf2a6aabb4b13df3a7de35a8a0d795a48`, approved PR HEAD `fba5765a291abc0c9bfea548c6f97f7bf92e0db0`). CI green pre-merge (run `37538366658`, 8/8) and post-merge (run `37551974662`, 8/8). Tree equivalence confirmed (`af7d26f4544f573f4d93b212b4c11b070f3f2052`). **WP1.3 is VERIFIED.** Raw source blob retention/deletion lifecycle remains an open pre-production gate. Phase 1 Career Core baseline (WP1.1/WP1.2/WP1.3) is complete. The next domain work is Phase 2 — Jobs & Matching (WP2.1 under decision gate). WP2.2+ and further downstream work packages remain **NOT AUTHORIZED**.
+**WP2.2 — Matching Engine (AUTHORIZED for design and implementation planning; NOT YET IMPLEMENTED).**
+WP0.1, WP0.2 (both WP0.2-A and all of WP0.2-B), WP1.1, WP1.2, WP1.3, and WP2.1 (both WP2.1-A and WP2.1-B) are all independently verified, merged, and post-merge CI verified on `main`:
+- WP1.1 — Identity & User Account is **VERIFIED** (`docs/adr/0009-identity-auth-user-account.md`, D-051; PR #17, squash commit `bc269d8dd99f1455d1d44cf8b3abb4ba8d7915e7`; CI green pre-merge run `37254156902` 8/8 and post-merge run `37312677497` 8/8).
+- WP1.2 — Career Profile & Truth Store (`docs/adr/0010-career-profile-truth-store.md`, D-052) is **VERIFIED** (PR #19, squash commit `5c06c805ea2a68fcf100ec56cff5eaf715e962c2`, corrective PR #20 squash commit `f30590577cf25733de63025f987c251ebe0e89af`, post-merge CI run `37397784331` 8/8 green).
+- WP1.3 — Resume Import (`docs/adr/0011-resume-import.md`, D-053) is **VERIFIED** (PR #22, squash commit `db1754acf2a6aabb4b13df3a7de35a8a0d795a48`, approved PR HEAD `fba5765a291abc0c9bfea548c6f97f7bf92e0db0`; pre-merge CI run `37538366658` 8/8, post-merge CI run `37551974662` 8/8).
+- WP2.1-A — Jobs Domain, Manual Intake & Normalization Foundation (`docs/adr/0012-jobs-domain-manual-intake.md`, D-054) is **VERIFIED** (PR #25, squash commit `38da12050d9613f502bce956edc7167c8427f3df`; post-merge CI run `37716255293` 8/8 green).
+- WP2.1-B — External Hosted ATS Connectors & Ingestion Scheduler (`docs/adr/0013-external-ats-connectors-ingestion.md`, D-055) is **VERIFIED** (PR #36, squash commit `fccc14bcdf581245bdefd7b67395ca96eafcf2f7`, approved PR HEAD `8586c759f8ee28cfcead9310f4740f479cf4dfde`; pre-merge CI run `37800774060` 8/8, post-merge CI run `37822195467` 8/8).
 
-WP0.1 is independently verified and merged. WP0.2-A is independently verified and merged (PR #9, `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`). WP0.2-B Checkpoint A (internal ports/capability model) is independently verified and merged via squash (PR #12, `main` commit `a8bfbe621e5a83ae5f205adb1919ce3250684efb`; post-merge CI green, run `37055251128`, 7/7). WP0.2-B Checkpoint B (worker-side TapJob correlation propagation; ADR-0006 deployment/CD contract, not a real deploy) is independently verified and merged via squash (PR #15, `main` commit `3edaf1cee33b892a5d753b07b9b9946cbcd28887`; CI green pre-merge, run `37230556089`, 8/8, and post-merge, run `37231990603`, 8/8). WP0.2-B overall — and WP0.2 as a whole — is **VERIFIED**. WP1.1 (internal `User`/Firebase `ExternalIdentity`/bootstrap/session lifecycle/devices/consent/deletion skeleton/rate limiting/minimal mobile auth surface) is independently reviewed across three rounds, merged via squash (PR #17, `main` commit `bc269d8dd99f1455d1d44cf8b3abb4ba8d7915e7`), CI green at latest HEAD before merge and post-merge CI green. **WP1.1 is VERIFIED.** WP1.2 (`CareerProfile`/`ProfileFact` typed truth store, optimistic concurrency, truth snapshot, provenance, audit) is independently reviewed across three rounds, merged via squash (PR #19, `main` commit `5c06c805ea2a68fcf100ec56cff5eaf715e962c2`); a genuine post-merge concurrency defect was then found, structurally fixed, independently reviewed and merged via squash as corrective PR #20 (`main` commit `f30590577cf25733de63025f987c251ebe0e89af`), with post-merge CI green 8/8 (run `37397784331`) re-proving the fix. **WP1.2 is VERIFIED.** WP1.3 (PDF/DOCX resume import, file security, object storage, bounded extraction, deterministic candidate parsing, fail-closed validation, review/finalization, provenance, master resume creation) is independently reviewed across two rounds, merged via squash as PR #22 (squash commit `db1754acf2a6aabb4b13df3a7de35a8a0d795a48`), and post-merge CI green 8/8 (run `37551974662`). **WP1.3 is VERIFIED.** The next domain work is Phase 2 — Jobs & Matching (WP2.1 under decision-gate preparation). Product feature work beyond WP2.1 — i.e. WP2.2+ — remains NOT AUTHORIZED.
+Phase 1 Career Core baseline and Phase 2 opportunity intake foundation (WP2.1) are complete. The next authorized domain work is **WP2.2 — Matching Engine** (hard filters, lexical/semantic scoring, explainability). WP2.2 is not yet implemented. WP2.3+ (Job Feed & Alerts) and further downstream work packages remain **NOT AUTHORIZED**.
