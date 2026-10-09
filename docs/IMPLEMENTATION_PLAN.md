@@ -260,26 +260,59 @@ Divided into two sequential checkpoints:
 
 ---
 
-## WP2.2 — Matching Engine
+## WP2.2 — Matching Engine (DESIGN GATE IN REVIEW / NOT IMPLEMENTED)
+
+Decision gate defined in ADR-0014 (`docs/adr/0014-matching-engine.md`, D-056). Architecture, contracts, scoring models, explainability, cache, concurrency, and implementation plan are under final review in PR #38. Implementation will be authorized only after independent review approval and PR merge. Downstream work packages (WP2.3+ Feed and beyond) remain strictly NOT AUTHORIZED.
 
 ### Deliver
-- hard filters;
-- lexical score;
-- semantic layer if justified;
-- optional LLM re-score;
-- explanation;
-- blockers;
-- missing requirements;
-- caching/versioning.
+- 5 canonical hard-filter knock-out gates (`WORK_AUTHORIZATION`, `WORKPLACE_TYPE`, `LOCATION`, `SALARY_MINIMUM`, `ROLE_ALIGNMENT`) governed by a formal Capability Matrix;
+- Strict classification: `HARD_BLOCKER`, `SOFT_MISMATCH`, and `UNKNOWN` (undisclosed job attributes never block; cross-currency or cross-period salary evaluates to `UNKNOWN`; lack of declared relocation is `SOFT_MISMATCH`; free-form work authorization evaluates to `UNKNOWN`);
+- `ROLE_ALIGNMENT_HARD_BLOCK_ENABLED = False` in V1 (gate outcomes strictly limited to `PASSED`, `SOFT_MISMATCH`, `UNKNOWN`; occupation taxonomy hard blocker deferred);
+- Internal pure domain contract `DerivedJobMatchSignals` (`JobSalarySignal`, `JobWorkAuthSignal`, `JobSeniorityLevel`, `DerivedJobMatchSignals`) in `tapjob_api.matching.signals` distinguishing `required_skills`, `preferred_skills`, and `unclassified_skills` (heading-less descriptions never invent required skills), with fail-closed bounded regexes, zero LLM, and zero network calls;
+- Internal pure domain contract `CandidateMatchSignals` (`derive_candidate_match_signals`) reducing canonical `TruthSnapshot` boundary from `get_truth_snapshot` deterministically with fact-order independence, taxonomy/alias convergence for skills, deterministic experience ordering with ongoing duration frozen by `evaluation_as_of_date`, calendar month union duration for overlapping roles (counting each month at most once; conservative fail-closed 0 months for `YearMonth(month=None)`), `CandidateDomainTokenSignal(canonical_token, fact_ids)` preserving evidence grounding from `ExperienceFactValue` and `ProjectFactValue` (`CareerProfile.summary` excluded from V1 score), canonical salary collapse/ambiguity resolution, Acceptable Set Semantics combining `WorkplaceTypePreferenceValue` and `LocationPreferenceValue.workplace_types`, disjunctive location alternatives with total sort key `(country or "", region or "", city or "")` (preventing `None < str` TypeError), deterministic fail-closed delimiter-based token location comparison, and question-key-aware work authorization grouping with conflict resolution;
+- Question-key-aware candidate interpretation via `WORK_AUTHORIZATION_ANSWER_MAP`, canonical jurisdiction comparison, and fail-closed sponsorship availability extraction (unstated availability leaves `sponsorship_offered = None`);
+- `SalaryPeriod` enum alignment (`JobSalarySignal.period: SalaryPeriod | None`, `JOB_SALARY_PERIOD_MAP`, hourly policy) with `SALARY_NUMERIC_SCORE_EFFECT = NONE` (salary deficit generates `SOFT_MISMATCH` with informational gap in missing requirements, zero overall score penalty; isolated `$` fails closed to `UNKNOWN`);
+- Explicit typed total mapping `WORKPLACE_TYPE_MAPPING` (`WorkplaceType.ONSITE` -> `JobWorkplaceType.ON_SITE`);
+- Formal `CriticalUnknown` definition (`WORK_AUTHORIZATION_AMBIGUOUS`, `SPARSE_PROFILE`), where `SPARSE_PROFILE` is emitted strictly for candidates with 0 confirmed skills AND 0 confirmed experiences (jobs with 0 extracted skills evaluate neutrally without emitting `SPARSE_PROFILE`);
+- Deterministic 5-component lexical scoring (integer 0..100) using pure integer arithmetic from start to finish (ZERO `float` types, ZERO uses of Python builtin `round()`, canonical `round_half_up_ratio` helper, basis points fixed-point arithmetic 0..10,000, and exact round-half-up to integer 0..100):
+  - Title Alignment (25%): Dice coefficient on core tokens with 90% weighting for past titles via `round_half_up_ratio`;
+  - Skill Overlap (35%): 6-case decision tree with 75/25 required/preferred ratio, unclassified skills at 0% weight when required exists, and missing requirements strictly from $R \setminus S_C$;
+  - Experience & Domain (20%): domain keyword overlap with pure integer duration adequacy percent and zero-experience precedence;
+  - Seniority Alignment (10%): candidate seniority derivation from calendar month union and 7x7 score matrix;
+  - Workplace & Location (10%): 50/50 pure integer split via `round_half_up_ratio(wp + loc, 2)`;
+- Neutral imputation for omitted non-mandatory job fields;
+- `MINIMUM_ELIGIBLE_SCORE = 50` and formal eligibility decision table (`ELIGIBLE`, `INELIGIBLE`, `REVIEW_REQUIRED`);
+- Dedicated `job_match_fingerprint` incorporating `job_id`, normalized title, normalized location, `workplace_type`, and cleaned description hash;
+- Bilingual Portuguese/English normalization and technology alias map;
+- Semantic layer (embeddings) and LLM re-score: DEFERRED (evaluated in WP2.3 if bulk search justifies it);
+- Formal separation of `DeterministicMatchCore` vs presentation-layer LLM synthesis;
+- Optional LLM explanation synthesis via `AiGateway` (`AiPurpose.JOB_MATCH_EXPLANATION`) with template fallback (zero SLA impact);
+- Grounded explainability linking strengths directly to `ProfileFact.id`s and normalized job fields;
+- Reproducibility invariant bound to `policy_version` (`2026.1`), `profile_version`, `job_match_fingerprint`, and `evaluation_as_of_date` (freezing ongoing employment calculation);
+- Canonical payload serialization (`DeterministicMatchCore.to_canonical_payload()`) covering all 14 core fields for `deterministic_result_digest`;
+- PostgreSQL canonical `match_results` persistence with unique constraint `uq_match_results_user_job_versions`;
+- Concurrency convergence verification via `INSERT ... ON CONFLICT DO NOTHING` asserting `deterministic_result_digest` equality;
+- Volatile Redis cache (24h TTL) with pre-cache liveness/visibility revalidation (evicting closed/expired jobs);
+- Synchronous single-match execution (< 50ms p95) via authenticated `POST /api/v1/jobs/{jobId}/match`;
+- Untrusted job descriptions treated as inert text (prompt-injection impervious);
+- 15 golden deterministic eval scenarios in pytest and 6 architectural invariant test suites.
 
 ### Reuse plan
-- IMPORT/ADAPT JobBot hard-filter gate and matching pipeline.
-- IMPORT/ADAPT AutoApply lexical/TF-IDF resume/job scoring helpers.
-- PORT career-ops job reasoning and evidence discipline.
-- PORT JobSync job-match evals as a regression gate.
+- ADAPT JobBot's hard-filter gate and matching pipeline (`app/matching/gate.py`, `scorer.py`, `engine.py`).
+- ADAPT AutoApply's lexical scoring and skill weighting concepts (`core/resume_scorer.py`) into bounded pure-Python integer arithmetic.
+- PORT career-ops's fact-grounding discipline and untrusted job text separation (`keyword-match.mjs`).
+- PORT JobSync's job-match eval scenarios (`evals/job-match/*`) into a deterministic pytest test suite (`tests/test_matching_evals.py`).
 
 ### Acceptance
-Deterministic tests + AI evals.
+- Single-match latency < 50ms (p95);
+- Unconfirmed facts structurally excluded from matching;
+- Hard blockers reliably force `overall_score = 0` and `eligibility = INELIGIBLE`;
+- Undisclosed job attributes never trigger hard blockers;
+- Concurrent evaluations for same version idempotently resolve with verified result digest equality;
+- Pre-cache guard prevents serving stale cache for closed or unauthorized jobs;
+- 15 golden eval scenarios and all architectural invariant test suites pass with 100% determinism;
+- CI 8/8 green.
+
 
 ---
 
