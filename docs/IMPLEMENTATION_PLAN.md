@@ -7,10 +7,32 @@ This file translates roadmap into executable work packages.
 Customer-surface priority is defined in `DELIVERY_ORDER.md`:
 
 ```text
-Foundation -> Minimum Career Core -> WhatsApp -> Mobile App -> Browser Extension
+Foundation -> Minimum Career Core -> WhatsApp-first product -> Mobile App -> Browser Extension
 ```
 
-Existing domain work packages remain authoritative for scope. After WP0.1/WP0.2, checkpoints must be sliced to reach the minimum WhatsApp vertical journey before building the full mobile customer experience.
+### Canonical Principle of Channels
+TapJob is ONE product with ONE Career Core. WhatsApp, Mobile App, and Browser Extension are surfaces/channels over the same canonical state and business rules:
+
+```text
+WhatsApp ──┐
+Mobile ────┼──> TapJob Core
+Extension ─┘
+```
+
+Nenhum canal pode possuir:
+- profile truth próprio;
+- matching próprio;
+- application state próprio;
+- resume truth próprio;
+- Career Agent policy própria;
+- business rule própria.
+
+O backend/Core permanece channel-neutral. Compartilham a mesma User identity, Truth Store, Jobs, Matching, Resume, Application Kit, Applications/Tracker, Career Agent e política de notificações. Canais variam APRESENTAÇÃO e CAPACIDADES DE INTERFACE, nunca a verdade canônica.
+
+### WhatsApp-First Priority & Mobile Readiness
+- **WhatsApp-first product:** A prioridade absoluta após a fundação do Career Core é colocar o WhatsApp Alpha funcionando de ponta a ponta antes da construção pesada da experiência visual mobile. O WhatsApp Alpha consome o mesmo backend/Core channel-neutral, não sendo um chatbot isolado.
+- **Mobile Readiness é parallel-safe:** Atividades de infraestrutura e prontidão de build mobile (Expo Development Build, Android/iOS native readiness, EAS config, env config, Firebase auth wiring, generated OpenAPI client, session/secure-storage, navigation shell, tokens, network/error foundations, deep-links, push plumbing, Sentry, build CI) podem avançar em paralelo quando não bloquearem nem atrasarem o WhatsApp Alpha. Isso NÃO significa que a experiência de produto mobile foi iniciada.
+- **Mobile Product Experience continua depois do WhatsApp Alpha:** Construção visual completa de Job Feed, Job Detail, Match visual, Resume Studio, Kanban/Tracker, analytics, document manager, large Application Kit review e telas de produto pertence ao estágio posterior ao WhatsApp Alpha funcional.
 
 ## Rules
 
@@ -260,9 +282,9 @@ Divided into two sequential checkpoints:
 
 ---
 
-## WP2.2 — Matching Engine (IMPLEMENTED / PENDING INDEPENDENT REVIEW)
+## WP2.2 — Matching Engine (VERIFIED)
 
-Decision gate defined and accepted in ADR-0014 (`docs/adr/0014-matching-engine.md`, D-056). Architecture, contracts, scoring models, explainability, cache, concurrency, evals, and implementation plan are implemented on branch `feat/wp2-2-matching-engine`. Awaiting independent review. Downstream work packages (WP2.3+ Feed and beyond) remain strictly NOT AUTHORIZED.
+Decision gate defined and accepted in ADR-0014 (`docs/adr/0014-matching-engine.md`, D-056). Architecture, contracts, scoring models, explainability, cache, concurrency, evals, and implementation plan are implemented on branch `feat/wp2-2-matching-engine`. Independently reviewed across multiple rounds and approved with zero blocking findings (CRITICAL=0, HIGH=0, MEDIUM_BLOCKING=0). Merged via squash into `main` as PR #40 (squash commit `2aedd2b6d281214296009d3ff058d6fdb5677720`, approved implementation HEAD `55744b6872b49854cad45c2ef69cd3c132f3c073`). Post-merge CI run `37997452936` on `main` is green 8/8. **WP2.2 is VERIFIED.** Downstream work packages (WP2.3+ Feed and beyond) remain unstarted.
 
 ### Deliver
 - 5 canonical hard-filter knock-out gates (`WORK_AUTHORIZATION`, `WORKPLACE_TYPE`, `LOCATION`, `SALARY_MINIMUM`, `ROLE_ALIGNMENT`) governed by a formal Capability Matrix;
@@ -286,8 +308,7 @@ Decision gate defined and accepted in ADR-0014 (`docs/adr/0014-matching-engine.m
 - Bilingual Portuguese/English normalization and technology alias map;
 - Semantic layer (embeddings) and LLM re-score: DEFERRED (evaluated in WP2.3 if bulk search justifies it);
 - Formal separation of `DeterministicMatchCore` vs presentation-layer LLM synthesis;
-- Optional LLM explanation synthesis via `AiGateway` (`AiPurpose.JOB_MATCH_EXPLANATION`) with template fallback (zero SLA impact);
-- Grounded explainability linking strengths directly to `ProfileFact.id`s and normalized job fields;
+- Grounded deterministic template explainability linking strengths directly to `ProfileFact.id` values and normalized job fields; no LLM dependency in the WP2.2 runtime baseline (optional LLM explanation synthesis via `AiGateway` `AiPurpose.JOB_MATCH_EXPLANATION` remains an architectural capability for future work packages);
 - Reproducibility invariant bound to `policy_version` (`2026.1`), `profile_version`, `job_match_fingerprint`, and `evaluation_as_of_date` (freezing ongoing employment calculation);
 - Canonical payload serialization (`DeterministicMatchCore.to_canonical_payload()`) covering all 14 core fields for `deterministic_result_digest`;
 - PostgreSQL canonical `match_results` persistence with unique constraint `uq_match_results_user_job_versions`;
@@ -313,6 +334,72 @@ Decision gate defined and accepted in ADR-0014 (`docs/adr/0014-matching-engine.m
 - 15 golden eval scenarios and all architectural invariant test suites pass with 100% determinism;
 - CI 8/8 green.
 
+
+---
+
+## Next Product Goal — Minimum WhatsApp Alpha Vertical Slice
+
+O próximo grande marco de entrega de produto é um **Minimum WhatsApp Alpha Vertical Slice**, viabilizando o primeiro produto utilizável de ponta a ponta sem exigir a conclusão prévia e exaustiva de todos os WPs avançados.
+
+### Target User Journey
+```text
+User says "oi"
+  -> channel identity
+  -> TapJob User linkage
+  -> resume/basic profile
+  -> PDF/DOCX intake
+  -> fact extraction
+  -> confirmation
+  -> target role/preferences
+  -> job import/recommendation
+  -> Matching Engine
+  -> match explanation
+  -> minimal grounded resume tailoring
+  -> basic Application Kit
+  -> document/link handoff
+  -> basic application tracking
+  -> reminders/follow-up
+  -> Career Agent tools
+  -> WhatsApp interaction surface
+```
+
+### Natureza do Checkpoint: Cross-WP Minimum Slice
+- Este checkpoint antecipa estritamente as capacidades mínimas necessárias de WP2.3, WP3.x e WP4.x para viabilizar a jornada conversacional completa no WhatsApp sobre o Core canônico.
+- **IMPORTANTE:** Não remove nem reduz os escopos completos existentes de:
+  - WP2.3 (Job Feed & Alerts completo);
+  - WP3.1 (Resume Studio completo);
+  - WP3.2 (ATS & Tailoring completo);
+  - WP3.3 (Application Kit completo);
+  - WP4.1 (Application Tracker completo);
+  - WP4.2 (Career Agent Core completo);
+  - WP4.3 (WhatsApp-first Product Surface completo).
+- As versões completas desses work packages continuam existindo e serão executadas conforme o roadmap.
+
+### Macro-Delivery Sequencing Direction
+Após a aprovação deste alinhamento, a execução deve ser estruturada em macro-entregas coerentes:
+- **CHECKPOINT A — WhatsApp Alpha Core:**
+  Capacidades mínimas compartilhadas no backend/Core:
+  - channel identity model e linkage com TapJob User canônico;
+  - backend mínimo de feed/alert necessário ao vertical slice;
+  - grounded resume tailoring mínimo;
+  - basic Application Kit;
+  - minimal Application Tracker;
+  - Career Agent Core e tool definitions necessários ao alpha.
+- **CHECKPOINT B — WhatsApp Alpha Surface + Mobile Readiness:**
+  - `MessagingChannel` adapter implementation;
+  - Evolution API initial adapter isolado atrás de `MessagingChannel`;
+  - contratos normalizados inbound/outbound;
+  - webhook de entrada e autenticação de eventos;
+  - conversational orchestration;
+  - confirmações interativas;
+  - document handoff (envio de kit/currículo);
+  - reminders e follow-up no WhatsApp;
+  - deep links;
+  - Mobile Readiness infrastructure (paralela e segura).
+
+### Regras de Neutralidade de Provedores e Ferramentas Auxiliares
+- **Evolution API Neutrality:** A Evolution API é o transporte inicial de desenvolvimento/alpha. Deve residir estritamente atrás do port `MessagingChannel`. Nenhuma regra de negócio ou Career Core pode depender de Baileys, quirks de QR/sessão, formatos de webhook da Evolution, IDs de provedor ou semântica de retentativa do provedor. O caminho arquitetural para migração para a WhatsApp Cloud API oficial é preservado.
+- **Papel do n8n:** O n8n é uma ferramenta auxiliar de integração e automação operacional. O n8n **NÃO** é dono canônico de: estado de usuário, matching, Professional Truth Store, estado de candidaturas, política do Career Agent ou regras críticas de negócio. Toda lógica essencial reside no Core versionado e testado do TapJob.
 
 ---
 
@@ -593,6 +680,25 @@ Research and add only with connector dossiers:
 ## Parallel-safe workstreams
 
 Can progress alongside WPs when they do not alter contracts:
+- **Mobile Readiness (parallel-safe with WhatsApp):**
+  - Expo Development Build;
+  - Android native/build readiness;
+  - iOS native/build readiness;
+  - EAS configuration/profiles quando aplicável;
+  - environment configuration;
+  - Firebase mobile/auth wiring;
+  - generated OpenAPI API client integration foundation;
+  - session/secure-storage foundation;
+  - navigation shell;
+  - design tokens/design-system primitives;
+  - error/loading/network foundations;
+  - deep-link infrastructure;
+  - push-notification plumbing quando houver backend contract;
+  - Sentry/observability;
+  - build/compile CI;
+  - package/bundle identifiers/configuration quando necessário;
+  - icon/splash/native config quando necessário.
+  *(Essas atividades de prontidão técnica NÃO significam que a experiência de produto mobile foi iniciada).*
 - design system;
 - security threat modeling;
 - AI eval datasets;
@@ -602,12 +708,19 @@ Can progress alongside WPs when they do not alter contracts:
 
 ## First authorized next step
 
-**WP2.2 — Matching Engine (DESIGN GATE APPROVED / IMPLEMENTATION AUTHORIZED / NOT YET IMPLEMENTED).**
-WP0.1, WP0.2 (both WP0.2-A and all of WP0.2-B), WP1.1, WP1.2, WP1.3, and WP2.1 (both WP2.1-A and WP2.1-B) are all independently verified, merged, and post-merge CI verified on `main`:
-- WP1.1 — Identity & User Account is **VERIFIED** (`docs/adr/0009-identity-auth-user-account.md`, D-051; PR #17, squash commit `bc269d8dd99f1455d1d44cf8b3abb4ba8d7915e7`; CI green pre-merge run `37254156902` 8/8 and post-merge run `37312677497` 8/8).
+**Next Product Goal — Minimum WhatsApp Alpha Vertical Slice.**
+
+WP0.1, WP0.2 (WP0.2-A e WP0.2-B), WP1.1, WP1.2, WP1.3, WP2.1 (WP2.1-A e WP2.1-B) e WP2.2 estão todos independentemente verificados, mergeados e validados com CI verde na `main`:
+- WP1.1 — Identity & User Account is **VERIFIED** (`docs/adr/0009-identity-auth-user-account.md`, D-051; PR #17, squash commit `bc269d8dd99f1455d1d44cf8b3abb4ba8d7915e7`; CI green pre-merge run `37254156902` 8/8 e post-merge run `37312677497` 8/8).
 - WP1.2 — Career Profile & Truth Store (`docs/adr/0010-career-profile-truth-store.md`, D-052) is **VERIFIED** (PR #19, squash commit `5c06c805ea2a68fcf100ec56cff5eaf715e962c2`, corrective PR #20 squash commit `f30590577cf25733de63025f987c251ebe0e89af`, post-merge CI run `37397784331` 8/8 green).
 - WP1.3 — Resume Import (`docs/adr/0011-resume-import.md`, D-053) is **VERIFIED** (PR #22, squash commit `db1754acf2a6aabb4b13df3a7de35a8a0d795a48`, approved PR HEAD `fba5765a291abc0c9bfea548c6f97f7bf92e0db0`; pre-merge CI run `37538366658` 8/8, post-merge CI run `37551974662` 8/8).
 - WP2.1-A — Jobs Domain, Manual Intake & Normalization Foundation (`docs/adr/0012-jobs-domain-manual-intake.md`, D-054) is **VERIFIED** (PR #25, squash commit `38da12050d9613f502bce956edc7167c8427f3df`; post-merge CI run `37716255293` 8/8 green).
 - WP2.1-B — External Hosted ATS Connectors & Ingestion Scheduler (`docs/adr/0013-external-ats-connectors-ingestion.md`, D-055) is **VERIFIED** (PR #36, squash commit `fccc14bcdf581245bdefd7b67395ca96eafcf2f7`, approved PR HEAD `8586c759f8ee28cfcead9310f4740f479cf4dfde`; pre-merge CI run `37800774060` 8/8, post-merge CI run `37822195467` 8/8).
+- WP2.2 — Matching Engine (`docs/adr/0014-matching-engine.md`, D-056) is **VERIFIED** (PR #40, squash commit `2aedd2b6d281214296009d3ff058d6fdb5677720`, approved PR HEAD `55744b6872b49854cad45c2ef69cd3c132f3c073`; post-merge CI run `37997452936` on `main` is green 8/8; independent review APPROVED with 0 critical, 0 high, 0 medium-blocking findings).
 
-Phase 1 Career Core baseline and Phase 2 opportunity intake foundation (WP2.1) are complete. The next authorized domain work is **WP2.2 — Matching Engine** (implementation authorized; not yet implemented). WP2.3+ (Job Feed & Alerts) and further downstream work packages remain **NOT AUTHORIZED**.
+A fundação do Career Core e o Matching Engine determinístico estão completos.
+- **Próximo objetivo autorizado:** **Minimum WhatsApp Alpha Vertical Slice** (cross-WP minimum slice).
+- **Parallel-safe:** Mobile Readiness apenas.
+- **Mobile Product Experience:** Permanece estritamente após o WhatsApp Alpha vertical slice estar funcional (Job Feed visual, Job Detail completo, Match visual, Resume Studio, Kanban/Tracker, analytics, document manager, large Application Kit review, settings/integrations UI e telas de produto).
+- **Browser Extension:** Permanece após as superfícies Mobile/Core conforme já definido.
+- WPs downstream em sua totalidade (WP2.3+ visual feeds, WP3.x visual studios, WP4.x full mobile trackers) permanecem **NÃO AUTORIZADOS** antes do WhatsApp Alpha slice.

@@ -1,9 +1,9 @@
 # Project State — TapJob
 
-**As of:** 2026-10-08  
+**As of:** 2026-10-09  
 **Repository:** `ricardo081683/tapjob`  
-**Phase:** 0 — Foundation (VERIFIED, complete); 1 — Career Core (WP1.1, WP1.2, WP1.3 VERIFIED, complete for Phase 1 baseline); 2 — Jobs & Matching (WP2.1-A VERIFIED, WP2.1-B VERIFIED; WP2.2 IMPLEMENTED / PENDING INDEPENDENT REVIEW)  
-**Code status:** WP0.1 VERIFIED. WP0.2 VERIFIED. WP1.1 VERIFIED. WP1.2 VERIFIED. WP1.3 VERIFIED. WP2.1-A VERIFIED (PR #25, squash commit `38da12050d9613f502bce956edc7167c8427f3df`, post-merge CI run `37716255293` 8/8 green). WP2.1-B VERIFIED (PR #36, squash commit `fccc14bcdf581245bdefd7b67395ca96eafcf2f7`, post-merge CI run `37822195467` 8/8 green). WP2.2 IMPLEMENTED / PENDING INDEPENDENT REVIEW (branch `feat/wp2-2-matching-engine`, ADR-0014 / D-056 implemented, 15 golden evals and invariant suites passing, migration 0006 created, PR pending independent review); downstream work packages (WP2.3+ Feed and beyond) remain strictly NOT AUTHORIZED.
+**Phase:** 0 — Foundation (VERIFIED, complete); 1 — Career Core (WP1.1, WP1.2, WP1.3 VERIFIED, complete for Phase 1 baseline); 2 — Jobs & Matching (WP2.1-A VERIFIED, WP2.1-B VERIFIED, WP2.2 VERIFIED); Next Product Goal: Minimum WhatsApp Alpha Vertical Slice  
+**Code status:** WP0.1 VERIFIED. WP0.2 VERIFIED. WP1.1 VERIFIED. WP1.2 VERIFIED. WP1.3 VERIFIED. WP2.1-A VERIFIED (PR #25, squash commit `38da12050d9613f502bce956edc7167c8427f3df`, post-merge CI run `37716255293` 8/8 green). WP2.1-B VERIFIED (PR #36, squash commit `fccc14bcdf581245bdefd7b67395ca96eafcf2f7`, post-merge CI run `37822195467` 8/8 green). WP2.2 VERIFIED (PR #40, approved HEAD `55744b6872b49854cad45c2ef69cd3c132f3c073`, squash/main commit `2aedd2b6d281214296009d3ff058d6fdb5677720`, post-merge CI run `37997452936` 8/8 green, independent review APPROVED: CRITICAL=0, HIGH=0, MEDIUM_BLOCKING=0). Next product goal: Minimum WhatsApp Alpha Vertical Slice (cross-WP minimum slice over channel-neutral Core). Parallel-safe: Mobile Readiness only. Full Mobile Product Experience deferred until after WhatsApp Alpha. Downstream full WPs remain unstarted.
 
 
 This file must reflect reality only.
@@ -219,30 +219,79 @@ See `docs/adr/0011-resume-import.md` (D-053). Implemented, independently reviewe
 
 **Open pre-production gate / known limitation:** Raw uploaded source blob retention/deletion lifecycle is not yet implemented end-to-end. Stored blobs in R2 (staging/production) and local storage (development) persist indefinitely; WP1.1's account deletion skeleton does not yet reach into resume-import storage blobs. Before production launch or handling real personal data, an approved retention policy, orphan reconciliation, and end-to-end blob deletion must be implemented (see ADR-0011).
 
+### Jobs Domain, Manual Intake & Normalization Foundation — WP2.1-A (VERIFIED)
+See `docs/adr/0012-jobs-domain-manual-intake.md` (D-054). Independently reviewed, merged via squash into `main` as PR #25 (`main` commit `38da12050d9613f502bce956edc7167c8427f3df`), post-merge CI run `37716255293` 8/8 green. **WP2.1-A is VERIFIED.**
+- Canonical `Company`, `Job`, `JobOrigin`, `IdempotencyKey` entities (migration `0005`);
+- Strong identity via `(provider, external_id)` with nullable `external_id` for manual intakes;
+- Corporate domain identity protection against multi-tenant ATS hostnames;
+- Deterministic text normalization, workplace type classification, and similarity fingerprint;
+- `SafeHttpClient` SSRF security boundary (DNS pre-resolution, IP allowlist, connection pinning, SNI/TLS preservation, 2 MiB streaming decoded limit, manual redirects);
+- Authenticated manual paste intake (`POST /api/v1/jobs/intake/paste`), authenticated safe URL intake (`POST /api/v1/jobs/intake/url`), authenticated job detail retrieval (`GET /api/v1/jobs/{jobId}`).
+
+### External Hosted ATS Connectors & Ingestion Scheduler — WP2.1-B (VERIFIED)
+See `docs/adr/0013-external-ats-connectors-ingestion.md` (D-055). Independently reviewed across two rounds and two concurrency/idempotency hardening findings, merged via squash into `main` as PR #36 (squash commit `fccc14bcdf581245bdefd7b67395ca96eafcf2f7`, approved PR HEAD `8586c759f8ee28cfcead9310f4740f479cf4dfde`). CI green pre-merge (run `37800774060`, 8/8) and post-merge on `main` (run `37822195467`, 8/8). Tree equivalence confirmed (`e86f20fb132438725128a582638dfc8cf338e8d6`). **WP2.1-B is VERIFIED.**
+- Greenhouse, Lever, and Ashby adapters conforming strictly to `ports.JobSource` protocol;
+- Shared bounded SSRF-safe ATS HTTP transport with per-hop deadline budgeting, 5s connect / 10s read timeouts, 5 MiB payload bounds;
+- Canonical ingestion pipeline (`ingest_job_source`), source-scoped company identity without name merging, mutable posting updates, complete-discovery liveness guard, 3-strike absence closure with recovery;
+- Celery worker tasks with stable task-ID-derived `cycle_id` ensuring redelivery idempotency, dedicated-connection PostgreSQL advisory locking with 64-bit key, and centralized Celery Beat scheduling.
+
+### Matching Engine — WP2.2 (VERIFIED)
+See `docs/adr/0014-matching-engine.md` (D-056). Independently reviewed across multiple rounds (CRITICAL=0, HIGH=0, MEDIUM_BLOCKING=0: APPROVED), merged via squash into `main` as PR #40 (squash commit `2aedd2b6d281214296009d3ff058d6fdb5677720`, approved implementation HEAD `55744b6872b49854cad45c2ef69cd3c132f3c073`). Post-merge CI run `37997452936` on `main` is green 8/8. **WP2.2 is VERIFIED.**
+- Deterministic `MatchingEngine` under `tapjob_api.matching` (internal domain logic, not a port protocol), consuming `TruthSnapshot` (confirmed facts only) and canonical `Job`;
+- Integer score scale 0..100; hard-filter knock-out gate (`WORK_AUTHORIZATION`, `WORKPLACE_TYPE`, `LOCATION`, `SALARY_MINIMUM`, `ROLE_ALIGNMENT`) with strict distinction between `HARD_BLOCKER`, `SOFT_MISMATCH`, and `UNKNOWN` (undisclosed job attributes never block; hard blocker forces `overall_score = 0` and `eligibility = INELIGIBLE`);
+- Deterministic 5-component lexical scoring (title 25%, skills 35% with 75/25 required vs preferred weight, experience 20%, seniority 10%, location/workplace 10%) using pure integer arithmetic (basis points fixed-point arithmetic 0..10,000, round-half-up to integer 0..100, zero float);
+- Grounded deterministic template explainability linking strengths directly to `ProfileFact.id` values; no LLM dependency in the WP2.2 runtime baseline (optional presentation-layer LLM synthesis via `AiGateway` `AiPurpose.JOB_MATCH_EXPLANATION` remains an architectural capability for future work packages);
+- Reproducibility invariant bound to `matching_policy_version` (`2026.1`), `profile_version`, `job_match_fingerprint`, and `evaluation_as_of_date`;
+- PostgreSQL canonical `match_results` persistence with unique constraint `uq_match_results_user_job_versions` (migration `0006`) + volatile Redis cache (24h TTL) with visibility pre-check; concurrency handling via `INSERT ... ON CONFLICT DO NOTHING` asserting `deterministic_result_digest` equality;
+- Synchronous single match (< 50ms p95) via authenticated `POST /api/v1/jobs/{job_id}/match` endpoint; untrusted job descriptions treated as inert text (prompt-injection impervious); 15 golden deterministic eval scenarios and 6 architectural invariant test suites passing.
+
 ## 2. Not implemented
 
-No production feature beyond WP1.1's identity/account foundation, WP1.2's Career Profile/Truth
-Store, and WP1.3's Resume Import (pending independent review) exists yet. The mobile app has only a
-minimal auth technical surface, no product screens.
+No production feature beyond WP1.1's identity/account foundation, WP1.2's Career Profile/Truth Store, WP1.3's Resume Import, WP2.1's Jobs Domain & Connectors, and WP2.2's Matching Engine exists yet. The mobile app has only a minimal auth technical surface, no product screens.
+
+### Canonical Principle of Channels
+TapJob is ONE product with ONE Career Core. WhatsApp, Mobile App, and Browser Extension are surfaces/channels over the same canonical state and business rules:
+
+```text
+WhatsApp ──┐
+Mobile ────┼──> TapJob Core
+Extension ─┘
+```
+
+Nenhum canal pode possuir:
+- profile truth próprio;
+- matching próprio;
+- application state próprio;
+- resume truth próprio;
+- Career Agent policy própria;
+- business rule própria.
+
+O backend/Core permanece channel-neutral. Compartilham a mesma:
+- User identity;
+- Truth Store;
+- Jobs;
+- Matching;
+- Resume;
+- Application Kit;
+- Applications/Tracker;
+- Career Agent;
+- Notifications policy.
+
+Canais variam APRESENTAÇÃO e CAPACIDADES DE INTERFACE, nunca a verdade canônica.
 
 Specifically NOT implemented:
-- Jobs/Matching (Phase 2, under decision-gate preparation), WhatsApp adapter, Apply Engine, Browser Extension; WP1.3 Resume Import backend is VERIFIED (see §1 above), with raw blob retention/deletion as a pre-production gate and full mobile resume-import UI explicitly deferred (same as WP1.2's profile UI);
-- Sentry Expo config plugin, Metro source-map upload, EAS release wiring (deferred from WP0.1-B, see `docs/adr/0002-mobile-foundation.md`);
-- `es`/`en` translations (architecture is ready; only `pt-BR` strings exist);
-- web app;
-- full mobile profile UI (WP1.2's Career Profile/Truth Store is implemented backend-side only — no onboarding/experience/education/skill screens were built; that is explicitly deferred);
+- Full downstream work packages (WP2.3+ Job Feed & Alerts, WP3.x Resume & Application Kit, WP4.x Tracking & Agent, etc.);
+- WhatsApp Alpha product surface (next product goal via cross-WP minimum vertical slice over channel-neutral Core);
+- Mobile Product Experience (visual Job Feed, Job Detail, visual Match, Resume Studio, visual Kanban/Application Tracker, analytics, document manager, large Application Kit review, settings/integrations UI — deferred until after WhatsApp Alpha);
+- Full mobile profile UI (WP1.2 and WP1.3 are backend-verified; mobile UI is deferred to Mobile Product stage);
 - AI-backed resume parser (deterministic parser implemented in WP1.3; AI extraction deferred);
-- job ingestion;
-- matching;
-- AI gateway;
-- application tracking;
-- apply engine;
-- Gmail integration;
-- notifications;
-- FCM push delivery (device push-token storage exists; nothing is ever sent);
-- a real deletion orchestrator (the skeleton records/tracks a request only; no data is ever actually deleted);
+- Semantic layer (embeddings) and LLM re-score for matching (deferred from WP2.2);
+- Apply Engine (Phase 5), Browser Extension (Phase 5);
+- Gmail integration / Inbox Intelligence (Phase 6);
+- Notifications delivery / FCM push delivery (device push-token storage exists; nothing is ever sent);
+- A real deletion orchestrator (the skeleton records/tracks a request only; no data is ever actually deleted);
 - CD / deployment (CI exists; nothing is deployed);
-- monitoring.
+- Monitoring/production infrastructure.
 
 ## 3. Current risks
 
@@ -349,8 +398,46 @@ Implemented slices A1 (canonical `Company`, `Job`, `JobOrigin`, `IdempotencyKey`
 ### Phase 2: WP2.1-B — External Hosted ATS Connectors & Ingestion Scheduler (VERIFIED)
 Implemented adapters for Greenhouse, Lever, and Ashby conforming strictly to `ports.JobSource` protocol (`capabilities`, `discover`, `fetch_details`, `health`); Ashby adapter strictly aligns with documented official public contract (no reliance on undocumented `id`, bounded deterministic SHA-256 `external_id` from canonical `jobUrl`, `isListed == False` direct-link filter, `secondaryLocations` object parsing, workplace hints, cached listing details); Greenhouse adapter filters prospect posts (`internal_job_id is None`) and caches details with `content="true"`; Lever adapter parses `allLocations` and workplace type; shared base ATS HTTP client with per-hop deadline budgeting, 5s connect / 10s read timeouts, 5 MiB bounded responses, `trust_env=False`, SSRF protection with connection pinning and DNS pre-resolution, and normalized `PortError` mapping; `JobSourceRegistry` and operational health probes with fail-closed configuration (`extra="forbid"`); canonical ingestion pipeline (`ingest_job_source`) persisting global discovery into `Company`, `Job` (`created_by_user_id=None`), and `JobOrigin` (`(provider, external_id)`) with corporate domain sanitization, source-scoped company reuse without name merging, and mutable ATS posting updates on re-observation; non-destructive liveness reconciliation with stable task-ID-derived `cycle_id` (`sweep:{request.id}` / `task:{request.id}`) guaranteeing idempotency under Celery redelivery (`acks_late=True`) and retries, dedicated-connection PostgreSQL advisory locking per source board with 64-bit bigint key and verified release; transitioning to `CLOSED` after 3-strike threshold with automatic status recovery; Celery worker tasks `jobs.ingest_source` and periodic `jobs.sweep_scheduled_ingestion` in `tapjob_worker` with centralized Celery Beat scheduler. See `docs/adr/0013-external-ats-connectors-ingestion.md` (D-055). Independently reviewed across two rounds and two additional concurrency/idempotency hardening findings, merged via squash into `main` as PR #36 (squash commit `fccc14bcdf581245bdefd7b67395ca96eafcf2f7`, approved PR HEAD `8586c759f8ee28cfcead9310f4740f479cf4dfde`). CI green pre-merge (run `37800774060`, 8/8) and post-merge on `main` (run `37822195467`, 8/8). Tree equivalence confirmed (`e86f20fb132438725128a582638dfc8cf338e8d6`). Known blocking findings = none. Regressions on WP2.1-A = none. **WP2.1-B is VERIFIED.**
 
-### Phase 2: WP2.2 — Matching Engine (IMPLEMENTED / PENDING INDEPENDENT REVIEW)
-Architecture, contracts, scoring models, and implementation plan established in ADR-0014 (D-056) and implemented on branch `feat/wp2-2-matching-engine`. `MatchingEngine` remains internal domain logic under `tapjob_api.matching` (not a port protocol); consumes `TruthSnapshot` (confirmed facts only) and canonical `Job`; integer score scale 0..100; hard-filter knock-out gate (work authorization, workplace type, location, salary minimum, role alignment) with strict distinction between `HARD_BLOCKER`, `SOFT_MISMATCH`, and `UNKNOWN` (undisclosed job attributes never trigger blockers; hard blocker forces `overall_score = 0` and `eligibility = INELIGIBLE`); deterministic 5-component lexical scoring (title 25%, skills 35% with 75/25 required vs preferred weight, experience 20%, seniority 10%, location/workplace 10%) with basis points arithmetic and round-half-up, tech alias map and bilingual Portuguese/English normalization; neutral imputation (50/100, UNKNOWN) for omitted non-mandatory attributes; minimum eligible score threshold at 50; semantic layer (embeddings) and LLM re-score deferred to WP2.3+; optional LLM explanation synthesis via `AiGateway` (`AiPurpose.JOB_MATCH_EXPLANATION`) with deterministic template explanation as implementation baseline; grounded explainability linking strengths directly to `ProfileFact.id`s; reproducibility invariant via `matching_policy_version` (`2026.1`), `profile_version`, `job_match_fingerprint`, and `evaluation_as_of_date`; PostgreSQL canonical `match_results` persistence with unique constraint `uq_match_results_user_job_versions` on `(user_id, job_id, profile_version, job_match_fingerprint, policy_version, evaluation_as_of_date)` (migration `0006`) + volatile Redis cache (24h TTL) with visibility pre-check; concurrency handling via `INSERT ... ON CONFLICT DO NOTHING` asserting equality of `deterministic_result_digest`; single match synchronous (< 50ms p95, benchmarked at < 1ms), bulk match deferred to WP2.3 (asynchronous Celery); authenticated `POST /api/v1/jobs/{job_id}/match` API endpoint; untrusted job descriptions treated as inert text (prompt injection impervious); 15 golden deterministic eval scenarios and 6 invariant suites passing. **WP2.2 is IMPLEMENTED / PENDING INDEPENDENT REVIEW** (branch `feat/wp2-2-matching-engine`). Downstream work packages (WP2.3+ Feed and beyond) remain NOT AUTHORIZED.
+### Phase 2: WP2.2 — Matching Engine (VERIFIED)
+Architecture, contracts, scoring models, explainability, cache, concurrency, evals, and implementation plan established in ADR-0014 (D-056). Implemented under `tapjob_api.matching` (pure internal domain logic, not a port protocol), consuming `TruthSnapshot` (confirmed facts only) and canonical `Job`; integer score scale 0..100; hard-filter knock-out gate (`WORK_AUTHORIZATION`, `WORKPLACE_TYPE`, `LOCATION`, `SALARY_MINIMUM`, `ROLE_ALIGNMENT`) with strict distinction between `HARD_BLOCKER`, `SOFT_MISMATCH`, and `UNKNOWN` (undisclosed job attributes never trigger blockers; hard blocker forces `overall_score = 0` and `eligibility = INELIGIBLE`); deterministic 5-component lexical scoring (title 25%, skills 35% with 75/25 required vs preferred weight, experience 20%, seniority 10%, location/workplace 10%) with pure basis points integer arithmetic and round-half-up, bilingual Portuguese/English normalization and technology alias map; neutral imputation (50/100, UNKNOWN) for omitted non-mandatory attributes; minimum eligible score threshold at 50; semantic layer (embeddings) and LLM re-score deferred to WP2.3+; grounded deterministic template explainability linking strengths directly to `ProfileFact.id` values with no LLM dependency in the WP2.2 runtime baseline (optional presentation-layer LLM synthesis via `AiGateway` `AiPurpose.JOB_MATCH_EXPLANATION` remains an architectural capability for future work packages); reproducibility invariant via `matching_policy_version` (`2026.1`), `profile_version`, `job_match_fingerprint`, and `evaluation_as_of_date`; PostgreSQL canonical `match_results` persistence with unique constraint `uq_match_results_user_job_versions` on `(user_id, job_id, profile_version, job_match_fingerprint, policy_version, evaluation_as_of_date)` (migration `0006`) + volatile Redis cache (24h TTL) with visibility pre-check; concurrency handling via `INSERT ... ON CONFLICT DO NOTHING` asserting equality of `deterministic_result_digest`; single match synchronous (< 50ms p95, benchmarked at < 1ms), bulk match deferred to WP2.3 (asynchronous Celery); authenticated `POST /api/v1/jobs/{job_id}/match` API endpoint; untrusted job descriptions treated as inert text (prompt injection impervious); 15 golden deterministic eval scenarios and 6 invariant suites passing. Independently reviewed across multiple rounds and approved with zero blocking findings (CRITICAL=0, HIGH=0, MEDIUM_BLOCKING=0); merged via squash into `main` as PR #40 (squash commit `2aedd2b6d281214296009d3ff058d6fdb5677720`, approved implementation HEAD `55744b6872b49854cad45c2ef69cd3c132f3c073`). Post-merge CI run `37997452936` on `main` is green 8/8. **WP2.2 is VERIFIED.**
+
+### Next Product Goal: Minimum WhatsApp Alpha Vertical Slice
+The next product milestone is a cross-WP minimum vertical slice delivering an end-to-end user journey on WhatsApp before heavy visual mobile construction:
+
+```text
+User says "oi"
+  -> channel identity
+  -> TapJob User linkage
+  -> resume/basic profile
+  -> PDF/DOCX intake
+  -> fact extraction
+  -> confirmation
+  -> target role/preferences
+  -> job import/recommendation
+  -> Matching Engine
+  -> match explanation
+  -> minimal grounded resume tailoring
+  -> basic Application Kit
+  -> document/link handoff
+  -> basic application tracking
+  -> reminders/follow-up
+  -> Career Agent tools
+  -> WhatsApp interaction surface
+```
+
+**Cross-WP Minimum Slice:** This slice anticipates only the minimal necessary capabilities from WP2.3, WP3.x, and WP4.x needed for the end-to-end WhatsApp experience. It does NOT reduce or remove the full scopes of WP2.3, WP3.1, WP3.2, WP3.3, WP4.1, WP4.2, and WP4.3, which continue to exist as planned in `IMPLEMENTATION_PLAN.md`.
+
+**Macro-Delivery Sequencing Direction:**
+- **Checkpoint A — WhatsApp Alpha Core:** Minimal shared capabilities: channel identity model and linking; minimal feed/alert backend required for the vertical slice; minimal grounded resume tailoring; basic Application Kit; minimal Application Tracker; Career Agent Core/tools required for alpha.
+- **Checkpoint B — WhatsApp Alpha Surface + Mobile Readiness:** `MessagingChannel` adapter; Evolution API initial adapter; normalized inbound/outbound contracts; webhook; conversational orchestration; confirmations; document handoff; reminders/follow-up; deep links; Mobile Readiness infrastructure.
+
+**Mobile Readiness is Parallel-Safe:**
+- Permitted Mobile Readiness scope (can progress in parallel when not blocking or delaying the WhatsApp vertical slice): Expo Development Build; Android native/build readiness; iOS native/build readiness; EAS configuration/profiles; environment configuration; Firebase mobile/auth wiring; generated OpenAPI API client integration foundation; session/secure-storage foundation; navigation shell; design tokens/design-system primitives; error/loading/network foundations; deep-link infrastructure; push-notification plumbing when backend contract exists; Sentry/observability; build/compile CI; package/bundle identifiers/configuration; icon/splash/native config. These technical readiness activities do NOT mean the Mobile Product has started.
+- **Mobile Product Experience is Deferred:** Full visual Job Feed, complete Job Detail, visual Match, Resume Studio, visual Kanban/Application Tracker, analytics, document manager, large Application Kit review, settings/integrations UI, and product screens remain strictly deferred until after the WhatsApp Alpha vertical slice is functional.
+
+**Provider Neutrality & Auxiliary Systems:**
+- **Evolution API:** Initial transport for development/alpha only, isolated behind the provider-neutral `MessagingChannel` port. No domain or Core business rules may depend on Baileys, QR/session quirks, Evolution webhook shapes, provider IDs, or provider retry semantics. The path to the official WhatsApp Cloud API is preserved.
+- **n8n:** Auxiliary integration and operations tool only. Never canonical owner of user state, matching, profile truth, application state, Career Agent policy, or critical business rules.
 
 ## 5. Phase gates
 
@@ -385,7 +472,7 @@ On every significant PR:
 
 ## 7. Current authoritative conclusion
 
-TapJob has a defined product and architecture baseline, a repository/engineering skeleton (WP0.1-A + WP0.1-B), and three verified technical-contracts checkpoints (WP0.2-A: HTTP/OpenAPI/client-generation conventions; WP0.2-B Checkpoint A: internal ports + capability model; WP0.2-B Checkpoint B: worker correlation + deployment/CD contract) — **Phase 0 / Foundation is VERIFIED and complete**. Phase 1 — Career Core baseline is **VERIFIED**: WP1.1 — Identity & User Account (`docs/adr/0009-identity-auth-user-account.md`, D-051) is **VERIFIED**; WP1.2 — Career Profile & Professional Truth Store (`docs/adr/0010-career-profile-truth-store.md`, D-052) is **VERIFIED**; and WP1.3 — Resume Import (`docs/adr/0011-resume-import.md`, D-053) is **VERIFIED**. Phase 2 — Jobs & Matching intake foundation is **VERIFIED**: WP2.1-A — Jobs Domain, Manual Intake & Normalization Foundation (`docs/adr/0012-jobs-domain-manual-intake.md`, D-054) is **VERIFIED**; and WP2.1-B — External Hosted ATS Connectors & Ingestion Scheduler (`docs/adr/0013-external-ats-connectors-ingestion.md`, D-055) is **VERIFIED**. WP2.2 — Matching Engine is **IMPLEMENTED / PENDING INDEPENDENT REVIEW** (ADR-0014, D-056, implemented on branch `feat/wp2-2-matching-engine`, 15 golden evals and 6 invariant test suites passing, Alembic migration 0006 created, PR pending independent review).
+TapJob has a defined product and architecture baseline, a repository/engineering skeleton (WP0.1-A + WP0.1-B), and three verified technical-contracts checkpoints (WP0.2-A: HTTP/OpenAPI/client-generation conventions; WP0.2-B Checkpoint A: internal ports + capability model; WP0.2-B Checkpoint B: worker correlation + deployment/CD contract) — **Phase 0 / Foundation is VERIFIED and complete**. Phase 1 — Career Core baseline is **VERIFIED**: WP1.1 — Identity & User Account (`docs/adr/0009-identity-auth-user-account.md`, D-051) is **VERIFIED**; WP1.2 — Career Profile & Professional Truth Store (`docs/adr/0010-career-profile-truth-store.md`, D-052) is **VERIFIED**; and WP1.3 — Resume Import (`docs/adr/0011-resume-import.md`, D-053) is **VERIFIED**. Phase 2 — Jobs & Matching intake and deterministic matching foundation is **VERIFIED**: WP2.1-A — Jobs Domain, Manual Intake & Normalization Foundation (`docs/adr/0012-jobs-domain-manual-intake.md`, D-054) is **VERIFIED**; WP2.1-B — External Hosted ATS Connectors & Ingestion Scheduler (`docs/adr/0013-external-ats-connectors-ingestion.md`, D-055) is **VERIFIED**; and WP2.2 — Matching Engine (`docs/adr/0014-matching-engine.md`, D-056) is **VERIFIED** (PR #40, squash commit `2aedd2b6d281214296009d3ff058d6fdb5677720`, approved implementation HEAD `55744b6872b49854cad45c2ef69cd3c132f3c073`, post-merge CI run `37997452936` 8/8 green, independent review APPROVED).
 
 WP0.1 is independently reviewed, merged and verified with green CI on `main`. Gate 0 is satisfied. WP0.2-A is independently reviewed, merged (PR #9) and verified with green CI on `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`. WP0.2-B Checkpoint A (seven internal ports + capability model) is independently reviewed across three rounds, merged via squash (PR #12, `main` commit `a8bfbe621e5a83ae5f205adb1919ce3250684efb`) and verified with green CI on that commit (run `37055251128`, 7/7). WP0.2-B Checkpoint B (worker correlation, deployment/CD contract) is independently reviewed across three rounds, merged via squash (PR #15, `main` commit `3edaf1cee33b892a5d753b07b9b9946cbcd28887`) and verified with green CI both pre-merge (run `37230556089`, 8/8) and post-merge (run `37231990603`, 8/8). WP0.2-B as a whole — and WP0.2 overall — is **VERIFIED**. Phase 0 / Foundation is complete.
 
@@ -399,6 +486,6 @@ WP2.1-A (Jobs Domain, Manual Intake & Normalization Foundation) — canonical `C
 
 WP2.1-B (External Hosted ATS Connectors & Ingestion Scheduler) — Greenhouse, Lever, and Ashby adapters conforming strictly to `ports.JobSource` protocol, shared bounded SSRF-safe ATS HTTP transport, fail-closed `HostedAtsSourceEntry` configuration, canonical ingestion pipeline (`ingest_job_source`), source-scoped company identity without name merging, mutable posting updates, complete-discovery liveness guard, 3-strike absence closure with recovery, Celery worker tasks with stable task-ID-derived `cycle_id` ensuring redelivery idempotency, dedicated-connection PostgreSQL advisory locking with 64-bit key and verified release, and centralized Celery Beat scheduling — is independently reviewed across two rounds and two concurrency/idempotency hardening findings, merged via squash into `main` as PR #36 (squash commit `fccc14bcdf581245bdefd7b67395ca96eafcf2f7`, approved PR HEAD `8586c759f8ee28cfcead9310f4740f479cf4dfde`). CI green pre-merge (run `37800774060`, 8/8) and post-merge on `main` (run `37822195467`, 8/8). Tree equivalence confirmed (`e86f20fb132438725128a582638dfc8cf338e8d6`). Known blocking findings = none. Regressions on WP2.1-A = none. **WP2.1-B is VERIFIED.**
 
-WP2.2 (Matching Engine) is **IMPLEMENTED / PENDING INDEPENDENT REVIEW**: ADR-0014 and D-056 establish complete architecture, contracts, scoring models, explainability, cache, concurrency, evals, and implementation plan. Implemented on branch `feat/wp2-2-matching-engine` with all 13 domain modules, 15 golden evals, 6 invariant suites, Alembic migration 0006, and authenticated matching endpoint. Awaiting independent review.
+WP2.2 (Matching Engine) — deterministic `MatchingEngine` under `tapjob_api.matching` consuming `TruthSnapshot` (confirmed facts only) and canonical `Job`, 0..100 integer score scale, hard-filter knock-out gate (`WORK_AUTHORIZATION`, `WORKPLACE_TYPE`, `LOCATION`, `SALARY_MINIMUM`, `ROLE_ALIGNMENT`) with strict `HARD_BLOCKER`/`SOFT_MISMATCH`/`UNKNOWN` classification, deterministic 5-component lexical scoring (25% title, 35% skills, 20% experience, 10% seniority, 10% location/workplace) via pure basis points integer arithmetic, bilingual normalization, neutral imputation, grounded deterministic template explainability linking strengths directly to `ProfileFact.id` values (no LLM dependency in the WP2.2 runtime baseline), reproducibility invariant (`matching_policy_version 2026.1`), PostgreSQL canonical `match_results` persistence (migration `0006`) with unique constraint, volatile Redis cache (24h TTL) with visibility pre-check, authenticated `POST /api/v1/jobs/{job_id}/match` endpoint, 15 golden deterministic evals, and 6 invariant suites — is independently reviewed across multiple rounds (CRITICAL=0, HIGH=0, MEDIUM_BLOCKING=0: APPROVED), merged via squash into `main` as PR #40 (squash commit `2aedd2b6d281214296009d3ff058d6fdb5677720`, approved implementation HEAD `55744b6872b49854cad45c2ef69cd3c132f3c073`), post-merge CI run `37997452936` on `main` is green 8/8. **WP2.2 is VERIFIED.**
 
-**Next work:** Independent review of **WP2.2 — Matching Engine**. Downstream work packages (WP2.3+ Feed and beyond) remain strictly NOT AUTHORIZED.
+**Next Product Goal:** **Minimum WhatsApp Alpha Vertical Slice** (cross-WP minimum slice delivering end-to-end user value over the channel-neutral Core). **Parallel-safe:** Mobile Readiness only. Full Mobile Product Experience remains deferred until after the WhatsApp Alpha vertical slice is functional. Downstream full work packages remain unstarted.
