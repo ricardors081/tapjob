@@ -58,6 +58,7 @@ def create_app(
         app.state.rate_limiter = RedisFixedWindowRateLimiter(
             redis.Redis.from_url(str(settings.redis_url))
         )
+        app.state.redis_client = app.state.rate_limiter._client
 
         # WP1.3 (docs/adr/0011-resume-import.md): one storage adapter and one Celery PRODUCER per
         # process, same "construct once, reuse" discipline as every other process-scoped resource

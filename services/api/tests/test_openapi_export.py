@@ -27,7 +27,8 @@ def test_health_and_ready_have_explicit_camel_case_operation_ids() -> None:
 
 
 def test_schema_exposes_the_business_routes_under_api_v1() -> None:
-    # WP1.1 (identity), WP1.2 (career-profile), WP1.3 (resume-import), WP2.1-A (jobs).
+    # WP1.1 (identity), WP1.2 (career-profile), WP1.3 (resume-import), WP2.1-A (jobs),
+    # and WP2.2 (matching).
     # Every business route lives under /api/v1 (validate_api_v1_scoping enforces structurally).
     schema = build_openapi_schema()
 
@@ -54,6 +55,7 @@ def test_schema_exposes_the_business_routes_under_api_v1() -> None:
         "/api/v1/jobs/intake/paste",
         "/api/v1/jobs/intake/url",
         "/api/v1/jobs/{job_id}",
+        "/api/v1/jobs/{job_id}/match",
     }
 
 

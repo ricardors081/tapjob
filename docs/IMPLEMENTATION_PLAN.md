@@ -260,9 +260,9 @@ Divided into two sequential checkpoints:
 
 ---
 
-## WP2.2 — Matching Engine (DESIGN GATE APPROVED / IMPLEMENTATION AUTHORIZED / NOT YET IMPLEMENTED)
+## WP2.2 — Matching Engine (IMPLEMENTED / PENDING INDEPENDENT REVIEW)
 
-Decision gate defined and accepted in ADR-0014 (`docs/adr/0014-matching-engine.md`, D-056). Architecture, contracts, scoring models, explainability, cache, concurrency, and implementation plan are approved and merged in PR #38. Implementation of WP2.2 is authorized and not yet implemented. Downstream work packages (WP2.3+ Feed and beyond) remain strictly NOT AUTHORIZED.
+Decision gate defined and accepted in ADR-0014 (`docs/adr/0014-matching-engine.md`, D-056). Architecture, contracts, scoring models, explainability, cache, concurrency, evals, and implementation plan are implemented on branch `feat/wp2-2-matching-engine`. Awaiting independent review. Downstream work packages (WP2.3+ Feed and beyond) remain strictly NOT AUTHORIZED.
 
 ### Deliver
 - 5 canonical hard-filter knock-out gates (`WORK_AUTHORIZATION`, `WORKPLACE_TYPE`, `LOCATION`, `SALARY_MINIMUM`, `ROLE_ALIGNMENT`) governed by a formal Capability Matrix;

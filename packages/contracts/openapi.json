@@ -395,6 +395,15 @@
         "title": "ConsentRecordResponse",
         "type": "object"
       },
+      "CriticalUnknown": {
+        "description": "Critical ambiguities requiring user review before application.",
+        "enum": [
+          "work_authorization_ambiguous",
+          "sparse_profile"
+        ],
+        "title": "CriticalUnknown",
+        "type": "string"
+      },
       "DeletionRequestResponse": {
         "properties": {
           "cancelledAt": {
@@ -1015,6 +1024,58 @@
           "createdAt"
         ],
         "title": "FinalizeResumeImportResponse",
+        "type": "object"
+      },
+      "HardFilterId": {
+        "description": "The five canonical knock-out gates defined in ADR-0014.",
+        "enum": [
+          "work_authorization",
+          "workplace_type",
+          "location",
+          "salary_minimum",
+          "role_alignment"
+        ],
+        "title": "HardFilterId",
+        "type": "string"
+      },
+      "HardFilterOutcome": {
+        "description": "Outcome classification for a hard-filter gate evaluation.",
+        "enum": [
+          "passed",
+          "hard_blocker",
+          "soft_mismatch",
+          "unknown"
+        ],
+        "title": "HardFilterOutcome",
+        "type": "string"
+      },
+      "HardFilterResultDto": {
+        "properties": {
+          "filterId": {
+            "$ref": "#/components/schemas/HardFilterId"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/HardFilterOutcome"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "sourceFacts": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Sourcefacts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "filterId",
+          "outcome",
+          "reason"
+        ],
+        "title": "HardFilterResultDto",
         "type": "object"
       },
       "HeadlineCandidateValue": {
@@ -1646,6 +1707,235 @@
           "createdAt"
         ],
         "title": "MasterResumeResponse",
+        "type": "object"
+      },
+      "MatchBlockerDto": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "filterId": {
+            "$ref": "#/components/schemas/HardFilterId"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "filterId"
+        ],
+        "title": "MatchBlockerDto",
+        "type": "object"
+      },
+      "MatchEligibility": {
+        "description": "Final match eligibility decision.",
+        "enum": [
+          "eligible",
+          "ineligible",
+          "review_required"
+        ],
+        "title": "MatchEligibility",
+        "type": "string"
+      },
+      "MatchExplanationDto": {
+        "properties": {
+          "gapsSummary": {
+            "title": "Gapssummary",
+            "type": "string"
+          },
+          "strengthsSummary": {
+            "title": "Strengthssummary",
+            "type": "string"
+          },
+          "summaryHeadline": {
+            "title": "Summaryheadline",
+            "type": "string"
+          },
+          "verdictSummary": {
+            "title": "Verdictsummary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "summaryHeadline",
+          "strengthsSummary",
+          "gapsSummary",
+          "verdictSummary"
+        ],
+        "title": "MatchExplanationDto",
+        "type": "object"
+      },
+      "MatchRequirementGapDto": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "isMandatory": {
+            "title": "Ismandatory",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "isMandatory"
+        ],
+        "title": "MatchRequirementGapDto",
+        "type": "object"
+      },
+      "MatchResponse": {
+        "properties": {
+          "blockers": {
+            "items": {
+              "$ref": "#/components/schemas/MatchBlockerDto"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "computedAt": {
+            "format": "date-time",
+            "title": "Computedat",
+            "type": "string"
+          },
+          "criticalUnknowns": {
+            "items": {
+              "$ref": "#/components/schemas/CriticalUnknown"
+            },
+            "title": "Criticalunknowns",
+            "type": "array"
+          },
+          "deterministicResultDigest": {
+            "title": "Deterministicresultdigest",
+            "type": "string"
+          },
+          "eligibility": {
+            "$ref": "#/components/schemas/MatchEligibility"
+          },
+          "evaluationAsOfDate": {
+            "format": "date",
+            "title": "Evaluationasofdate",
+            "type": "string"
+          },
+          "explanation": {
+            "$ref": "#/components/schemas/MatchExplanationDto"
+          },
+          "groundedFactIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Groundedfactids",
+            "type": "array"
+          },
+          "hardFilterResults": {
+            "items": {
+              "$ref": "#/components/schemas/HardFilterResultDto"
+            },
+            "title": "Hardfilterresults",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "jobId": {
+            "format": "uuid",
+            "title": "Jobid",
+            "type": "string"
+          },
+          "jobMatchFingerprint": {
+            "title": "Jobmatchfingerprint",
+            "type": "string"
+          },
+          "missingRequirements": {
+            "items": {
+              "$ref": "#/components/schemas/MatchRequirementGapDto"
+            },
+            "title": "Missingrequirements",
+            "type": "array"
+          },
+          "overallScore": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Overallscore",
+            "type": "integer"
+          },
+          "policyVersion": {
+            "title": "Policyversion",
+            "type": "string"
+          },
+          "profileVersion": {
+            "title": "Profileversion",
+            "type": "integer"
+          },
+          "scoreBreakdown": {
+            "$ref": "#/components/schemas/ScoreBreakdownDto"
+          },
+          "strengths": {
+            "items": {
+              "$ref": "#/components/schemas/MatchStrengthDto"
+            },
+            "title": "Strengths",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "jobId",
+          "overallScore",
+          "eligibility",
+          "scoreBreakdown",
+          "hardFilterResults",
+          "blockers",
+          "strengths",
+          "missingRequirements",
+          "criticalUnknowns",
+          "explanation",
+          "groundedFactIds",
+          "profileVersion",
+          "jobMatchFingerprint",
+          "policyVersion",
+          "evaluationAsOfDate",
+          "deterministicResultDigest",
+          "computedAt"
+        ],
+        "title": "MatchResponse",
+        "type": "object"
+      },
+      "MatchStrengthDto": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "factIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Factids",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description"
+        ],
+        "title": "MatchStrengthDto",
         "type": "object"
       },
       "ObservationStatus": {
@@ -2335,6 +2625,49 @@
           "period"
         ],
         "title": "SalaryPreferenceValue",
+        "type": "object"
+      },
+      "ScoreBreakdownDto": {
+        "properties": {
+          "experience": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Experience",
+            "type": "integer"
+          },
+          "seniority": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Seniority",
+            "type": "integer"
+          },
+          "skills": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Skills",
+            "type": "integer"
+          },
+          "title": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Title",
+            "type": "integer"
+          },
+          "workplaceLocation": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Workplacelocation",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "title",
+          "skills",
+          "experience",
+          "seniority",
+          "workplaceLocation"
+        ],
+        "title": "ScoreBreakdownDto",
         "type": "object"
       },
       "SkillFactValue": {
@@ -3205,6 +3538,90 @@
         "summary": "Get Job By Id",
         "tags": [
           "jobs"
+        ]
+      }
+    },
+    "/api/v1/jobs/{job_id}/match": {
+      "post": {
+        "description": "Computes or retrieves cached match result for the authenticated user and job.",
+        "operationId": "matchJob",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Vaga não encontrada ou não acessível."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validação de dados ou identificador inválido."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Limite de requisições excedido."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Erro interno durante cálculo de matching."
+          }
+        },
+        "summary": "Match Job",
+        "tags": [
+          "matching"
         ]
       }
     },

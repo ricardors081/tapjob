@@ -223,6 +223,13 @@ export type ConsentRecordResponse = {
 };
 
 /**
+ * CriticalUnknown
+ *
+ * Critical ambiguities requiring user review before application.
+ */
+export type CriticalUnknown = 'work_authorization_ambiguous' | 'sparse_profile';
+
+/**
  * DeletionRequestResponse
  */
 export type DeletionRequestResponse = {
@@ -522,6 +529,36 @@ export type FinalizeResumeImportResponse = {
      * Version
      */
     version: number;
+};
+
+/**
+ * HardFilterId
+ *
+ * The five canonical knock-out gates defined in ADR-0014.
+ */
+export type HardFilterId = 'work_authorization' | 'workplace_type' | 'location' | 'salary_minimum' | 'role_alignment';
+
+/**
+ * HardFilterOutcome
+ *
+ * Outcome classification for a hard-filter gate evaluation.
+ */
+export type HardFilterOutcome = 'passed' | 'hard_blocker' | 'soft_mismatch' | 'unknown';
+
+/**
+ * HardFilterResultDto
+ */
+export type HardFilterResultDto = {
+    filterId: HardFilterId;
+    outcome: HardFilterOutcome;
+    /**
+     * Reason
+     */
+    reason: string;
+    /**
+     * Sourcefacts
+     */
+    sourceFacts?: Array<string>;
 };
 
 /**
@@ -898,6 +935,155 @@ export type MasterResumeResponse = {
 };
 
 /**
+ * MatchBlockerDto
+ */
+export type MatchBlockerDto = {
+    /**
+     * Code
+     */
+    code: string;
+    filterId: HardFilterId;
+    /**
+     * Message
+     */
+    message: string;
+};
+
+/**
+ * MatchEligibility
+ *
+ * Final match eligibility decision.
+ */
+export type MatchEligibility = 'eligible' | 'ineligible' | 'review_required';
+
+/**
+ * MatchExplanationDto
+ */
+export type MatchExplanationDto = {
+    /**
+     * Gapssummary
+     */
+    gapsSummary: string;
+    /**
+     * Strengthssummary
+     */
+    strengthsSummary: string;
+    /**
+     * Summaryheadline
+     */
+    summaryHeadline: string;
+    /**
+     * Verdictsummary
+     */
+    verdictSummary: string;
+};
+
+/**
+ * MatchRequirementGapDto
+ */
+export type MatchRequirementGapDto = {
+    /**
+     * Description
+     */
+    description: string;
+    /**
+     * Ismandatory
+     */
+    isMandatory: boolean;
+    /**
+     * Name
+     */
+    name: string;
+};
+
+/**
+ * MatchResponse
+ */
+export type MatchResponse = {
+    /**
+     * Blockers
+     */
+    blockers: Array<MatchBlockerDto>;
+    /**
+     * Computedat
+     */
+    computedAt: string;
+    /**
+     * Criticalunknowns
+     */
+    criticalUnknowns: Array<CriticalUnknown>;
+    /**
+     * Deterministicresultdigest
+     */
+    deterministicResultDigest: string;
+    eligibility: MatchEligibility;
+    /**
+     * Evaluationasofdate
+     */
+    evaluationAsOfDate: string;
+    explanation: MatchExplanationDto;
+    /**
+     * Groundedfactids
+     */
+    groundedFactIds: Array<string>;
+    /**
+     * Hardfilterresults
+     */
+    hardFilterResults: Array<HardFilterResultDto>;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Jobid
+     */
+    jobId: string;
+    /**
+     * Jobmatchfingerprint
+     */
+    jobMatchFingerprint: string;
+    /**
+     * Missingrequirements
+     */
+    missingRequirements: Array<MatchRequirementGapDto>;
+    /**
+     * Overallscore
+     */
+    overallScore: number;
+    /**
+     * Policyversion
+     */
+    policyVersion: string;
+    /**
+     * Profileversion
+     */
+    profileVersion: number;
+    scoreBreakdown: ScoreBreakdownDto;
+    /**
+     * Strengths
+     */
+    strengths: Array<MatchStrengthDto>;
+};
+
+/**
+ * MatchStrengthDto
+ */
+export type MatchStrengthDto = {
+    /**
+     * Description
+     */
+    description: string;
+    /**
+     * Factids
+     */
+    factIds?: Array<string>;
+    /**
+     * Name
+     */
+    name: string;
+};
+
+/**
  * ObservationStatus
  *
  * Observation status for an individual job origin.
@@ -1260,6 +1446,32 @@ export type SalaryPreferenceValue = {
      * Preferencekind
      */
     preferenceKind?: 'salary';
+};
+
+/**
+ * ScoreBreakdownDto
+ */
+export type ScoreBreakdownDto = {
+    /**
+     * Experience
+     */
+    experience: number;
+    /**
+     * Seniority
+     */
+    seniority: number;
+    /**
+     * Skills
+     */
+    skills: number;
+    /**
+     * Title
+     */
+    title: number;
+    /**
+     * Workplacelocation
+     */
+    workplaceLocation: number;
 };
 
 /**
@@ -1739,6 +1951,52 @@ export type GetJobByIdResponses = {
 };
 
 export type GetJobByIdResponse = GetJobByIdResponses[keyof GetJobByIdResponses];
+
+export type MatchJobData = {
+    body?: never;
+    path: {
+        /**
+         * Job Id
+         */
+        job_id: string;
+    };
+    query?: never;
+    url: '/api/v1/jobs/{job_id}/match';
+};
+
+export type MatchJobErrors = {
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Vaga não encontrada ou não acessível.
+     */
+    404: ErrorResponse;
+    /**
+     * Validação de dados ou identificador inválido.
+     */
+    422: ErrorResponse;
+    /**
+     * Limite de requisições excedido.
+     */
+    429: ErrorResponse;
+    /**
+     * Erro interno durante cálculo de matching.
+     */
+    500: ErrorResponse;
+};
+
+export type MatchJobError = MatchJobErrors[keyof MatchJobErrors];
+
+export type MatchJobResponses = {
+    /**
+     * Successful Response
+     */
+    200: MatchResponse;
+};
+
+export type MatchJobResponse = MatchJobResponses[keyof MatchJobResponses];
 
 export type GetCurrentUserData = {
     body?: never;

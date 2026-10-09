@@ -15,6 +15,7 @@ from fastapi import APIRouter
 from tapjob_api.career_profile.router import router as career_profile_router
 from tapjob_api.identity.router import router as identity_router
 from tapjob_api.jobs.router import router as jobs_router
+from tapjob_api.matching.router import router as matching_router
 from tapjob_api.resume_import.router import router as resume_import_router
 
 API_V1_PREFIX = "/api/v1"
@@ -24,3 +25,4 @@ router.include_router(identity_router)
 router.include_router(career_profile_router)
 router.include_router(resume_import_router)
 router.include_router(jobs_router)
+router.include_router(matching_router)
