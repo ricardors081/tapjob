@@ -260,9 +260,9 @@ Divided into two sequential checkpoints:
 
 ---
 
-## WP2.2 — Matching Engine (DESIGN GATE IN REVIEW / NOT IMPLEMENTED)
+## WP2.2 — Matching Engine (DESIGN GATE APPROVED / IMPLEMENTATION AUTHORIZED / NOT YET IMPLEMENTED)
 
-Decision gate defined in ADR-0014 (`docs/adr/0014-matching-engine.md`, D-056). Architecture, contracts, scoring models, explainability, cache, concurrency, and implementation plan are under final review in PR #38. Implementation will be authorized only after independent review approval and PR merge. Downstream work packages (WP2.3+ Feed and beyond) remain strictly NOT AUTHORIZED.
+Decision gate defined and accepted in ADR-0014 (`docs/adr/0014-matching-engine.md`, D-056). Architecture, contracts, scoring models, explainability, cache, concurrency, and implementation plan are approved and merged in PR #38. Implementation of WP2.2 is authorized and not yet implemented. Downstream work packages (WP2.3+ Feed and beyond) remain strictly NOT AUTHORIZED.
 
 ### Deliver
 - 5 canonical hard-filter knock-out gates (`WORK_AUTHORIZATION`, `WORKPLACE_TYPE`, `LOCATION`, `SALARY_MINIMUM`, `ROLE_ALIGNMENT`) governed by a formal Capability Matrix;
@@ -602,7 +602,7 @@ Can progress alongside WPs when they do not alter contracts:
 
 ## First authorized next step
 
-**WP2.2 — Matching Engine (AUTHORIZED for design and implementation planning; NOT YET IMPLEMENTED).**
+**WP2.2 — Matching Engine (DESIGN GATE APPROVED / IMPLEMENTATION AUTHORIZED / NOT YET IMPLEMENTED).**
 WP0.1, WP0.2 (both WP0.2-A and all of WP0.2-B), WP1.1, WP1.2, WP1.3, and WP2.1 (both WP2.1-A and WP2.1-B) are all independently verified, merged, and post-merge CI verified on `main`:
 - WP1.1 — Identity & User Account is **VERIFIED** (`docs/adr/0009-identity-auth-user-account.md`, D-051; PR #17, squash commit `bc269d8dd99f1455d1d44cf8b3abb4ba8d7915e7`; CI green pre-merge run `37254156902` 8/8 and post-merge run `37312677497` 8/8).
 - WP1.2 — Career Profile & Truth Store (`docs/adr/0010-career-profile-truth-store.md`, D-052) is **VERIFIED** (PR #19, squash commit `5c06c805ea2a68fcf100ec56cff5eaf715e962c2`, corrective PR #20 squash commit `f30590577cf25733de63025f987c251ebe0e89af`, post-merge CI run `37397784331` 8/8 green).
@@ -610,4 +610,4 @@ WP0.1, WP0.2 (both WP0.2-A and all of WP0.2-B), WP1.1, WP1.2, WP1.3, and WP2.1 (
 - WP2.1-A — Jobs Domain, Manual Intake & Normalization Foundation (`docs/adr/0012-jobs-domain-manual-intake.md`, D-054) is **VERIFIED** (PR #25, squash commit `38da12050d9613f502bce956edc7167c8427f3df`; post-merge CI run `37716255293` 8/8 green).
 - WP2.1-B — External Hosted ATS Connectors & Ingestion Scheduler (`docs/adr/0013-external-ats-connectors-ingestion.md`, D-055) is **VERIFIED** (PR #36, squash commit `fccc14bcdf581245bdefd7b67395ca96eafcf2f7`, approved PR HEAD `8586c759f8ee28cfcead9310f4740f479cf4dfde`; pre-merge CI run `37800774060` 8/8, post-merge CI run `37822195467` 8/8).
 
-Phase 1 Career Core baseline and Phase 2 opportunity intake foundation (WP2.1) are complete. The next authorized domain work is **WP2.2 — Matching Engine** (hard filters, lexical/semantic scoring, explainability). WP2.2 is not yet implemented. WP2.3+ (Job Feed & Alerts) and further downstream work packages remain **NOT AUTHORIZED**.
+Phase 1 Career Core baseline and Phase 2 opportunity intake foundation (WP2.1) are complete. The next authorized domain work is **WP2.2 — Matching Engine** (implementation authorized; not yet implemented). WP2.3+ (Job Feed & Alerts) and further downstream work packages remain **NOT AUTHORIZED**.

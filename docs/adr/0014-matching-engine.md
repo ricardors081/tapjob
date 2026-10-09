@@ -1,6 +1,6 @@
 # ADR-0014 — Matching Engine Architecture, Scoring & Explainability (WP2.2)
 
-**Status:** In Review (Proposed — canonical upon PR #38 approval and merge)  
+**Status:** Accepted  
 **Date:** 2026-10-08  
 **Decision:** D-056 (`docs/DECISIONS.md`)  
 
