@@ -5,9 +5,9 @@ when the process starts, so a missing or malformed required value fails fast.
 """
 
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import Field, PostgresDsn, RedisDsn
+from pydantic import Field, PostgresDsn, RedisDsn, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Named default instead of a literal scattered at each call site (docs/ENGINEERING_STANDARDS.md
@@ -68,9 +68,48 @@ class RuntimeSettings(BaseSettings):
     # pretending to be shared. Unset means `create_storage_adapter` FAILS FAST with
     # `ObjectStorageConfigError` in `local`/`development` too (round-2 independent review
     # "Finding 5") -- it no longer falls back to an in-memory fake implicitly. Every test process
-    # leaves this unset AND injects `InMemoryObjectStorage` explicitly instead
     # (`tapjob_api.main.create_app`'s `resume_storage_override` parameter).
     resume_import_local_storage_dir: str | None = None
+
+    # Evolution API messaging gateway settings
+    evolution_api_url: str = "http://localhost:8080"
+    evolution_api_key: str = "test-key"
+    evolution_instance_name: str = "tapjob"
+
+
+def validate_evolution_settings_production_like(
+    *,
+    app_env: Environment,
+    evolution_api_url: str,
+    evolution_api_key: str,
+    evolution_instance_name: str,
+) -> None:
+    """Validates that Evolution API settings are non-placeholder in staging/production."""
+    is_production_like = app_env in (Environment.STAGING, Environment.PRODUCTION)
+    if not is_production_like:
+        return
+
+    if evolution_api_key.strip() in (
+        "test-key",
+        "dummy",
+        "change-me",
+        "placeholder",
+        "secret",
+        "",
+    ):
+        raise ValueError(
+            "evolution_api_key cannot use default 'test-key' as an operational credential "
+            "in staging/production"
+        )
+    if "localhost" in evolution_api_url or "127.0.0.1" in evolution_api_url:
+        raise ValueError(
+            "evolution_api_url cannot point to localhost/127.0.0.1 in staging/production"
+        )
+    if evolution_instance_name.strip() in ("tapjob", "default", ""):
+        raise ValueError(
+            "evolution_instance_name must be explicitly configured and not depend on the "
+            "default in staging/production"
+        )
 
 
 class ApiSettings(RuntimeSettings):
@@ -79,3 +118,27 @@ class ApiSettings(RuntimeSettings):
     database_url: PostgresDsn
     redis_url: RedisDsn
     readiness_timeout_seconds: float = Field(default=DEFAULT_READINESS_TIMEOUT_SECONDS, gt=0.0)
+    whatsapp_webhook_enabled: bool = False
+    whatsapp_webhook_secret: str | None = None
+
+    @model_validator(mode="after")
+    def validate_whatsapp_security_in_production(self) -> Self:
+        is_production_like = self.app_env in (Environment.STAGING, Environment.PRODUCTION)
+        if is_production_like and self.whatsapp_webhook_enabled:
+            if not self.whatsapp_webhook_secret or self.whatsapp_webhook_secret.strip() in (
+                "test-key",
+                "secret",
+                "change-me",
+                "dummy",
+            ):
+                raise ValueError(
+                    "whatsapp_webhook_secret must be set to a non-default secret in "
+                    "staging/production when WhatsApp webhook is enabled"
+                )
+            validate_evolution_settings_production_like(
+                app_env=self.app_env,
+                evolution_api_url=self.evolution_api_url,
+                evolution_api_key=self.evolution_api_key,
+                evolution_instance_name=self.evolution_instance_name,
+            )
+        return self

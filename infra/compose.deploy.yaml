@@ -100,6 +100,11 @@ services:
     <<: *backend
     environment:
       <<: *backend-env
+      EVOLUTION_API_URL: ${EVOLUTION_API_URL:?set EVOLUTION_API_URL}
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:?set EVOLUTION_API_KEY}
+      EVOLUTION_INSTANCE_NAME: ${EVOLUTION_INSTANCE_NAME:?set EVOLUTION_INSTANCE_NAME}
+      WHATSAPP_WEBHOOK_ENABLED: ${WHATSAPP_WEBHOOK_ENABLED:-false}
+      WHATSAPP_WEBHOOK_SECRET: ${WHATSAPP_WEBHOOK_SECRET:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -123,6 +128,9 @@ services:
     command: ["celery", "-A", "tapjob_worker.main:app", "worker", "--loglevel", "${LOG_LEVEL:?}"]
     environment:
       <<: *backend-env
+      EVOLUTION_API_URL: ${EVOLUTION_API_URL:?set EVOLUTION_API_URL}
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:?set EVOLUTION_API_KEY}
+      EVOLUTION_INSTANCE_NAME: ${EVOLUTION_INSTANCE_NAME:?set EVOLUTION_INSTANCE_NAME}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -137,7 +145,7 @@ services:
 
   beat:
     <<: *backend
-    command: ["celery", "-A", "tapjob_worker.main:app", "beat", "--loglevel", "${LOG_LEVEL:?}"]
+    command: ["celery", "-A", "tapjob_worker.beat:app", "beat", "--loglevel", "${LOG_LEVEL:?}"]
     environment:
       <<: *backend-env
     depends_on:

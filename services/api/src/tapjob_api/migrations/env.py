@@ -3,6 +3,16 @@
 from alembic import context
 from sqlalchemy import create_engine, pool
 
+import tapjob_api.career_profile.models
+import tapjob_api.identity.models
+import tapjob_api.jobs.models
+import tapjob_api.matching.models
+import tapjob_api.messaging.applications
+import tapjob_api.messaging.inbound
+import tapjob_api.messaging.models
+import tapjob_api.messaging.outbox
+import tapjob_api.messaging.reminders
+import tapjob_api.resume_import.models  # noqa: F401 -- import for Base.metadata discovery
 from tapjob_api.core.config import ApiSettings
 from tapjob_api.core.logging import configure_logging
 from tapjob_api.db.base import Base

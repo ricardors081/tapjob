@@ -37,3 +37,4 @@ apps/mobile/GoogleService-Info.plist
 Thumbs.db
 .idea/
 .vscode/
+.gemini/

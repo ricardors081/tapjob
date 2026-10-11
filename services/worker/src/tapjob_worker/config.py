@@ -1,6 +1,8 @@
-from pydantic import PostgresDsn, RedisDsn
+from typing import Self
 
-from tapjob_api.core.config import RuntimeSettings
+from pydantic import PostgresDsn, RedisDsn, model_validator
+
+from tapjob_api.core.config import RuntimeSettings, validate_evolution_settings_production_like
 
 
 class WorkerSettings(RuntimeSettings):
@@ -15,3 +17,23 @@ class WorkerSettings(RuntimeSettings):
 
     # WP2.1-B hosted ATS job sources configuration JSON string (or unset for zero sources)
     hosted_ats_sources: str | None = None
+
+    @model_validator(mode="after")
+    def validate_worker_settings(self) -> Self:
+        validate_evolution_settings_production_like(
+            app_env=self.app_env,
+            evolution_api_url=self.evolution_api_url,
+            evolution_api_key=self.evolution_api_key,
+            evolution_instance_name=self.evolution_instance_name,
+        )
+        return self
+
+
+class BeatSettings(RuntimeSettings):
+    """Settings required exclusively by the Celery Beat scheduler process.
+
+    Only requires broker URL to schedule periodic tasks. Does not require database
+    engine, object storage, or third-party messaging provider credentials.
+    """
+
+    redis_url: RedisDsn

@@ -39,12 +39,24 @@ class ChannelIdentity:
 
 
 @dataclass(frozen=True, slots=True)
+class InboundAttachment:
+    """Provider-neutral inbound media/attachment (Finding 4)."""
+
+    provider_media_id: str
+    mime_type: str
+    filename: str | None = None
+    size_bytes: int | None = None
+    kind: str = "document"
+
+
+@dataclass(frozen=True, slots=True)
 class InboundMessage:
     sender: ChannelIdentity
     provider_message_id: str
     received_at: datetime
     text: str | None
-    interactive_reply_id: str | None
+    interactive_reply_id: str | None = None
+    attachments: tuple[InboundAttachment, ...] = ()
 
     def __post_init__(self) -> None:
         normalize_utc_field(self, "received_at")

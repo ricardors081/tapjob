@@ -208,6 +208,9 @@ jobs:
           R2_BUCKET: dummy-bucket
           R2_ACCESS_KEY_ID: dummy
           R2_SECRET_ACCESS_KEY: dummy
+          EVOLUTION_API_URL: https://evolution.dummy.internal
+          EVOLUTION_API_KEY: dummy-synthetic-key
+          EVOLUTION_INSTANCE_NAME: prod-instance
         run: docker compose -f infra/compose.deploy.yaml config
       - name: Confirm the resolved image is the canonical repository at the given digest
         run: |
@@ -240,6 +243,9 @@ jobs:
           R2_BUCKET: dummy-bucket
           R2_ACCESS_KEY_ID: dummy
           R2_SECRET_ACCESS_KEY: dummy
+          EVOLUTION_API_URL: https://evolution.dummy.internal
+          EVOLUTION_API_KEY: dummy-synthetic-key
+          EVOLUTION_INSTANCE_NAME: prod-instance
       - name: Confirm R2 object storage config reaches both api and worker (WP1.3, round-1 review "Finding 1")
         # Staging/production must never silently fall back to process-local storage -- this proves
         # the deploy Compose contract itself actually wires all four R2 settings into BOTH
@@ -271,6 +277,50 @@ jobs:
           R2_BUCKET: dummy-bucket
           R2_ACCESS_KEY_ID: dummy
           R2_SECRET_ACCESS_KEY: dummy
+          EVOLUTION_API_URL: https://evolution.dummy.internal
+          EVOLUTION_API_KEY: dummy-synthetic-key
+          EVOLUTION_INSTANCE_NAME: prod-instance
+      - name: Confirm Evolution config reaches api and worker, and beat does not leak credentials
+        run: |
+          docker compose -f infra/compose.deploy.yaml config --format json | \
+            python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)
+          api_env = d['services']['api']['environment']
+          for k in ('EVOLUTION_API_URL', 'EVOLUTION_API_KEY', 'EVOLUTION_INSTANCE_NAME', 'WHATSAPP_WEBHOOK_ENABLED'):
+            if not api_env.get(k):
+              print(f'api missing {k}', file=sys.stderr)
+              sys.exit(1)
+          worker_env = d['services']['worker']['environment']
+          for k in ('EVOLUTION_API_URL', 'EVOLUTION_API_KEY', 'EVOLUTION_INSTANCE_NAME'):
+            if not worker_env.get(k):
+              print(f'worker missing {k}', file=sys.stderr)
+              sys.exit(1)
+          beat_env = d['services']['beat']['environment']
+          if 'EVOLUTION_API_KEY' in beat_env or 'WHATSAPP_WEBHOOK_SECRET' in beat_env:
+            print('beat leaked credentials', file=sys.stderr)
+            sys.exit(1)
+          beat_cmd = d['services']['beat'].get('command', [])
+          if 'tapjob_worker.beat:app' not in beat_cmd:
+            print('beat must use dedicated tapjob_worker.beat:app entrypoint', file=sys.stderr)
+            sys.exit(1)
+          "
+        env:
+          BACKEND_IMAGE_DIGEST: sha256:0000000000000000000000000000000000000000000000000000000000000000
+          APP_ENV: staging
+          LOG_LEVEL: INFO
+          DATABASE_URL: postgresql+psycopg://dummy:dummy@postgres:5432/dummy
+          REDIS_URL: redis://redis:6379/0
+          POSTGRES_USER: dummy
+          POSTGRES_PASSWORD: dummy
+          POSTGRES_DB: dummy
+          R2_ENDPOINT_URL: https://dummy.r2.cloudflarestorage.com
+          R2_BUCKET: dummy-bucket
+          R2_ACCESS_KEY_ID: dummy
+          R2_SECRET_ACCESS_KEY: dummy
+          EVOLUTION_API_URL: https://evolution.dummy.internal
+          EVOLUTION_API_KEY: dummy-synthetic-key
+          EVOLUTION_INSTANCE_NAME: prod-instance
 
   security:
     name: Secret scan and dependency audit

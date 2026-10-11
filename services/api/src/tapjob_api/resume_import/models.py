@@ -279,3 +279,47 @@ class ResumeVersion(Base):
     )
 
     resume: Mapped["Resume"] = relationship(back_populates="versions")
+
+
+class CandidateReviewDraft(Base):
+    """Stores intermediate review decisions recorded via conversational channels.
+
+    Prevents 'acceptance/rejection by omission': individual review actions record an explicit
+    draft decision for a specific candidate without deciding other candidates implicitly.
+    Finalization against Truth Store occurs only when all candidates have explicit decisions.
+    """
+
+    __tablename__ = "candidate_review_drafts"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "resume_import_id",
+            "candidate_id",
+            name="uq_candidate_review_drafts_import_candidate",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    resume_import_id: Mapped[uuid.UUID] = mapped_column(
+        sa.ForeignKey("resume_imports.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    candidate_id: Mapped[uuid.UUID] = mapped_column(
+        sa.ForeignKey("resume_import_candidates.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    decision: Mapped[str] = mapped_column(sa.String(16), nullable=False)
+    edited_value: Mapped[dict[str, object] | None] = mapped_column(
+        "edited_value", JSONB, nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.func.now(),
+        onupdate=sa.func.now(),
+    )

@@ -23,6 +23,7 @@ from tapjob_api.http.errors import register_exception_handlers
 from tapjob_api.http.health import router as health_router
 from tapjob_api.http.readiness import router as readiness_router
 from tapjob_api.http.request_context import RequestContextMiddleware
+from tapjob_api.http.webhooks import router as webhooks_router
 from tapjob_api.identity.firebase import FirebaseIdentityProvider, create_firebase_app
 from tapjob_api.resume_import.storage import ObjectStoragePort, create_storage_adapter
 from tapjob_product_config import get_product_config
@@ -103,5 +104,6 @@ def create_app(
     register_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(readiness_router)
+    app.include_router(webhooks_router)
     app.include_router(api_v1_router)
     return app

@@ -33,6 +33,10 @@ x-database-env: &database-env
   R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
   R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
   HOSTED_ATS_SOURCES: ${HOSTED_ATS_SOURCES:-}
+  # Evolution API messaging gateway settings
+  EVOLUTION_API_URL: ${EVOLUTION_API_URL:-http://localhost:8080}
+  EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-test-key}
+  EVOLUTION_INSTANCE_NAME: ${EVOLUTION_INSTANCE_NAME:-tapjob}
 
 x-resume-storage-volume: &resume-storage-volume
   - resume-storage-data:/data/resume-imports
@@ -80,6 +84,8 @@ services:
     <<: *backend
     environment:
       <<: *database-env
+      WHATSAPP_WEBHOOK_ENABLED: ${WHATSAPP_WEBHOOK_ENABLED:-false}
+      WHATSAPP_WEBHOOK_SECRET: ${WHATSAPP_WEBHOOK_SECRET:-}
     volumes: *resume-storage-volume
     ports:
       - "127.0.0.1:${API_HOST_PORT:?}:8000"
@@ -118,7 +124,7 @@ services:
 
   beat:
     <<: *backend
-    command: ["celery", "-A", "tapjob_worker.main:app", "beat", "--loglevel", "${LOG_LEVEL:?}"]
+    command: ["celery", "-A", "tapjob_worker.beat:app", "beat", "--loglevel", "${LOG_LEVEL:?}"]
     environment:
       <<: *database-env
     volumes: *resume-storage-volume

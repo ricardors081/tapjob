@@ -93,10 +93,20 @@ def create_resume_import(
     original_filename: str,
     declared_content_type: str,
     storage: ObjectStoragePort,
+    import_id: uuid.UUID | None = None,
 ) -> ResumeImport:
     """Validates the upload (docs/adr/0011-...md "file security") BEFORE anything is stored.
     `original_filename` is retained only as display metadata, truncated to a bound -- NEVER used to
-    derive `storage_key` (docs/adr/0011-...md "import record")."""
+    derive `storage_key` (docs/adr/0011-...md "import record").
+
+    If `import_id` is specified and a record already exists with that ID, it is returned
+    idempotently.
+    """
+    if import_id is not None:
+        existing = session.get(ResumeImport, import_id)
+        if existing is not None:
+            return existing
+
     validated = validate_upload(
         content=content, declared_content_type=declared_content_type, filename=original_filename
     )
@@ -107,6 +117,7 @@ def create_resume_import(
     )
 
     resume_import = ResumeImport(
+        id=import_id or uuid.uuid4(),
         user_id=user.id,
         status=ImportStatus.QUEUED,
         original_filename=original_filename[:MAX_ORIGINAL_FILENAME_CHARS],

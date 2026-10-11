@@ -64,6 +64,10 @@ def test_celery_app_configures_periodic_beat_schedule() -> None:
     assert entry["task"] == SWEEP_SCHEDULED_INGESTION_TASK_NAME
     assert entry["schedule"] == float(DEFAULT_INGESTION_SWEEP_INTERVAL_SECONDS)
 
+    assert "messaging-dispatch-outbox" in beat_conf
+    assert "messaging-dispatch-due-reminders" in beat_conf
+    assert "messaging-recover-unprocessed-inbound" in beat_conf
+
 
 def test_celery_app_loads_real_registry_from_worker_settings() -> None:
     from unittest.mock import patch
@@ -105,3 +109,45 @@ def test_celery_app_fails_closed_on_invalid_hosted_ats_sources() -> None:
     )
     with pytest.raises(JobSourceConfigError):
         create_celery_app(bad_settings)
+
+
+def test_beat_settings_staging_boot_does_not_require_evolution_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tapjob_worker.celery_app import create_beat_app
+    from tapjob_worker.config import BeatSettings
+
+    monkeypatch.setenv("APP_ENV", "staging")
+    monkeypatch.setenv("REDIS_URL", REDIS_URL)
+    monkeypatch.delenv("EVOLUTION_API_URL", raising=False)
+    monkeypatch.delenv("EVOLUTION_API_KEY", raising=False)
+    monkeypatch.delenv("EVOLUTION_INSTANCE_NAME", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    beat_settings = BeatSettings()
+    assert beat_settings.app_env is Environment.STAGING
+    assert str(beat_settings.redis_url) == REDIS_URL
+
+    beat_app = create_beat_app(beat_settings)
+    assert beat_app.conf.broker_url == REDIS_URL
+
+    # Verify all expected tasks are present in beat_schedule
+    sched = beat_app.conf.beat_schedule
+    assert "messaging-dispatch-outbox" in sched
+    assert "messaging-dispatch-due-reminders" in sched
+    assert "messaging-recover-unprocessed-inbound" in sched
+    assert "jobs-scheduled-ingestion-sweep" in sched
+
+
+def test_worker_settings_staging_boot_requires_evolution_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "staging")
+    monkeypatch.setenv("REDIS_URL", REDIS_URL)
+    monkeypatch.setenv("DATABASE_URL", DATABASE_URL)
+    monkeypatch.delenv("EVOLUTION_API_URL", raising=False)
+    monkeypatch.delenv("EVOLUTION_API_KEY", raising=False)
+    monkeypatch.delenv("EVOLUTION_INSTANCE_NAME", raising=False)
+
+    with pytest.raises(ValidationError):
+        WorkerSettings()

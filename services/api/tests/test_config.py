@@ -70,3 +70,59 @@ def test_invalid_setting_is_rejected(
 
     with pytest.raises(ValidationError):
         ApiSettings()
+
+
+def test_production_whatsapp_enabled_without_secret_fails_fast(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("WHATSAPP_WEBHOOK_ENABLED", "true")
+    monkeypatch.delenv("WHATSAPP_WEBHOOK_SECRET", raising=False)
+
+    with pytest.raises(ValidationError, match="whatsapp_webhook_secret must be set"):
+        ApiSettings()
+
+
+def test_production_whatsapp_with_default_evolution_key_fails_fast(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("WHATSAPP_WEBHOOK_ENABLED", "true")
+    monkeypatch.setenv("WHATSAPP_WEBHOOK_SECRET", "dummy_valid_prod_wh_secret")
+    monkeypatch.setenv("EVOLUTION_API_KEY", "test-key")
+
+    with pytest.raises(ValidationError, match="evolution_api_key cannot use default"):
+        ApiSettings()
+
+
+def test_production_whatsapp_with_valid_credentials_passes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("WHATSAPP_WEBHOOK_ENABLED", "true")
+    monkeypatch.setenv("WHATSAPP_WEBHOOK_SECRET", "dummy_valid_prod_wh_secret")
+    monkeypatch.setenv("EVOLUTION_API_KEY", "dummy_valid_prod_evo_key")
+    monkeypatch.setenv("EVOLUTION_API_URL", "https://evolution.prod.internal")
+    monkeypatch.setenv("EVOLUTION_INSTANCE_NAME", "tapjob-prod")
+
+    settings = ApiSettings()
+    assert settings.app_env is Environment.PRODUCTION
+    assert settings.whatsapp_webhook_enabled is True
+    assert settings.whatsapp_webhook_secret == "dummy_valid_prod_wh_secret"  # noqa: S105
+    assert settings.evolution_api_key == "dummy_valid_prod_evo_key"
+    assert settings.evolution_api_url == "https://evolution.prod.internal"
+    assert settings.evolution_instance_name == "tapjob-prod"
+
+
+def test_development_whatsapp_with_test_credentials_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("WHATSAPP_WEBHOOK_ENABLED", "true")
+    monkeypatch.setenv("WHATSAPP_WEBHOOK_SECRET", "test-key")
+    monkeypatch.setenv("EVOLUTION_API_KEY", "test-key")
+
+    settings = ApiSettings()
+    assert settings.app_env is Environment.DEVELOPMENT
+    assert settings.whatsapp_webhook_enabled is True
+    assert settings.evolution_api_key == "test-key"
