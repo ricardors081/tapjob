@@ -45,6 +45,10 @@ class JobNotFoundError(JobDomainError):
     """Raised when a requested Job entity cannot be found by ID."""
 
 
+class CompanyNotFoundError(JobDomainError):
+    """Raised when a requested Company entity cannot be found by ID."""
+
+
 class IdempotencyKeyPayloadMismatchError(JobDomainError):
     """Raised when an Idempotency-Key is reused with a different request fingerprint."""
 

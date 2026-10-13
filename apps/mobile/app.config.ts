@@ -46,6 +46,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   scheme: productConfig.deepLinkScheme,
   version: "0.1.0",
   orientation: "portrait",
+  platforms: ["ios", "android"],
   userInterfaceStyle: "automatic",
   ios: {
     ...config.ios,

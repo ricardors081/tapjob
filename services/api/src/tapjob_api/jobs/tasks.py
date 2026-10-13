@@ -15,6 +15,7 @@ from typing import Any
 from celery import Task, shared_task
 from sqlalchemy.orm import Session, sessionmaker
 
+from tapjob_api.jobs.alert_service import evaluate_job_alerts_sweep
 from tapjob_api.jobs.ingestion import IngestionSummary, ingest_job_source
 from tapjob_api.jobs.sources.registry import (
     JobSourceRegistry,
@@ -25,8 +26,10 @@ logger = logging.getLogger(__name__)
 
 INGEST_JOB_SOURCE_TASK_NAME = "jobs.ingest_source"
 SWEEP_SCHEDULED_INGESTION_TASK_NAME = "jobs.sweep_scheduled_ingestion"
+EVALUATE_JOB_ALERTS_TASK_NAME = "jobs.evaluate_job_alerts"
 
 DEFAULT_INGESTION_SWEEP_INTERVAL_SECONDS = 3600  # 1 hour
+DEFAULT_ALERT_SWEEP_INTERVAL_SECONDS = 300  # 5 minutes
 MAX_INGESTION_ATTEMPTS = 3
 INGESTION_SOFT_TIME_LIMIT_SECONDS = 600
 INGESTION_HARD_TIME_LIMIT_SECONDS = 660
@@ -159,3 +162,26 @@ def sweep_scheduled_ingestion_task(
         "enqueued_count": len(enqueued_sources),
         "enqueued_sources": enqueued_sources,
     }
+
+
+@shared_task(  # type: ignore[untyped-decorator]
+    name=EVALUATE_JOB_ALERTS_TASK_NAME,
+    bind=True,
+    acks_late=True,
+    soft_time_limit=180,
+    time_limit=240,
+)
+def evaluate_job_alerts_task(
+    self: Task[Any, Any],
+) -> dict[str, Any]:
+    """Sweep and evaluate active job alerts, queuing notifications and outbound messages."""
+    session_maker = _require_session_factory()
+    with session_maker() as session:
+        try:
+            result = evaluate_job_alerts_sweep(session)
+            session.commit()
+            return result
+        except Exception as exc:
+            session.rollback()
+            logger.error("Failed to evaluate job alerts: %s", exc, exc_info=True)
+            raise self.retry(exc=exc, countdown=30) from exc

@@ -20,7 +20,9 @@ from tapjob_api.jobs.sources.registry import (
 
 # Importing these modules registers the shared tasks against this process's Celery app
 from tapjob_api.jobs.tasks import (
+    DEFAULT_ALERT_SWEEP_INTERVAL_SECONDS,
     DEFAULT_INGESTION_SWEEP_INTERVAL_SECONDS,
+    EVALUATE_JOB_ALERTS_TASK_NAME,
     SWEEP_SCHEDULED_INGESTION_TASK_NAME,
     configure_jobs_worker,
 )
@@ -61,6 +63,10 @@ BEAT_SCHEDULE: dict[str, dict[str, Any]] = {
     "messaging-recover-unprocessed-inbound": {
         "task": RECOVER_UNPROCESSED_INBOUND_ENVELOPES_TASK_NAME,
         "schedule": 60.0,
+    },
+    "jobs-evaluate-job-alerts": {
+        "task": EVALUATE_JOB_ALERTS_TASK_NAME,
+        "schedule": float(DEFAULT_ALERT_SWEEP_INTERVAL_SECONDS),
     },
 }
 

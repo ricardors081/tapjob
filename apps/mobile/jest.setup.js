@@ -4,3 +4,5 @@
 // exercise the module's own validation.
 process.env.EXPO_PUBLIC_APP_ENV ??= "local";
 process.env.EXPO_PUBLIC_API_BASE_URL ??= "http://localhost:8000";
+// Enable React 18 act() environment for Testing Library
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;

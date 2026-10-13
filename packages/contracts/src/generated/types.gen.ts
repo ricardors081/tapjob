@@ -180,6 +180,27 @@ export type CompanyDto = {
 };
 
 /**
+ * CompanyWatchResponse
+ *
+ * Watched company entry.
+ */
+export type CompanyWatchResponse = {
+    company: CompanyDto;
+    /**
+     * Companyid
+     */
+    companyId: string;
+    /**
+     * Createdat
+     */
+    createdAt: string;
+    /**
+     * Id
+     */
+    id: string;
+};
+
+/**
  * ConsentDecision
  */
 export type ConsentDecision = 'granted' | 'withdrawn';
@@ -228,6 +249,34 @@ export type ConsentRecordResponse = {
  * Critical ambiguities requiring user review before application.
  */
 export type CriticalUnknown = 'work_authorization_ambiguous' | 'sparse_profile';
+
+/**
+ * CursorPage[FeedItemResponse]
+ */
+export type CursorPageFeedItemResponse = {
+    /**
+     * Items
+     */
+    items: Array<FeedItemResponse>;
+    /**
+     * Nextcursor
+     */
+    nextCursor?: string | null;
+};
+
+/**
+ * CursorPage[SavedJobResponse]
+ */
+export type CursorPageSavedJobResponse = {
+    /**
+     * Items
+     */
+    items: Array<SavedJobResponse>;
+    /**
+     * Nextcursor
+     */
+    nextCursor?: string | null;
+};
 
 /**
  * DeletionRequestResponse
@@ -381,7 +430,7 @@ export type Environment = 'local' | 'development' | 'staging' | 'production';
  *
  * Machine-readable error vocabulary. Clients localize/branch on this, never on ``message``.
  */
-export type ErrorCode = 'INVALID_REQUEST' | 'VALIDATION_FAILED' | 'AUTHENTICATION_REQUIRED' | 'PERMISSION_DENIED' | 'RESOURCE_NOT_FOUND' | 'METHOD_NOT_ALLOWED' | 'CONFLICT' | 'RATE_LIMITED' | 'SERVICE_UNAVAILABLE' | 'UPSTREAM_FAILED' | 'UPSTREAM_TIMEOUT' | 'INVALID_CURSOR' | 'INTERNAL_ERROR' | 'AUTH_TOKEN_MISSING' | 'AUTH_TOKEN_INVALID' | 'AUTH_TOKEN_REVOKED' | 'ACCOUNT_NOT_BOOTSTRAPPED' | 'ACCOUNT_DISABLED' | 'REAUTHENTICATION_REQUIRED' | 'DEVICE_NOT_FOUND' | 'IDENTITY_CONFLICT' | 'PROFILE_VERSION_CONFLICT' | 'PROFILE_FACT_NOT_FOUND' | 'PROFILE_FACT_ALREADY_RETRACTED' | 'PROFILE_VERSION_NOT_FOUND' | 'UNSUPPORTED_DOCUMENT_TYPE' | 'DOCUMENT_TOO_LARGE' | 'MALFORMED_DOCUMENT' | 'ENCRYPTED_DOCUMENT' | 'TEXT_NOT_EXTRACTABLE' | 'RESUME_IMPORT_NOT_FOUND' | 'RESUME_IMPORT_NOT_READY' | 'JOB_TEXT_TOO_SHORT' | 'JOB_TEXT_TOO_LONG' | 'JOB_URL_INVALID' | 'JOB_URL_DESTINATION_FORBIDDEN' | 'JOB_URL_UNREACHABLE' | 'JOB_URL_TLS_FAILED' | 'JOB_URL_TOO_LARGE' | 'JOB_CONTENT_TYPE_UNSUPPORTED' | 'JOB_PAGE_REQUIRES_MANUAL_PASTE' | 'JOB_NOT_FOUND' | 'IDEMPOTENCY_KEY_PAYLOAD_MISMATCH' | 'CONCURRENT_REQUEST_IN_PROGRESS';
+export type ErrorCode = 'INVALID_REQUEST' | 'VALIDATION_FAILED' | 'AUTHENTICATION_REQUIRED' | 'PERMISSION_DENIED' | 'RESOURCE_NOT_FOUND' | 'METHOD_NOT_ALLOWED' | 'CONFLICT' | 'RATE_LIMITED' | 'SERVICE_UNAVAILABLE' | 'UPSTREAM_FAILED' | 'UPSTREAM_TIMEOUT' | 'INVALID_CURSOR' | 'INTERNAL_ERROR' | 'AUTH_TOKEN_MISSING' | 'AUTH_TOKEN_INVALID' | 'AUTH_TOKEN_REVOKED' | 'ACCOUNT_NOT_BOOTSTRAPPED' | 'ACCOUNT_DISABLED' | 'REAUTHENTICATION_REQUIRED' | 'DEVICE_NOT_FOUND' | 'IDENTITY_CONFLICT' | 'PROFILE_VERSION_CONFLICT' | 'PROFILE_FACT_NOT_FOUND' | 'PROFILE_FACT_ALREADY_RETRACTED' | 'PROFILE_VERSION_NOT_FOUND' | 'UNSUPPORTED_DOCUMENT_TYPE' | 'DOCUMENT_TOO_LARGE' | 'MALFORMED_DOCUMENT' | 'ENCRYPTED_DOCUMENT' | 'TEXT_NOT_EXTRACTABLE' | 'RESUME_IMPORT_NOT_FOUND' | 'RESUME_IMPORT_NOT_READY' | 'JOB_TEXT_TOO_SHORT' | 'JOB_TEXT_TOO_LONG' | 'JOB_URL_INVALID' | 'JOB_URL_DESTINATION_FORBIDDEN' | 'JOB_URL_UNREACHABLE' | 'JOB_URL_TLS_FAILED' | 'JOB_URL_TOO_LARGE' | 'JOB_CONTENT_TYPE_UNSUPPORTED' | 'JOB_PAGE_REQUIRES_MANUAL_PASTE' | 'JOB_NOT_FOUND' | 'COMPANY_NOT_FOUND' | 'IDEMPOTENCY_KEY_PAYLOAD_MISMATCH' | 'CONCURRENT_REQUEST_IN_PROGRESS';
 
 /**
  * ErrorResponse
@@ -465,6 +514,57 @@ export type FactStatus = 'active' | 'superseded' | 'retracted';
  * (docs/DATA_MODEL.md), not this Truth Store.
  */
 export type FactType = 'experience' | 'education' | 'skill' | 'certification' | 'language' | 'project' | 'link' | 'preference' | 'work_authorization';
+
+/**
+ * FeedItemResponse
+ *
+ * Single opportunity card in the personalized job feed.
+ */
+export type FeedItemResponse = {
+    company: CompanyDto;
+    /**
+     * Createdat
+     */
+    createdAt: string;
+    /**
+     * Eligibility
+     */
+    eligibility?: string | null;
+    /**
+     * Expiresat
+     */
+    expiresAt?: string | null;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Issaved
+     */
+    isSaved?: boolean;
+    /**
+     * Locationnormalized
+     */
+    locationNormalized?: string | null;
+    /**
+     * Locationraw
+     */
+    locationRaw?: string | null;
+    /**
+     * Matchscore
+     */
+    matchScore?: number | null;
+    status: JobStatus;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Titlenormalized
+     */
+    titleNormalized: string;
+    workplaceType: JobWorkplaceType;
+};
 
 /**
  * FinalizeResumeImportCommand
@@ -625,6 +725,155 @@ export type ImportFailureCode = 'unsupported_document_type' | 'document_too_larg
  * finalize requests resolve to exactly one winner without a separate idempotency-key table.
  */
 export type ImportStatus = 'queued' | 'processing' | 'ready_for_review' | 'finalized' | 'failed';
+
+/**
+ * JobAlertDeliveryChannel
+ *
+ * Supported delivery channels for proactive job alerts (WP2.3 WhatsApp-only).
+ */
+export type JobAlertDeliveryChannel = 'whatsapp';
+
+/**
+ * JobAlertPreferenceResponse
+ *
+ * Job alert subscription preference.
+ */
+export type JobAlertPreferenceResponse = {
+    deliveryChannel: JobAlertDeliveryChannel;
+    /**
+     * Enabled
+     */
+    enabled: boolean;
+    /**
+     * Mineligibility
+     */
+    minEligibility: string;
+    /**
+     * Minscore
+     */
+    minScore: number;
+};
+
+/**
+ * JobDetailResponse
+ *
+ * Enriched job detail response including WP2.2 match intelligence and user intent.
+ */
+export type JobDetailResponse = {
+    company: CompanyDto;
+    /**
+     * Companyid
+     */
+    companyId: string;
+    /**
+     * Createdat
+     */
+    createdAt: string;
+    /**
+     * Descriptioncleaned
+     */
+    descriptionCleaned: string;
+    /**
+     * Descriptionraw
+     */
+    descriptionRaw: string;
+    /**
+     * Expiresat
+     */
+    expiresAt?: string | null;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Iscompanywatched
+     */
+    isCompanyWatched?: boolean;
+    /**
+     * Isdismissed
+     */
+    isDismissed?: boolean;
+    /**
+     * Issaved
+     */
+    isSaved?: boolean;
+    /**
+     * Locationnormalized
+     */
+    locationNormalized?: string | null;
+    /**
+     * Locationraw
+     */
+    locationRaw?: string | null;
+    match?: JobMatchSummaryDto | null;
+    /**
+     * Origins
+     */
+    origins?: Array<JobOriginDto>;
+    provenanceSummary: JobProvenanceSummary;
+    /**
+     * Similarityfingerprint
+     */
+    similarityFingerprint: string;
+    status: JobStatus;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Titlenormalized
+     */
+    titleNormalized: string;
+    /**
+     * Updatedat
+     */
+    updatedAt: string;
+    workplaceType: JobWorkplaceType;
+};
+
+/**
+ * JobMatchSummaryDto
+ *
+ * Grounded match evaluation summary attached to job detail.
+ */
+export type JobMatchSummaryDto = {
+    /**
+     * Blockers
+     */
+    blockers?: Array<{
+        [key: string]: unknown;
+    }>;
+    /**
+     * Criticalunknowns
+     */
+    criticalUnknowns?: Array<string>;
+    /**
+     * Eligibility
+     */
+    eligibility: string;
+    /**
+     * Explanation
+     */
+    explanation?: {
+        [key: string]: unknown;
+    } | null;
+    /**
+     * Missingrequirements
+     */
+    missingRequirements?: Array<{
+        [key: string]: unknown;
+    }>;
+    /**
+     * Overallscore
+     */
+    overallScore: number;
+    /**
+     * Strengths
+     */
+    strengths?: Array<{
+        [key: string]: unknown;
+    }>;
+};
 
 /**
  * JobOriginDto
@@ -1449,6 +1698,31 @@ export type SalaryPreferenceValue = {
 };
 
 /**
+ * SavedJobResponse
+ *
+ * User-saved job item.
+ */
+export type SavedJobResponse = {
+    /**
+     * Createdat
+     */
+    createdAt: string;
+    /**
+     * Id
+     */
+    id: string;
+    job: FeedItemResponse;
+    /**
+     * Jobid
+     */
+    jobId: string;
+    /**
+     * State
+     */
+    state: string;
+};
+
+/**
  * ScoreBreakdownDto
  */
 export type ScoreBreakdownDto = {
@@ -1585,6 +1859,27 @@ export type UpdateCareerProfileRequest = {
      * Targetroles
      */
     targetRoles?: Array<string> | null;
+};
+
+/**
+ * UpdateJobAlertPreferenceRequest
+ *
+ * Payload to update job alert preferences.
+ */
+export type UpdateJobAlertPreferenceRequest = {
+    deliveryChannel?: JobAlertDeliveryChannel;
+    /**
+     * Enabled
+     */
+    enabled?: boolean;
+    /**
+     * Mineligibility
+     */
+    minEligibility?: string;
+    /**
+     * Minscore
+     */
+    minScore?: number;
 };
 
 /**
@@ -1752,6 +2047,361 @@ export type BootstrapAccountResponses = {
 
 export type BootstrapAccountResponse = BootstrapAccountResponses[keyof BootstrapAccountResponses];
 
+export type ListWatchedCompaniesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/companies/watched';
+};
+
+export type ListWatchedCompaniesErrors = {
+    /**
+     * Requisição inválida.
+     */
+    400: ErrorResponse;
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Acesso não autorizado.
+     */
+    403: ErrorResponse;
+    /**
+     * Recurso não encontrado.
+     */
+    404: ErrorResponse;
+    /**
+     * Validação de dados ou payload inválido.
+     */
+    422: ErrorResponse;
+};
+
+export type ListWatchedCompaniesError = ListWatchedCompaniesErrors[keyof ListWatchedCompaniesErrors];
+
+export type ListWatchedCompaniesResponses = {
+    /**
+     * Response Listwatchedcompanies
+     *
+     * Successful Response
+     */
+    200: Array<CompanyDto>;
+};
+
+export type ListWatchedCompaniesResponse = ListWatchedCompaniesResponses[keyof ListWatchedCompaniesResponses];
+
+export type UnwatchCompanyData = {
+    body?: never;
+    path: {
+        /**
+         * Company Id
+         */
+        company_id: string;
+    };
+    query?: never;
+    url: '/api/v1/companies/{company_id}/watch';
+};
+
+export type UnwatchCompanyErrors = {
+    /**
+     * Requisição inválida.
+     */
+    400: ErrorResponse;
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Acesso não autorizado.
+     */
+    403: ErrorResponse;
+    /**
+     * Recurso não encontrado.
+     */
+    404: ErrorResponse;
+    /**
+     * Validação de dados ou payload inválido.
+     */
+    422: ErrorResponse;
+};
+
+export type UnwatchCompanyError = UnwatchCompanyErrors[keyof UnwatchCompanyErrors];
+
+export type UnwatchCompanyResponses = {
+    /**
+     * Successful Response
+     */
+    204: void;
+};
+
+export type UnwatchCompanyResponse = UnwatchCompanyResponses[keyof UnwatchCompanyResponses];
+
+export type WatchCompanyData = {
+    body?: never;
+    path: {
+        /**
+         * Company Id
+         */
+        company_id: string;
+    };
+    query?: never;
+    url: '/api/v1/companies/{company_id}/watch';
+};
+
+export type WatchCompanyErrors = {
+    /**
+     * Requisição inválida.
+     */
+    400: ErrorResponse;
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Acesso não autorizado.
+     */
+    403: ErrorResponse;
+    /**
+     * Recurso não encontrado.
+     */
+    404: ErrorResponse;
+    /**
+     * Validação de dados ou payload inválido.
+     */
+    422: ErrorResponse;
+};
+
+export type WatchCompanyError = WatchCompanyErrors[keyof WatchCompanyErrors];
+
+export type WatchCompanyResponses = {
+    /**
+     * Successful Response
+     */
+    200: CompanyWatchResponse;
+};
+
+export type WatchCompanyResponse = WatchCompanyResponses[keyof WatchCompanyResponses];
+
+export type GetJobFeedData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Q
+         */
+        q?: string | null;
+        /**
+         * Company
+         */
+        company?: string | null;
+        /**
+         * Location
+         */
+        location?: string | null;
+        /**
+         * Workplacetype
+         */
+        workplaceType?: JobWorkplaceType | null;
+        /**
+         * Minscore
+         */
+        minScore?: number | null;
+        /**
+         * Eligibility
+         */
+        eligibility?: Array<string> | null;
+        /**
+         * Savedonly
+         */
+        savedOnly?: boolean;
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/v1/jobs';
+};
+
+export type GetJobFeedErrors = {
+    /**
+     * Requisição inválida.
+     */
+    400: ErrorResponse;
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Acesso não autorizado ou destino proibido.
+     */
+    403: ErrorResponse;
+    /**
+     * Recurso não encontrado.
+     */
+    404: ErrorResponse;
+    /**
+     * Conflito de concorrência ou operação em andamento.
+     */
+    409: ErrorResponse;
+    /**
+     * Conteúdo da resposta excede o limite máximo.
+     */
+    413: ErrorResponse;
+    /**
+     * Tipo de conteúdo não suportado.
+     */
+    415: ErrorResponse;
+    /**
+     * Validação de dados ou payload inválido.
+     */
+    422: ErrorResponse;
+    /**
+     * Limite de requisições excedido.
+     */
+    429: ErrorResponse;
+    /**
+     * Servidor de destino inalcançável ou falha TLS.
+     */
+    502: ErrorResponse;
+};
+
+export type GetJobFeedError = GetJobFeedErrors[keyof GetJobFeedErrors];
+
+export type GetJobFeedResponses = {
+    /**
+     * Successful Response
+     */
+    200: CursorPageFeedItemResponse;
+};
+
+export type GetJobFeedResponse = GetJobFeedResponses[keyof GetJobFeedResponses];
+
+export type GetJobAlertPreferencesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/jobs/alerts/preferences';
+};
+
+export type GetJobAlertPreferencesErrors = {
+    /**
+     * Requisição inválida.
+     */
+    400: ErrorResponse;
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Acesso não autorizado ou destino proibido.
+     */
+    403: ErrorResponse;
+    /**
+     * Recurso não encontrado.
+     */
+    404: ErrorResponse;
+    /**
+     * Conflito de concorrência ou operação em andamento.
+     */
+    409: ErrorResponse;
+    /**
+     * Conteúdo da resposta excede o limite máximo.
+     */
+    413: ErrorResponse;
+    /**
+     * Tipo de conteúdo não suportado.
+     */
+    415: ErrorResponse;
+    /**
+     * Validação de dados ou payload inválido.
+     */
+    422: ErrorResponse;
+    /**
+     * Limite de requisições excedido.
+     */
+    429: ErrorResponse;
+    /**
+     * Servidor de destino inalcançável ou falha TLS.
+     */
+    502: ErrorResponse;
+};
+
+export type GetJobAlertPreferencesError = GetJobAlertPreferencesErrors[keyof GetJobAlertPreferencesErrors];
+
+export type GetJobAlertPreferencesResponses = {
+    /**
+     * Successful Response
+     */
+    200: JobAlertPreferenceResponse;
+};
+
+export type GetJobAlertPreferencesResponse = GetJobAlertPreferencesResponses[keyof GetJobAlertPreferencesResponses];
+
+export type UpdateJobAlertPreferencesData = {
+    body: UpdateJobAlertPreferenceRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/jobs/alerts/preferences';
+};
+
+export type UpdateJobAlertPreferencesErrors = {
+    /**
+     * Requisição inválida.
+     */
+    400: ErrorResponse;
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Acesso não autorizado ou destino proibido.
+     */
+    403: ErrorResponse;
+    /**
+     * Recurso não encontrado.
+     */
+    404: ErrorResponse;
+    /**
+     * Conflito de concorrência ou operação em andamento.
+     */
+    409: ErrorResponse;
+    /**
+     * Conteúdo da resposta excede o limite máximo.
+     */
+    413: ErrorResponse;
+    /**
+     * Tipo de conteúdo não suportado.
+     */
+    415: ErrorResponse;
+    /**
+     * Validação de dados ou payload inválido.
+     */
+    422: ErrorResponse;
+    /**
+     * Limite de requisições excedido.
+     */
+    429: ErrorResponse;
+    /**
+     * Servidor de destino inalcançável ou falha TLS.
+     */
+    502: ErrorResponse;
+};
+
+export type UpdateJobAlertPreferencesError = UpdateJobAlertPreferencesErrors[keyof UpdateJobAlertPreferencesErrors];
+
+export type UpdateJobAlertPreferencesResponses = {
+    /**
+     * Successful Response
+     */
+    200: JobAlertPreferenceResponse;
+};
+
+export type UpdateJobAlertPreferencesResponse = UpdateJobAlertPreferencesResponses[keyof UpdateJobAlertPreferencesResponses];
+
 export type IntakeJobPasteData = {
     body: JobPasteIntakeRequest;
     headers?: {
@@ -1886,6 +2536,76 @@ export type IntakeJobUrlResponses = {
 
 export type IntakeJobUrlResponse = IntakeJobUrlResponses[keyof IntakeJobUrlResponses];
 
+export type ListSavedJobsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/v1/jobs/saved';
+};
+
+export type ListSavedJobsErrors = {
+    /**
+     * Requisição inválida.
+     */
+    400: ErrorResponse;
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Acesso não autorizado ou destino proibido.
+     */
+    403: ErrorResponse;
+    /**
+     * Recurso não encontrado.
+     */
+    404: ErrorResponse;
+    /**
+     * Conflito de concorrência ou operação em andamento.
+     */
+    409: ErrorResponse;
+    /**
+     * Conteúdo da resposta excede o limite máximo.
+     */
+    413: ErrorResponse;
+    /**
+     * Tipo de conteúdo não suportado.
+     */
+    415: ErrorResponse;
+    /**
+     * Validação de dados ou payload inválido.
+     */
+    422: ErrorResponse;
+    /**
+     * Limite de requisições excedido.
+     */
+    429: ErrorResponse;
+    /**
+     * Servidor de destino inalcançável ou falha TLS.
+     */
+    502: ErrorResponse;
+};
+
+export type ListSavedJobsError = ListSavedJobsErrors[keyof ListSavedJobsErrors];
+
+export type ListSavedJobsResponses = {
+    /**
+     * Successful Response
+     */
+    200: CursorPageSavedJobResponse;
+};
+
+export type ListSavedJobsResponse = ListSavedJobsResponses[keyof ListSavedJobsResponses];
+
 export type GetJobByIdData = {
     body?: never;
     path: {
@@ -1947,10 +2667,142 @@ export type GetJobByIdResponses = {
     /**
      * Successful Response
      */
-    200: JobResponse;
+    200: JobDetailResponse;
 };
 
 export type GetJobByIdResponse = GetJobByIdResponses[keyof GetJobByIdResponses];
+
+export type UndismissJobData = {
+    body?: never;
+    path: {
+        /**
+         * Job Id
+         */
+        job_id: string;
+    };
+    query?: never;
+    url: '/api/v1/jobs/{job_id}/dismiss';
+};
+
+export type UndismissJobErrors = {
+    /**
+     * Requisição inválida.
+     */
+    400: ErrorResponse;
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Acesso não autorizado ou destino proibido.
+     */
+    403: ErrorResponse;
+    /**
+     * Recurso não encontrado.
+     */
+    404: ErrorResponse;
+    /**
+     * Conflito de concorrência ou operação em andamento.
+     */
+    409: ErrorResponse;
+    /**
+     * Conteúdo da resposta excede o limite máximo.
+     */
+    413: ErrorResponse;
+    /**
+     * Tipo de conteúdo não suportado.
+     */
+    415: ErrorResponse;
+    /**
+     * Validação de dados ou payload inválido.
+     */
+    422: ErrorResponse;
+    /**
+     * Limite de requisições excedido.
+     */
+    429: ErrorResponse;
+    /**
+     * Servidor de destino inalcançável ou falha TLS.
+     */
+    502: ErrorResponse;
+};
+
+export type UndismissJobError = UndismissJobErrors[keyof UndismissJobErrors];
+
+export type UndismissJobResponses = {
+    /**
+     * Successful Response
+     */
+    204: void;
+};
+
+export type UndismissJobResponse = UndismissJobResponses[keyof UndismissJobResponses];
+
+export type DismissJobData = {
+    body?: never;
+    path: {
+        /**
+         * Job Id
+         */
+        job_id: string;
+    };
+    query?: never;
+    url: '/api/v1/jobs/{job_id}/dismiss';
+};
+
+export type DismissJobErrors = {
+    /**
+     * Requisição inválida.
+     */
+    400: ErrorResponse;
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Acesso não autorizado ou destino proibido.
+     */
+    403: ErrorResponse;
+    /**
+     * Recurso não encontrado.
+     */
+    404: ErrorResponse;
+    /**
+     * Conflito de concorrência ou operação em andamento.
+     */
+    409: ErrorResponse;
+    /**
+     * Conteúdo da resposta excede o limite máximo.
+     */
+    413: ErrorResponse;
+    /**
+     * Tipo de conteúdo não suportado.
+     */
+    415: ErrorResponse;
+    /**
+     * Validação de dados ou payload inválido.
+     */
+    422: ErrorResponse;
+    /**
+     * Limite de requisições excedido.
+     */
+    429: ErrorResponse;
+    /**
+     * Servidor de destino inalcançável ou falha TLS.
+     */
+    502: ErrorResponse;
+};
+
+export type DismissJobError = DismissJobErrors[keyof DismissJobErrors];
+
+export type DismissJobResponses = {
+    /**
+     * Successful Response
+     */
+    200: SavedJobResponse;
+};
+
+export type DismissJobResponse = DismissJobResponses[keyof DismissJobResponses];
 
 export type MatchJobData = {
     body?: never;
@@ -1997,6 +2849,138 @@ export type MatchJobResponses = {
 };
 
 export type MatchJobResponse = MatchJobResponses[keyof MatchJobResponses];
+
+export type UnsaveJobData = {
+    body?: never;
+    path: {
+        /**
+         * Job Id
+         */
+        job_id: string;
+    };
+    query?: never;
+    url: '/api/v1/jobs/{job_id}/save';
+};
+
+export type UnsaveJobErrors = {
+    /**
+     * Requisição inválida.
+     */
+    400: ErrorResponse;
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Acesso não autorizado ou destino proibido.
+     */
+    403: ErrorResponse;
+    /**
+     * Recurso não encontrado.
+     */
+    404: ErrorResponse;
+    /**
+     * Conflito de concorrência ou operação em andamento.
+     */
+    409: ErrorResponse;
+    /**
+     * Conteúdo da resposta excede o limite máximo.
+     */
+    413: ErrorResponse;
+    /**
+     * Tipo de conteúdo não suportado.
+     */
+    415: ErrorResponse;
+    /**
+     * Validação de dados ou payload inválido.
+     */
+    422: ErrorResponse;
+    /**
+     * Limite de requisições excedido.
+     */
+    429: ErrorResponse;
+    /**
+     * Servidor de destino inalcançável ou falha TLS.
+     */
+    502: ErrorResponse;
+};
+
+export type UnsaveJobError = UnsaveJobErrors[keyof UnsaveJobErrors];
+
+export type UnsaveJobResponses = {
+    /**
+     * Successful Response
+     */
+    204: void;
+};
+
+export type UnsaveJobResponse = UnsaveJobResponses[keyof UnsaveJobResponses];
+
+export type SaveJobData = {
+    body?: never;
+    path: {
+        /**
+         * Job Id
+         */
+        job_id: string;
+    };
+    query?: never;
+    url: '/api/v1/jobs/{job_id}/save';
+};
+
+export type SaveJobErrors = {
+    /**
+     * Requisição inválida.
+     */
+    400: ErrorResponse;
+    /**
+     * Token ausente, inválido, expirado ou revogado.
+     */
+    401: ErrorResponse;
+    /**
+     * Acesso não autorizado ou destino proibido.
+     */
+    403: ErrorResponse;
+    /**
+     * Recurso não encontrado.
+     */
+    404: ErrorResponse;
+    /**
+     * Conflito de concorrência ou operação em andamento.
+     */
+    409: ErrorResponse;
+    /**
+     * Conteúdo da resposta excede o limite máximo.
+     */
+    413: ErrorResponse;
+    /**
+     * Tipo de conteúdo não suportado.
+     */
+    415: ErrorResponse;
+    /**
+     * Validação de dados ou payload inválido.
+     */
+    422: ErrorResponse;
+    /**
+     * Limite de requisições excedido.
+     */
+    429: ErrorResponse;
+    /**
+     * Servidor de destino inalcançável ou falha TLS.
+     */
+    502: ErrorResponse;
+};
+
+export type SaveJobError = SaveJobErrors[keyof SaveJobErrors];
+
+export type SaveJobResponses = {
+    /**
+     * Successful Response
+     */
+    200: SavedJobResponse;
+};
+
+export type SaveJobResponse = SaveJobResponses[keyof SaveJobResponses];
 
 export type GetCurrentUserData = {
     body?: never;

@@ -4,22 +4,24 @@ import uuid
 from http import HTTPStatus
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, Response
+from fastapi import APIRouter, Depends, Header, Query, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session, sessionmaker
 
 from tapjob_api.core.rate_limit import RedisFixedWindowRateLimiter
 from tapjob_api.db.session import get_db_session, get_session_factory
 from tapjob_api.http.errors import ApiError, ErrorCode, ErrorResponse
+from tapjob_api.http.pagination import CursorPage
 from tapjob_api.identity import dependencies as identity_deps
 from tapjob_api.identity.models import User
-from tapjob_api.jobs import service
+from tapjob_api.jobs import feed_service, service
 from tapjob_api.jobs.dependencies import (
     JOB_PASTE_INTAKE_RATE_LIMIT,
     JOB_URL_INTAKE_RATE_LIMIT,
     get_safe_http_client,
 )
 from tapjob_api.jobs.errors import (
+    CompanyNotFoundError,
     ConcurrentRequestInProgressError,
     IdempotencyKeyPayloadMismatchError,
     IdempotencyOwnershipLostError,
@@ -35,17 +37,23 @@ from tapjob_api.jobs.errors import (
     JobUrlUnreachableError,
 )
 from tapjob_api.jobs.http_client import SafeHttpClient
-from tapjob_api.jobs.models import Job
+from tapjob_api.jobs.models import Job, JobWorkplaceType
 from tapjob_api.jobs.schemas import (
     CompanyDto,
+    FeedItemResponse,
+    JobAlertPreferenceResponse,
+    JobDetailResponse,
     JobOriginDto,
     JobPasteIntakeRequest,
     JobProvenanceSummary,
     JobResponse,
     JobUrlIntakeRequest,
+    SavedJobResponse,
+    UpdateJobAlertPreferenceRequest,
 )
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
 
 _ERROR_TO_HTTP: dict[type[Exception], tuple[ErrorCode, int]] = {
     JobTextTooShortError: (ErrorCode.JOB_TEXT_TOO_SHORT, HTTPStatus.UNPROCESSABLE_ENTITY),
@@ -70,6 +78,7 @@ _ERROR_TO_HTTP: dict[type[Exception], tuple[ErrorCode, int]] = {
         HTTPStatus.UNPROCESSABLE_ENTITY,
     ),
     JobNotFoundError: (ErrorCode.JOB_NOT_FOUND, HTTPStatus.NOT_FOUND),
+    CompanyNotFoundError: (ErrorCode.COMPANY_NOT_FOUND, HTTPStatus.NOT_FOUND),
     IdempotencyKeyPayloadMismatchError: (
         ErrorCode.IDEMPOTENCY_KEY_PAYLOAD_MISMATCH,
         HTTPStatus.UNPROCESSABLE_ENTITY,
@@ -371,9 +380,121 @@ async def intake_job_url(
 
 
 @router.get(
+    "",
+    operation_id="getJobFeed",
+    response_model=CursorPage[FeedItemResponse],
+    status_code=HTTPStatus.OK,
+    responses=_COMMON_RESPONSES,
+)
+def get_job_feed(
+    q: str | None = Query(None, max_length=100),
+    company: str | None = Query(None, max_length=255),
+    location: str | None = Query(None, max_length=255),
+    workplace_type: JobWorkplaceType | None = Query(None, alias="workplaceType"),
+    min_score: int | None = Query(None, ge=0, le=100, alias="minScore"),
+    eligibility: list[str] | None = Query(None),
+    saved_only: bool = Query(False, alias="savedOnly"),
+    cursor: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    user: User = Depends(identity_deps.get_current_user),
+    session: Session = Depends(get_db_session),
+) -> CursorPage[FeedItemResponse]:
+    """Retrieve personalized, relevance-ordered job feed with cursor pagination."""
+    try:
+        page = feed_service.get_job_feed(
+            session,
+            user=user,
+            q=q,
+            company=company,
+            location=location,
+            workplace_type=workplace_type,
+            min_score=min_score,
+            eligibility=eligibility,
+            saved_only=saved_only,
+            cursor=cursor,
+            limit=limit,
+        )
+        session.commit()
+        return page
+    except tuple(_ERROR_TO_HTTP) as error:
+        code, status_code = _ERROR_TO_HTTP[type(error)]
+        raise ApiError(code, status_code=status_code) from error
+
+
+@router.get(
+    "/saved",
+    operation_id="listSavedJobs",
+    response_model=CursorPage[SavedJobResponse],
+    status_code=HTTPStatus.OK,
+    responses=_COMMON_RESPONSES,
+)
+def list_saved_jobs(
+    cursor: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    user: User = Depends(identity_deps.get_current_user),
+    session: Session = Depends(get_db_session),
+) -> CursorPage[SavedJobResponse]:
+    """Retrieve cursor-paginated list of user saved jobs."""
+    try:
+        return feed_service.list_saved_jobs(
+            session,
+            user=user,
+            cursor=cursor,
+            limit=limit,
+        )
+    except tuple(_ERROR_TO_HTTP) as error:
+        code, status_code = _ERROR_TO_HTTP[type(error)]
+        raise ApiError(code, status_code=status_code) from error
+
+
+@router.get(
+    "/alerts/preferences",
+    operation_id="getJobAlertPreferences",
+    response_model=JobAlertPreferenceResponse,
+    status_code=HTTPStatus.OK,
+    responses=_COMMON_RESPONSES,
+)
+def get_job_alert_preferences(
+    user: User = Depends(identity_deps.get_current_user),
+    session: Session = Depends(get_db_session),
+) -> JobAlertPreferenceResponse:
+    """Retrieve job alert subscription preferences."""
+    pref = feed_service.get_job_alert_preference(session, user=user)
+    return JobAlertPreferenceResponse(
+        enabled=pref.enabled,
+        min_score=pref.min_score,
+        min_eligibility=pref.min_eligibility,
+        delivery_channel=pref.delivery_channel,
+    )
+
+
+@router.put(
+    "/alerts/preferences",
+    operation_id="updateJobAlertPreferences",
+    response_model=JobAlertPreferenceResponse,
+    status_code=HTTPStatus.OK,
+    responses=_COMMON_RESPONSES,
+)
+def update_job_alert_preferences(
+    request: UpdateJobAlertPreferenceRequest,
+    user: User = Depends(identity_deps.get_current_user),
+    session: Session = Depends(get_db_session),
+) -> JobAlertPreferenceResponse:
+    """Update job alert subscription preferences."""
+    pref = feed_service.update_job_alert_preference(session, user=user, request=request)
+    session.commit()
+    return JobAlertPreferenceResponse(
+        enabled=pref.enabled,
+        min_score=pref.min_score,
+        min_eligibility=pref.min_eligibility,
+        delivery_channel=pref.delivery_channel,
+    )
+
+
+@router.get(
     "/{job_id}",
     operation_id="getJobById",
-    response_model=JobResponse,
+    response_model=JobDetailResponse,
     status_code=HTTPStatus.OK,
     responses=_COMMON_RESPONSES,
 )
@@ -381,11 +502,106 @@ def get_job_by_id(
     job_id: uuid.UUID,
     user: User = Depends(identity_deps.get_current_user),
     session: Session = Depends(get_db_session),
-) -> JobResponse:
-    """Retrieve canonical job posting by ID."""
+) -> JobDetailResponse:
+    """Retrieve canonical job posting by ID with WP2.2 match intelligence."""
     try:
-        job = service.get_job_by_id(session, job_id=job_id, user_id=user.id)
-        return _to_job_response(job)
+        return feed_service.get_job_detail(session, user=user, job_id=job_id)
     except tuple(_ERROR_TO_HTTP) as error:
         code, status_code = _ERROR_TO_HTTP[type(error)]
         raise ApiError(code, status_code=status_code) from error
+
+
+@router.post(
+    "/{job_id}/save",
+    operation_id="saveJob",
+    response_model=SavedJobResponse,
+    status_code=HTTPStatus.OK,
+    responses=_COMMON_RESPONSES,
+)
+def save_job(
+    job_id: uuid.UUID,
+    user: User = Depends(identity_deps.get_current_user),
+    session: Session = Depends(get_db_session),
+) -> SavedJobResponse:
+    """Idempotently save a job."""
+    try:
+        saved = feed_service.save_job(session, user=user, job_id=job_id)
+        session.commit()
+        job = saved.job
+        return SavedJobResponse(
+            id=saved.id,
+            job_id=saved.job_id,
+            state=saved.state.value,
+            created_at=saved.created_at,
+            job=feed_service._to_feed_item_response(
+                job, match_score=None, eligibility=None, is_saved=True
+            ),
+        )
+    except tuple(_ERROR_TO_HTTP) as error:
+        code, status_code = _ERROR_TO_HTTP[type(error)]
+        raise ApiError(code, status_code=status_code) from error
+
+
+@router.delete(
+    "/{job_id}/save",
+    operation_id="unsaveJob",
+    status_code=HTTPStatus.NO_CONTENT,
+    responses=_COMMON_RESPONSES,
+)
+def unsave_job(
+    job_id: uuid.UUID,
+    user: User = Depends(identity_deps.get_current_user),
+    session: Session = Depends(get_db_session),
+) -> Response:
+    """Idempotently unsave a job."""
+    feed_service.unsave_job(session, user=user, job_id=job_id)
+    session.commit()
+    return Response(status_code=HTTPStatus.NO_CONTENT)
+
+
+@router.post(
+    "/{job_id}/dismiss",
+    operation_id="dismissJob",
+    response_model=SavedJobResponse,
+    status_code=HTTPStatus.OK,
+    responses=_COMMON_RESPONSES,
+)
+def dismiss_job(
+    job_id: uuid.UUID,
+    user: User = Depends(identity_deps.get_current_user),
+    session: Session = Depends(get_db_session),
+) -> SavedJobResponse:
+    """Idempotently dismiss a job from the feed."""
+    try:
+        dismissed = feed_service.dismiss_job(session, user=user, job_id=job_id)
+        session.commit()
+        job = dismissed.job
+        return SavedJobResponse(
+            id=dismissed.id,
+            job_id=dismissed.job_id,
+            state=dismissed.state.value,
+            created_at=dismissed.created_at,
+            job=feed_service._to_feed_item_response(
+                job, match_score=None, eligibility=None, is_saved=False
+            ),
+        )
+    except tuple(_ERROR_TO_HTTP) as error:
+        code, status_code = _ERROR_TO_HTTP[type(error)]
+        raise ApiError(code, status_code=status_code) from error
+
+
+@router.delete(
+    "/{job_id}/dismiss",
+    operation_id="undismissJob",
+    status_code=HTTPStatus.NO_CONTENT,
+    responses=_COMMON_RESPONSES,
+)
+def undismiss_job(
+    job_id: uuid.UUID,
+    user: User = Depends(identity_deps.get_current_user),
+    session: Session = Depends(get_db_session),
+) -> Response:
+    """Idempotently undo dismissal of a job."""
+    feed_service.undismiss_job(session, user=user, job_id=job_id)
+    session.commit()
+    return Response(status_code=HTTPStatus.NO_CONTENT)

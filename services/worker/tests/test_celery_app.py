@@ -67,6 +67,7 @@ def test_celery_app_configures_periodic_beat_schedule() -> None:
     assert "messaging-dispatch-outbox" in beat_conf
     assert "messaging-dispatch-due-reminders" in beat_conf
     assert "messaging-recover-unprocessed-inbound" in beat_conf
+    assert "jobs-evaluate-job-alerts" in beat_conf
 
 
 def test_celery_app_loads_real_registry_from_worker_settings() -> None:

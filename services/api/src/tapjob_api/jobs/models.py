@@ -268,3 +268,204 @@ class IdempotencyKey(Base):
             name="ck_idempotency_keys_status_coherence",
         ),
     )
+
+
+class SavedJobState(StrEnum):
+    """User intent state for a saved job."""
+
+    SAVED = "saved"
+    DISMISSED = "dismissed"
+
+
+class AlertNotificationStatus(StrEnum):
+    """Lifecycle status of a job alert notification."""
+
+    PENDING = "pending"
+    QUEUED = "queued"
+    DELIVERED = "delivered"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class JobAlertDeliveryChannel(StrEnum):
+    """Supported delivery channels for proactive job alerts (WP2.3 WhatsApp-only)."""
+
+    WHATSAPP = "whatsapp"
+
+
+class SavedJob(Base):
+    """User intent and bookmarking around a job (WP2.3)."""
+
+    __tablename__ = "saved_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        sa.ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        sa.ForeignKey("jobs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    state: Mapped[SavedJobState] = mapped_column(
+        _enum_column(SavedJobState, name="saved_job_state", length=32),
+        nullable=False,
+        default=SavedJobState.SAVED,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, server_default=_NOW
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, server_default=_NOW, onupdate=sa.func.now()
+    )
+
+    job: Mapped[Job] = relationship("Job")
+
+    __table_args__ = (
+        sa.UniqueConstraint("user_id", "job_id", name="uq_saved_jobs_user_job"),
+        sa.Index("ix_saved_jobs_user_state", "user_id", "state"),
+    )
+
+
+class CompanyWatch(Base):
+    """User subscription/watch for a canonical Company (WP2.3)."""
+
+    __tablename__ = "company_watches"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        sa.ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        sa.ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, server_default=_NOW
+    )
+
+    company: Mapped[Company] = relationship("Company")
+
+    __table_args__ = (
+        sa.UniqueConstraint("user_id", "company_id", name="uq_company_watches_user_company"),
+    )
+
+
+class JobAlertPreference(Base):
+    """User preferences and subscription for proactive job alerts (WP2.3)."""
+
+    __tablename__ = "job_alert_preferences"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        sa.ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    enabled: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
+    min_score: Mapped[int] = mapped_column(sa.SmallInteger, nullable=False, default=50)
+    min_eligibility: Mapped[str] = mapped_column(sa.String(32), nullable=False, default="eligible")
+    delivery_channel: Mapped[JobAlertDeliveryChannel] = mapped_column(
+        _enum_column(JobAlertDeliveryChannel, name="job_alert_delivery_channel", length=32),
+        nullable=False,
+        default=JobAlertDeliveryChannel.WHATSAPP,
+    )
+    last_evaluated_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, server_default=_NOW
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, server_default=_NOW, onupdate=sa.func.now()
+    )
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "min_score >= 0 AND min_score <= 100",
+            name="ck_job_alert_preferences_min_score",
+        ),
+        sa.CheckConstraint(
+            "min_eligibility IN ('eligible', 'review_required')",
+            name="ck_job_alert_preferences_min_eligibility",
+        ),
+        sa.CheckConstraint(
+            "delivery_channel = 'whatsapp'",
+            name="ck_job_alert_preferences_delivery_channel",
+        ),
+    )
+
+
+class JobAlertNotification(Base):
+    """Durable notification intent and deduplication record for job alerts (WP2.3)."""
+
+    __tablename__ = "job_alert_notifications"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        sa.ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        sa.ForeignKey("jobs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    dedupe_key: Mapped[str] = mapped_column(sa.String(255), nullable=False, unique=True, index=True)
+    channel: Mapped[JobAlertDeliveryChannel] = mapped_column(
+        _enum_column(JobAlertDeliveryChannel, name="job_alert_delivery_channel", length=32),
+        nullable=False,
+        default=JobAlertDeliveryChannel.WHATSAPP,
+    )
+    match_score: Mapped[int] = mapped_column(sa.SmallInteger, nullable=False)
+    status: Mapped[AlertNotificationStatus] = mapped_column(
+        _enum_column(AlertNotificationStatus, name="alert_notification_status", length=32),
+        nullable=False,
+        default=AlertNotificationStatus.PENDING,
+        index=True,
+    )
+    outbound_message_id: Mapped[int | None] = mapped_column(
+        sa.BigInteger,
+        sa.ForeignKey("outbound_message_queue.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, server_default=_NOW
+    )
+    delivered_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+
+    job: Mapped[Job] = relationship("Job")
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "match_score >= 0 AND match_score <= 100",
+            name="ck_job_alert_notifications_match_score",
+        ),
+        sa.CheckConstraint(
+            "channel = 'whatsapp'",
+            name="ck_job_alert_notifications_channel",
+        ),
+    )

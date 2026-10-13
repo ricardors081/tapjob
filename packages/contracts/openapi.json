@@ -327,6 +327,38 @@
         "title": "CompanyDto",
         "type": "object"
       },
+      "CompanyWatchResponse": {
+        "additionalProperties": false,
+        "description": "Watched company entry.",
+        "properties": {
+          "company": {
+            "$ref": "#/components/schemas/CompanyDto"
+          },
+          "companyId": {
+            "format": "uuid",
+            "title": "Companyid",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "companyId",
+          "company",
+          "createdAt"
+        ],
+        "title": "CompanyWatchResponse",
+        "type": "object"
+      },
       "ConsentDecision": {
         "enum": [
           "granted",
@@ -403,6 +435,60 @@
         ],
         "title": "CriticalUnknown",
         "type": "string"
+      },
+      "CursorPage_FeedItemResponse_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FeedItemResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "CursorPage[FeedItemResponse]",
+        "type": "object"
+      },
+      "CursorPage_SavedJobResponse_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SavedJobResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "CursorPage[SavedJobResponse]",
+        "type": "object"
       },
       "DeletionRequestResponse": {
         "properties": {
@@ -763,6 +849,7 @@
           "JOB_CONTENT_TYPE_UNSUPPORTED",
           "JOB_PAGE_REQUIRES_MANUAL_PASTE",
           "JOB_NOT_FOUND",
+          "COMPANY_NOT_FOUND",
           "IDEMPOTENCY_KEY_PAYLOAD_MISMATCH",
           "CONCURRENT_REQUEST_IN_PROGRESS"
         ],
@@ -932,6 +1019,111 @@
         ],
         "title": "FactType",
         "type": "string"
+      },
+      "FeedItemResponse": {
+        "additionalProperties": false,
+        "description": "Single opportunity card in the personalized job feed.",
+        "properties": {
+          "company": {
+            "$ref": "#/components/schemas/CompanyDto"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "eligibility": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eligibility"
+          },
+          "expiresAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expiresat"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "isSaved": {
+            "default": false,
+            "title": "Issaved",
+            "type": "boolean"
+          },
+          "locationNormalized": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locationnormalized"
+          },
+          "locationRaw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locationraw"
+          },
+          "matchScore": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Matchscore"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "titleNormalized": {
+            "title": "Titlenormalized",
+            "type": "string"
+          },
+          "workplaceType": {
+            "$ref": "#/components/schemas/JobWorkplaceType"
+          }
+        },
+        "required": [
+          "id",
+          "company",
+          "title",
+          "titleNormalized",
+          "workplaceType",
+          "status",
+          "createdAt"
+        ],
+        "title": "FeedItemResponse",
+        "type": "object"
       },
       "FinalizeResumeImportCommand": {
         "description": "`decisions` must cover EVERY `PENDING` candidate of the target import, no more and no fewer\n(docs/adr/0011-...md \"review decisions\": \"no acceptance by omission\") -- enforced in\n`service.py` once the real pending set is known, not here. Each `candidateId` appearing at\nmost ONCE, and the list never exceeding `MAX_CANDIDATES_PER_IMPORT`, ARE enforced here, at the\ncommand boundary itself -- round-1 independent review \"Finding 4\": a duplicate `candidateId`\n(e.g. `[ACCEPT, REJECT]` for the SAME id) previously survived `service.py`'s own coverage check\nunnoticed, because `{decision.candidate_id for decision in command.decisions}` is a set and\nsilently collapses duplicates -- the LAST decision for a duplicated id would win in the\ndict-building loop while an EARLIER one may already have mutated `accepted_fact_candidates`,\nrisking a candidate whose own `review_state` ends up `rejected` while a `ProfileFact` was still\ncreated from it. Rejecting duplicates here means `service.py` never needs to reason about this\ncase at all -- it is structurally unreachable once this command validates.",
@@ -1156,6 +1348,251 @@
         ],
         "title": "ImportStatus",
         "type": "string"
+      },
+      "JobAlertDeliveryChannel": {
+        "description": "Supported delivery channels for proactive job alerts (WP2.3 WhatsApp-only).",
+        "enum": [
+          "whatsapp"
+        ],
+        "title": "JobAlertDeliveryChannel",
+        "type": "string"
+      },
+      "JobAlertPreferenceResponse": {
+        "additionalProperties": false,
+        "description": "Job alert subscription preference.",
+        "properties": {
+          "deliveryChannel": {
+            "$ref": "#/components/schemas/JobAlertDeliveryChannel"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "minEligibility": {
+            "title": "Mineligibility",
+            "type": "string"
+          },
+          "minScore": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Minscore",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled",
+          "minScore",
+          "minEligibility",
+          "deliveryChannel"
+        ],
+        "title": "JobAlertPreferenceResponse",
+        "type": "object"
+      },
+      "JobDetailResponse": {
+        "additionalProperties": false,
+        "description": "Enriched job detail response including WP2.2 match intelligence and user intent.",
+        "properties": {
+          "company": {
+            "$ref": "#/components/schemas/CompanyDto"
+          },
+          "companyId": {
+            "format": "uuid",
+            "title": "Companyid",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "descriptionCleaned": {
+            "title": "Descriptioncleaned",
+            "type": "string"
+          },
+          "descriptionRaw": {
+            "title": "Descriptionraw",
+            "type": "string"
+          },
+          "expiresAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expiresat"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "isCompanyWatched": {
+            "default": false,
+            "title": "Iscompanywatched",
+            "type": "boolean"
+          },
+          "isDismissed": {
+            "default": false,
+            "title": "Isdismissed",
+            "type": "boolean"
+          },
+          "isSaved": {
+            "default": false,
+            "title": "Issaved",
+            "type": "boolean"
+          },
+          "locationNormalized": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locationnormalized"
+          },
+          "locationRaw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locationraw"
+          },
+          "match": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JobMatchSummaryDto"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "origins": {
+            "items": {
+              "$ref": "#/components/schemas/JobOriginDto"
+            },
+            "title": "Origins",
+            "type": "array"
+          },
+          "provenanceSummary": {
+            "$ref": "#/components/schemas/JobProvenanceSummary"
+          },
+          "similarityFingerprint": {
+            "title": "Similarityfingerprint",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "titleNormalized": {
+            "title": "Titlenormalized",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          },
+          "workplaceType": {
+            "$ref": "#/components/schemas/JobWorkplaceType"
+          }
+        },
+        "required": [
+          "id",
+          "companyId",
+          "company",
+          "title",
+          "titleNormalized",
+          "workplaceType",
+          "descriptionRaw",
+          "descriptionCleaned",
+          "similarityFingerprint",
+          "status",
+          "provenanceSummary",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "JobDetailResponse",
+        "type": "object"
+      },
+      "JobMatchSummaryDto": {
+        "additionalProperties": false,
+        "description": "Grounded match evaluation summary attached to job detail.",
+        "properties": {
+          "blockers": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "criticalUnknowns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Criticalunknowns",
+            "type": "array"
+          },
+          "eligibility": {
+            "title": "Eligibility",
+            "type": "string"
+          },
+          "explanation": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explanation"
+          },
+          "missingRequirements": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Missingrequirements",
+            "type": "array"
+          },
+          "overallScore": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Overallscore",
+            "type": "integer"
+          },
+          "strengths": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Strengths",
+            "type": "array"
+          }
+        },
+        "required": [
+          "overallScore",
+          "eligibility"
+        ],
+        "title": "JobMatchSummaryDto",
+        "type": "object"
       },
       "JobOriginDto": {
         "additionalProperties": false,
@@ -2627,6 +3064,43 @@
         "title": "SalaryPreferenceValue",
         "type": "object"
       },
+      "SavedJobResponse": {
+        "additionalProperties": false,
+        "description": "User-saved job item.",
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "job": {
+            "$ref": "#/components/schemas/FeedItemResponse"
+          },
+          "jobId": {
+            "format": "uuid",
+            "title": "Jobid",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "jobId",
+          "state",
+          "createdAt",
+          "job"
+        ],
+        "title": "SavedJobResponse",
+        "type": "object"
+      },
       "ScoreBreakdownDto": {
         "properties": {
           "experience": {
@@ -2845,6 +3319,35 @@
           "expectedProfileVersion"
         ],
         "title": "UpdateCareerProfileRequest",
+        "type": "object"
+      },
+      "UpdateJobAlertPreferenceRequest": {
+        "additionalProperties": false,
+        "description": "Payload to update job alert preferences.",
+        "properties": {
+          "deliveryChannel": {
+            "$ref": "#/components/schemas/JobAlertDeliveryChannel",
+            "default": "whatsapp"
+          },
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "minEligibility": {
+            "default": "eligible",
+            "title": "Mineligibility",
+            "type": "string"
+          },
+          "minScore": {
+            "default": 50,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Minscore",
+            "type": "integer"
+          }
+        },
+        "title": "UpdateJobAlertPreferenceRequest",
         "type": "object"
       },
       "UpdateUserSettingsRequest": {
@@ -3102,6 +3605,759 @@
         "summary": "Bootstrap Account",
         "tags": [
           "identity"
+        ]
+      }
+    },
+    "/api/v1/companies/watched": {
+      "get": {
+        "description": "List companies watched by the authenticated user.",
+        "operationId": "listWatchedCompanies",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CompanyDto"
+                  },
+                  "title": "Response Listwatchedcompanies",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Requisição inválida."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Acesso não autorizado."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Recurso não encontrado."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validação de dados ou payload inválido."
+          }
+        },
+        "summary": "List Watched Companies",
+        "tags": [
+          "companies"
+        ]
+      }
+    },
+    "/api/v1/companies/{company_id}/watch": {
+      "delete": {
+        "description": "Idempotently unwatch a company.",
+        "operationId": "unwatchCompany",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Company Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Requisição inválida."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Acesso não autorizado."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Recurso não encontrado."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validação de dados ou payload inválido."
+          }
+        },
+        "summary": "Unwatch Company",
+        "tags": [
+          "companies"
+        ]
+      },
+      "post": {
+        "description": "Idempotently watch a company.",
+        "operationId": "watchCompany",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Company Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyWatchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Requisição inválida."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Acesso não autorizado."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Recurso não encontrado."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validação de dados ou payload inválido."
+          }
+        },
+        "summary": "Watch Company",
+        "tags": [
+          "companies"
+        ]
+      }
+    },
+    "/api/v1/jobs": {
+      "get": {
+        "description": "Retrieve personalized, relevance-ordered job feed with cursor pagination.",
+        "operationId": "getJobFeed",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "company",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Company"
+            }
+          },
+          {
+            "in": "query",
+            "name": "location",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Location"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workplaceType",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/JobWorkplaceType"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Workplacetype"
+            }
+          },
+          {
+            "in": "query",
+            "name": "minScore",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Minscore"
+            }
+          },
+          {
+            "in": "query",
+            "name": "eligibility",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Eligibility"
+            }
+          },
+          {
+            "in": "query",
+            "name": "savedOnly",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Savedonly",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CursorPage_FeedItemResponse_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Requisição inválida."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Acesso não autorizado ou destino proibido."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Recurso não encontrado."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflito de concorrência ou operação em andamento."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conteúdo da resposta excede o limite máximo."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Tipo de conteúdo não suportado."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validação de dados ou payload inválido."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Limite de requisições excedido."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Servidor de destino inalcançável ou falha TLS."
+          }
+        },
+        "summary": "Get Job Feed",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/v1/jobs/alerts/preferences": {
+      "get": {
+        "description": "Retrieve job alert subscription preferences.",
+        "operationId": "getJobAlertPreferences",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobAlertPreferenceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Requisição inválida."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Acesso não autorizado ou destino proibido."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Recurso não encontrado."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflito de concorrência ou operação em andamento."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conteúdo da resposta excede o limite máximo."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Tipo de conteúdo não suportado."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validação de dados ou payload inválido."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Limite de requisições excedido."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Servidor de destino inalcançável ou falha TLS."
+          }
+        },
+        "summary": "Get Job Alert Preferences",
+        "tags": [
+          "jobs"
+        ]
+      },
+      "put": {
+        "description": "Update job alert subscription preferences.",
+        "operationId": "updateJobAlertPreferences",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateJobAlertPreferenceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobAlertPreferenceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Requisição inválida."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Acesso não autorizado ou destino proibido."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Recurso não encontrado."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflito de concorrência ou operação em andamento."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conteúdo da resposta excede o limite máximo."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Tipo de conteúdo não suportado."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validação de dados ou payload inválido."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Limite de requisições excedido."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Servidor de destino inalcançável ou falha TLS."
+          }
+        },
+        "summary": "Update Job Alert Preferences",
+        "tags": [
+          "jobs"
         ]
       }
     },
@@ -3407,9 +4663,161 @@
         ]
       }
     },
+    "/api/v1/jobs/saved": {
+      "get": {
+        "description": "Retrieve cursor-paginated list of user saved jobs.",
+        "operationId": "listSavedJobs",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CursorPage_SavedJobResponse_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Requisição inválida."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Acesso não autorizado ou destino proibido."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Recurso não encontrado."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflito de concorrência ou operação em andamento."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conteúdo da resposta excede o limite máximo."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Tipo de conteúdo não suportado."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validação de dados ou payload inválido."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Limite de requisições excedido."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Servidor de destino inalcançável ou falha TLS."
+          }
+        },
+        "summary": "List Saved Jobs",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
     "/api/v1/jobs/{job_id}": {
       "get": {
-        "description": "Retrieve canonical job posting by ID.",
+        "description": "Retrieve canonical job posting by ID with WP2.2 match intelligence.",
         "operationId": "getJobById",
         "parameters": [
           {
@@ -3428,7 +4836,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JobResponse"
+                  "$ref": "#/components/schemas/JobDetailResponse"
                 }
               }
             },
@@ -3541,6 +4949,265 @@
         ]
       }
     },
+    "/api/v1/jobs/{job_id}/dismiss": {
+      "delete": {
+        "description": "Idempotently undo dismissal of a job.",
+        "operationId": "undismissJob",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Requisição inválida."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Acesso não autorizado ou destino proibido."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Recurso não encontrado."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflito de concorrência ou operação em andamento."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conteúdo da resposta excede o limite máximo."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Tipo de conteúdo não suportado."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validação de dados ou payload inválido."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Limite de requisições excedido."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Servidor de destino inalcançável ou falha TLS."
+          }
+        },
+        "summary": "Undismiss Job",
+        "tags": [
+          "jobs"
+        ]
+      },
+      "post": {
+        "description": "Idempotently dismiss a job from the feed.",
+        "operationId": "dismissJob",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedJobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Requisição inválida."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Acesso não autorizado ou destino proibido."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Recurso não encontrado."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflito de concorrência ou operação em andamento."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conteúdo da resposta excede o limite máximo."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Tipo de conteúdo não suportado."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validação de dados ou payload inválido."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Limite de requisições excedido."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Servidor de destino inalcançável ou falha TLS."
+          }
+        },
+        "summary": "Dismiss Job",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
     "/api/v1/jobs/{job_id}/match": {
       "post": {
         "description": "Computes or retrieves cached match result for the authenticated user and job.",
@@ -3622,6 +5289,265 @@
         "summary": "Match Job",
         "tags": [
           "matching"
+        ]
+      }
+    },
+    "/api/v1/jobs/{job_id}/save": {
+      "delete": {
+        "description": "Idempotently unsave a job.",
+        "operationId": "unsaveJob",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Requisição inválida."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Acesso não autorizado ou destino proibido."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Recurso não encontrado."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflito de concorrência ou operação em andamento."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conteúdo da resposta excede o limite máximo."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Tipo de conteúdo não suportado."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validação de dados ou payload inválido."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Limite de requisições excedido."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Servidor de destino inalcançável ou falha TLS."
+          }
+        },
+        "summary": "Unsave Job",
+        "tags": [
+          "jobs"
+        ]
+      },
+      "post": {
+        "description": "Idempotently save a job.",
+        "operationId": "saveJob",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedJobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Requisição inválida."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Token ausente, inválido, expirado ou revogado."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Acesso não autorizado ou destino proibido."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Recurso não encontrado."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflito de concorrência ou operação em andamento."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conteúdo da resposta excede o limite máximo."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Tipo de conteúdo não suportado."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validação de dados ou payload inválido."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Limite de requisições excedido."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Servidor de destino inalcançável ou falha TLS."
+          }
+        },
+        "summary": "Save Job",
+        "tags": [
+          "jobs"
         ]
       }
     },

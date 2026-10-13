@@ -21,6 +21,10 @@ SettingsFactory = Callable[..., ApiSettings]
 # docs/adr/0011-resume-import.md). TRUNCATE ... CASCADE does not actually require this order
 # (CASCADE follows FKs regardless of list order), but it's kept readable/explicit anyway.
 _IDENTITY_TABLES = (
+    "job_alert_notifications",
+    "job_alert_preferences",
+    "company_watches",
+    "saved_jobs",
     "match_results",
     "account_audit_events",
     "account_deletion_requests",

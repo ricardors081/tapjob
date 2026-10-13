@@ -54,8 +54,15 @@ def test_schema_exposes_the_business_routes_under_api_v1() -> None:
         "/api/v1/me/resumes/master",
         "/api/v1/jobs/intake/paste",
         "/api/v1/jobs/intake/url",
+        "/api/v1/jobs",
+        "/api/v1/jobs/saved",
         "/api/v1/jobs/{job_id}",
         "/api/v1/jobs/{job_id}/match",
+        "/api/v1/jobs/{job_id}/save",
+        "/api/v1/jobs/{job_id}/dismiss",
+        "/api/v1/jobs/alerts/preferences",
+        "/api/v1/companies/{company_id}/watch",
+        "/api/v1/companies/watched",
     }
 
 

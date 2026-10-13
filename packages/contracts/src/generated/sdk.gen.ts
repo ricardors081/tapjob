@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, formDataBodySerializer, type Options as Options2, type RequestResult, type TDataShape } from './client';
 import { client } from './client.gen';
-import type { AddProfileFactData, AddProfileFactErrors, AddProfileFactResponses, BootstrapAccountData, BootstrapAccountErrors, BootstrapAccountResponses, CancelAccountDeletionData, CancelAccountDeletionErrors, CancelAccountDeletionResponses, CreateResumeImportData, CreateResumeImportErrors, CreateResumeImportResponses, FinalizeResumeImportData, FinalizeResumeImportErrors, FinalizeResumeImportResponses, GetAccountDeletionRequestData, GetAccountDeletionRequestErrors, GetAccountDeletionRequestResponses, GetCareerProfileData, GetCareerProfileErrors, GetCareerProfileResponses, GetCurrentUserData, GetCurrentUserErrors, GetCurrentUserResponses, GetHealthData, GetHealthErrors, GetHealthResponses, GetJobByIdData, GetJobByIdErrors, GetJobByIdResponses, GetMasterResumeData, GetMasterResumeErrors, GetMasterResumeResponses, GetProfileFactData, GetProfileFactErrors, GetProfileFactResponses, GetReadinessData, GetReadinessErrors, GetReadinessResponses, GetResumeImportData, GetResumeImportErrors, GetResumeImportResponses, GetTruthSnapshotData, GetTruthSnapshotErrors, GetTruthSnapshotResponses, IntakeJobPasteData, IntakeJobPasteErrors, IntakeJobPasteResponses, IntakeJobUrlData, IntakeJobUrlErrors, IntakeJobUrlResponses, ListConsentsData, ListConsentsErrors, ListConsentsResponses, ListProfileFactsData, ListProfileFactsErrors, ListProfileFactsResponses, MatchJobData, MatchJobErrors, MatchJobResponses, RecordConsentData, RecordConsentErrors, RecordConsentResponses, RegisterDeviceData, RegisterDeviceErrors, RegisterDeviceResponses, ReplaceProfileFactData, ReplaceProfileFactErrors, ReplaceProfileFactResponses, RequestAccountDeletionData, RequestAccountDeletionErrors, RequestAccountDeletionResponses, RetractProfileFactData, RetractProfileFactErrors, RetractProfileFactResponses, RevokeAllSessionsData, RevokeAllSessionsErrors, RevokeAllSessionsResponses, RevokeDeviceData, RevokeDeviceErrors, RevokeDeviceResponses, UpdateCareerProfileData, UpdateCareerProfileErrors, UpdateCareerProfileResponses, UpdateCurrentUserData, UpdateCurrentUserErrors, UpdateCurrentUserResponses } from './types.gen';
+import type { AddProfileFactData, AddProfileFactErrors, AddProfileFactResponses, BootstrapAccountData, BootstrapAccountErrors, BootstrapAccountResponses, CancelAccountDeletionData, CancelAccountDeletionErrors, CancelAccountDeletionResponses, CreateResumeImportData, CreateResumeImportErrors, CreateResumeImportResponses, DismissJobData, DismissJobErrors, DismissJobResponses, FinalizeResumeImportData, FinalizeResumeImportErrors, FinalizeResumeImportResponses, GetAccountDeletionRequestData, GetAccountDeletionRequestErrors, GetAccountDeletionRequestResponses, GetCareerProfileData, GetCareerProfileErrors, GetCareerProfileResponses, GetCurrentUserData, GetCurrentUserErrors, GetCurrentUserResponses, GetHealthData, GetHealthErrors, GetHealthResponses, GetJobAlertPreferencesData, GetJobAlertPreferencesErrors, GetJobAlertPreferencesResponses, GetJobByIdData, GetJobByIdErrors, GetJobByIdResponses, GetJobFeedData, GetJobFeedErrors, GetJobFeedResponses, GetMasterResumeData, GetMasterResumeErrors, GetMasterResumeResponses, GetProfileFactData, GetProfileFactErrors, GetProfileFactResponses, GetReadinessData, GetReadinessErrors, GetReadinessResponses, GetResumeImportData, GetResumeImportErrors, GetResumeImportResponses, GetTruthSnapshotData, GetTruthSnapshotErrors, GetTruthSnapshotResponses, IntakeJobPasteData, IntakeJobPasteErrors, IntakeJobPasteResponses, IntakeJobUrlData, IntakeJobUrlErrors, IntakeJobUrlResponses, ListConsentsData, ListConsentsErrors, ListConsentsResponses, ListProfileFactsData, ListProfileFactsErrors, ListProfileFactsResponses, ListSavedJobsData, ListSavedJobsErrors, ListSavedJobsResponses, ListWatchedCompaniesData, ListWatchedCompaniesErrors, ListWatchedCompaniesResponses, MatchJobData, MatchJobErrors, MatchJobResponses, RecordConsentData, RecordConsentErrors, RecordConsentResponses, RegisterDeviceData, RegisterDeviceErrors, RegisterDeviceResponses, ReplaceProfileFactData, ReplaceProfileFactErrors, ReplaceProfileFactResponses, RequestAccountDeletionData, RequestAccountDeletionErrors, RequestAccountDeletionResponses, RetractProfileFactData, RetractProfileFactErrors, RetractProfileFactResponses, RevokeAllSessionsData, RevokeAllSessionsErrors, RevokeAllSessionsResponses, RevokeDeviceData, RevokeDeviceErrors, RevokeDeviceResponses, SaveJobData, SaveJobErrors, SaveJobResponses, UndismissJobData, UndismissJobErrors, UndismissJobResponses, UnsaveJobData, UnsaveJobErrors, UnsaveJobResponses, UnwatchCompanyData, UnwatchCompanyErrors, UnwatchCompanyResponses, UpdateCareerProfileData, UpdateCareerProfileErrors, UpdateCareerProfileResponses, UpdateCurrentUserData, UpdateCurrentUserErrors, UpdateCurrentUserResponses, UpdateJobAlertPreferencesData, UpdateJobAlertPreferencesErrors, UpdateJobAlertPreferencesResponses, WatchCompanyData, WatchCompanyErrors, WatchCompanyResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -30,6 +30,55 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
  * independent-review "account-created audit transaction").
  */
 export const bootstrapAccount = <ThrowOnError extends boolean = false>(options?: Options<BootstrapAccountData, ThrowOnError>): RequestResult<BootstrapAccountResponses, BootstrapAccountErrors, ThrowOnError> => (options?.client ?? client).post<BootstrapAccountResponses, BootstrapAccountErrors, ThrowOnError>({ url: '/api/v1/auth/bootstrap', ...options });
+
+/**
+ * List Watched Companies
+ *
+ * List companies watched by the authenticated user.
+ */
+export const listWatchedCompanies = <ThrowOnError extends boolean = false>(options?: Options<ListWatchedCompaniesData, ThrowOnError>): RequestResult<ListWatchedCompaniesResponses, ListWatchedCompaniesErrors, ThrowOnError> => (options?.client ?? client).get<ListWatchedCompaniesResponses, ListWatchedCompaniesErrors, ThrowOnError>({ url: '/api/v1/companies/watched', ...options });
+
+/**
+ * Unwatch Company
+ *
+ * Idempotently unwatch a company.
+ */
+export const unwatchCompany = <ThrowOnError extends boolean = false>(options: Options<UnwatchCompanyData, ThrowOnError>): RequestResult<UnwatchCompanyResponses, UnwatchCompanyErrors, ThrowOnError> => (options.client ?? client).delete<UnwatchCompanyResponses, UnwatchCompanyErrors, ThrowOnError>({ url: '/api/v1/companies/{company_id}/watch', ...options });
+
+/**
+ * Watch Company
+ *
+ * Idempotently watch a company.
+ */
+export const watchCompany = <ThrowOnError extends boolean = false>(options: Options<WatchCompanyData, ThrowOnError>): RequestResult<WatchCompanyResponses, WatchCompanyErrors, ThrowOnError> => (options.client ?? client).post<WatchCompanyResponses, WatchCompanyErrors, ThrowOnError>({ url: '/api/v1/companies/{company_id}/watch', ...options });
+
+/**
+ * Get Job Feed
+ *
+ * Retrieve personalized, relevance-ordered job feed with cursor pagination.
+ */
+export const getJobFeed = <ThrowOnError extends boolean = false>(options?: Options<GetJobFeedData, ThrowOnError>): RequestResult<GetJobFeedResponses, GetJobFeedErrors, ThrowOnError> => (options?.client ?? client).get<GetJobFeedResponses, GetJobFeedErrors, ThrowOnError>({ url: '/api/v1/jobs', ...options });
+
+/**
+ * Get Job Alert Preferences
+ *
+ * Retrieve job alert subscription preferences.
+ */
+export const getJobAlertPreferences = <ThrowOnError extends boolean = false>(options?: Options<GetJobAlertPreferencesData, ThrowOnError>): RequestResult<GetJobAlertPreferencesResponses, GetJobAlertPreferencesErrors, ThrowOnError> => (options?.client ?? client).get<GetJobAlertPreferencesResponses, GetJobAlertPreferencesErrors, ThrowOnError>({ url: '/api/v1/jobs/alerts/preferences', ...options });
+
+/**
+ * Update Job Alert Preferences
+ *
+ * Update job alert subscription preferences.
+ */
+export const updateJobAlertPreferences = <ThrowOnError extends boolean = false>(options: Options<UpdateJobAlertPreferencesData, ThrowOnError>): RequestResult<UpdateJobAlertPreferencesResponses, UpdateJobAlertPreferencesErrors, ThrowOnError> => (options.client ?? client).put<UpdateJobAlertPreferencesResponses, UpdateJobAlertPreferencesErrors, ThrowOnError>({
+    url: '/api/v1/jobs/alerts/preferences',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
 
 /**
  * Intake Job Paste
@@ -60,11 +109,32 @@ export const intakeJobUrl = <ThrowOnError extends boolean = false>(options: Opti
 });
 
 /**
+ * List Saved Jobs
+ *
+ * Retrieve cursor-paginated list of user saved jobs.
+ */
+export const listSavedJobs = <ThrowOnError extends boolean = false>(options?: Options<ListSavedJobsData, ThrowOnError>): RequestResult<ListSavedJobsResponses, ListSavedJobsErrors, ThrowOnError> => (options?.client ?? client).get<ListSavedJobsResponses, ListSavedJobsErrors, ThrowOnError>({ url: '/api/v1/jobs/saved', ...options });
+
+/**
  * Get Job By Id
  *
- * Retrieve canonical job posting by ID.
+ * Retrieve canonical job posting by ID with WP2.2 match intelligence.
  */
 export const getJobById = <ThrowOnError extends boolean = false>(options: Options<GetJobByIdData, ThrowOnError>): RequestResult<GetJobByIdResponses, GetJobByIdErrors, ThrowOnError> => (options.client ?? client).get<GetJobByIdResponses, GetJobByIdErrors, ThrowOnError>({ url: '/api/v1/jobs/{job_id}', ...options });
+
+/**
+ * Undismiss Job
+ *
+ * Idempotently undo dismissal of a job.
+ */
+export const undismissJob = <ThrowOnError extends boolean = false>(options: Options<UndismissJobData, ThrowOnError>): RequestResult<UndismissJobResponses, UndismissJobErrors, ThrowOnError> => (options.client ?? client).delete<UndismissJobResponses, UndismissJobErrors, ThrowOnError>({ url: '/api/v1/jobs/{job_id}/dismiss', ...options });
+
+/**
+ * Dismiss Job
+ *
+ * Idempotently dismiss a job from the feed.
+ */
+export const dismissJob = <ThrowOnError extends boolean = false>(options: Options<DismissJobData, ThrowOnError>): RequestResult<DismissJobResponses, DismissJobErrors, ThrowOnError> => (options.client ?? client).post<DismissJobResponses, DismissJobErrors, ThrowOnError>({ url: '/api/v1/jobs/{job_id}/dismiss', ...options });
 
 /**
  * Match Job
@@ -72,6 +142,20 @@ export const getJobById = <ThrowOnError extends boolean = false>(options: Option
  * Computes or retrieves cached match result for the authenticated user and job.
  */
 export const matchJob = <ThrowOnError extends boolean = false>(options: Options<MatchJobData, ThrowOnError>): RequestResult<MatchJobResponses, MatchJobErrors, ThrowOnError> => (options.client ?? client).post<MatchJobResponses, MatchJobErrors, ThrowOnError>({ url: '/api/v1/jobs/{job_id}/match', ...options });
+
+/**
+ * Unsave Job
+ *
+ * Idempotently unsave a job.
+ */
+export const unsaveJob = <ThrowOnError extends boolean = false>(options: Options<UnsaveJobData, ThrowOnError>): RequestResult<UnsaveJobResponses, UnsaveJobErrors, ThrowOnError> => (options.client ?? client).delete<UnsaveJobResponses, UnsaveJobErrors, ThrowOnError>({ url: '/api/v1/jobs/{job_id}/save', ...options });
+
+/**
+ * Save Job
+ *
+ * Idempotently save a job.
+ */
+export const saveJob = <ThrowOnError extends boolean = false>(options: Options<SaveJobData, ThrowOnError>): RequestResult<SaveJobResponses, SaveJobErrors, ThrowOnError> => (options.client ?? client).post<SaveJobResponses, SaveJobErrors, ThrowOnError>({ url: '/api/v1/jobs/{job_id}/save', ...options });
 
 /**
  * Get Current User

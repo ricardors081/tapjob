@@ -77,6 +77,7 @@ class ErrorCode(StrEnum):
     JOB_CONTENT_TYPE_UNSUPPORTED = "JOB_CONTENT_TYPE_UNSUPPORTED"
     JOB_PAGE_REQUIRES_MANUAL_PASTE = "JOB_PAGE_REQUIRES_MANUAL_PASTE"
     JOB_NOT_FOUND = "JOB_NOT_FOUND"
+    COMPANY_NOT_FOUND = "COMPANY_NOT_FOUND"
     IDEMPOTENCY_KEY_PAYLOAD_MISMATCH = "IDEMPOTENCY_KEY_PAYLOAD_MISMATCH"
     CONCURRENT_REQUEST_IN_PROGRESS = "CONCURRENT_REQUEST_IN_PROGRESS"
 
@@ -157,6 +158,7 @@ _DEFAULT_MESSAGE_BY_CODE: dict[ErrorCode, str] = {
         "Esta página depende de execução dinâmica de JavaScript. Cole a descrição manualmente."
     ),
     ErrorCode.JOB_NOT_FOUND: "Vaga não encontrada.",
+    ErrorCode.COMPANY_NOT_FOUND: "Empresa não encontrada.",
     ErrorCode.IDEMPOTENCY_KEY_PAYLOAD_MISMATCH: (
         "A chave de idempotência já foi utilizada com outro conteúdo nesta operação."
     ),

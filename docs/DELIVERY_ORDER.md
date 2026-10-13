@@ -10,10 +10,13 @@ TapJob will be delivered in this order:
 
 1. **Engineering Foundation** (VERIFIED: WP0.1, WP0.2)
 2. **Minimum Career Core** (VERIFIED: WP1.1, WP1.2, WP1.3, WP2.1-A, WP2.1-B, WP2.2)
-3. **WhatsApp-first product** (Next Product Goal: Minimum WhatsApp Alpha Vertical Slice)
-4. **Mobile App** (Mobile Readiness is parallel-safe; full Mobile Product Experience after WhatsApp Alpha)
-5. **Browser Extension**
-6. **Inbox Intelligence / Interviews / advanced analytics / official integrations expansion**
+3. **WhatsApp-first product** (VERIFIED: Minimum WhatsApp Alpha Vertical Slice, PR #42; `WHATSAPP_ALPHA_CODE = VERIFIED`)
+4. **Current Product Priority: WHATSAPP_LIVE_AND_COMMERCIAL_READINESS** (Live operational gate and commercial pilot readiness before expanding app features)
+5. **Mobile Jobs Domain Surface** (Delivered in WP2.3: `MOBILE_PRODUCT_STARTED = YES`, `MOBILE_PRODUCT_SCOPE = JOBS_DOMAIN_ONLY`; `FURTHER_MOBILE_PRODUCT_EXPANSION = PAUSED_UNTIL_WHATSAPP_LIVE/PILOT_COMMERCIAL_GATE`)
+6. **Browser Extension**
+7. **Inbox Intelligence / Interviews / advanced analytics / official integrations expansion**
+
+Next execution after PR #43: **WHATSAPP_LIVE_GATE** (`NEXT_EXECUTION_AFTER_PR43 = WHATSAPP_LIVE_GATE`). Downstream work packages (WP3.x, WP4.x, WP5.x) are not automatically authorized. Note that backend WP2.3 (Job Feed & Alerts) directly strengthens the WhatsApp product through proactive job alerts via `OutboundMessageQueue` and canonical batch matching.
 
 This is a sequencing decision, not a reduction in product scope.
 
@@ -65,11 +68,11 @@ A fundação técnica e os blocos essenciais do Career Core já estão verificad
 
 O backend suporta a verdade profissional e a inteligência determinística de matching. O próximo passo de produto é integrar a fatia mínima ponta a ponta para a jornada no WhatsApp.
 
-## 4. WhatsApp-first alpha journey (Minimum WhatsApp Alpha Vertical Slice)
+## 4. WhatsApp-first alpha journey (Minimum WhatsApp Alpha Vertical Slice — VERIFIED)
 
-O próximo checkpoint de produto é o **Minimum WhatsApp Alpha Vertical Slice**.
+O checkpoint de produto **Minimum WhatsApp Alpha Vertical Slice** foi entregue, verificado independentemente e mergeado via PR #42 (squash commit `ad055e3516ada08cc7e5fc60eab3a439b28ef346`, post-merge CI `38165824859` 8/8 green).
 
-Target first meaningful product flow:
+Jornada entregue:
 
 ```text
 User says "oi"
@@ -92,11 +95,11 @@ User says "oi"
   -> WhatsApp interaction surface
 ```
 
-The user can receive real value before installing the mobile app.
+O usuário recebe valor real antes de instalar o aplicativo mobile.
 
 ### Natureza Cross-WP do Slice
-Este slice antecipa estritamente a intersecção mínima de capacidades dos WPs subsequentes (WP2.3 feed/alerts, WP3.x tailoring/kit, WP4.x tracker/agent/WhatsApp) necessária para viabilizar a experiência conversacional completa.
-**Isso NÃO reduz nem remove os escopos completos existentes de WP2.3, WP3.x e WP4.x**, cujas versões completas continuam planejadas no `IMPLEMENTATION_PLAN.md`.
+Este slice antecipou estritamente a intersecção mínima de capacidades dos WPs subsequentes (WP2.3 feed/alerts, WP3.x tailoring/kit, WP4.x tracker/agent/WhatsApp) necessária para viabilizar a experiência conversacional completa.
+**Isso NÃO reduziu nem removeu os escopos completos existentes de WP2.3, WP3.x e WP4.x**, cujas versões completas continuam planejadas no `IMPLEMENTATION_PLAN.md`. Com a validação do WhatsApp Alpha, o produto avança para a Mobile Product Experience, iniciando por WP2.3 (Job Feed & Alerts).
 
 ## 5. Relationship between WhatsApp and Mobile: Mobile Readiness vs Mobile Product Experience
 
@@ -310,16 +313,17 @@ Estado atual dos work packages:
 - WP0.1 & WP0.2 = **VERIFIED**
 - WP1.1, WP1.2 & WP1.3 = **VERIFIED**
 - WP2.1-A & WP2.1-B = **VERIFIED**
-- WP2.2 = **VERIFIED** (PR #40, squash commit `2aedd2b6d281214296009d3ff058d6fdb5677720`, post-merge CI `37997452936` 8/8 green, independent review APPROVED)
+- WP2.2 = **VERIFIED**
+- Minimum WhatsApp Alpha Vertical Slice = **VERIFIED** (PR #42, squash commit `ad055e3516ada08cc7e5fc60eab3a439b28ef346`, post-merge CI `38165824859` 8/8 green, tree equivalence YES, independent closeout CLOSED_AND_VERIFIED)
 
-**Próximo objetivo autorizado:**
-**Minimum WhatsApp Alpha Vertical Slice** (cross-WP minimum slice para entregar o primeiro produto ponta a ponta utilizável sobre o Core compartilhado).
+**Estágio de Produto Atual:**
+**MOBILE APP / MOBILE PRODUCT EXPERIENCE** iniciado formalmente, restrito ao domínio de Jobs/Vagas.
 
-**Parallel-Safe:**
-Apenas **Mobile Readiness** (infraestrutura nativa, compilação/build CI, Expo dev client, wiring de autenticação e contratos de API gerados).
-
-**Mobile Product Experience:**
-Permanece estritamente após a validação do WhatsApp Alpha vertical slice (telas completas de Job Feed, Job Detail, Match visual, Resume Studio, Kanban/Tracker, analytics, document manager, large Application Kit review e settings UI).
+**Work Package Autorizado Atual:**
+**WP2.3 — Job Feed & Alerts (IN PROGRESS)**:
+- Backend: feed ownership-safe, relevance ordering determinística, bounded matching reusando WP2.2, paginação estável por cursor vinculada a filtros/versões, search/filtros, SavedJob, CompanyWatch, JobAlertPreference, worker de avaliação com dedupe durável e integração WhatsApp outbox.
+- Mobile: experiência de Jobs em `apps/mobile` (feed paginado, filtros, detalhe de vaga com explainability WP2.2, save/dismiss, watch de empresa, toggle de alertas, deep links).
+- Escopo downstream (WP3.x, WP4.x, WP5.x) permanece não iniciado.
 
 **Browser Extension:**
 Permanece após as superfícies Mobile/Core conforme já definido.

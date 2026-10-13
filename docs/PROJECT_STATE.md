@@ -1,9 +1,9 @@
 # Project State — TapJob
 
-**As of:** 2026-10-09  
+**As of:** 2026-10-12  
 **Repository:** `ricardo081683/tapjob`  
-**Phase:** 0 — Foundation (VERIFIED, complete); 1 — Career Core (WP1.1, WP1.2, WP1.3 VERIFIED, complete for Phase 1 baseline); 2 — Jobs & Matching (WP2.1-A VERIFIED, WP2.1-B VERIFIED, WP2.2 VERIFIED); Next Product Goal: Minimum WhatsApp Alpha Vertical Slice  
-**Code status:** WP0.1 VERIFIED. WP0.2 VERIFIED. WP1.1 VERIFIED. WP1.2 VERIFIED. WP1.3 VERIFIED. WP2.1-A VERIFIED (PR #25, squash commit `38da12050d9613f502bce956edc7167c8427f3df`, post-merge CI run `37716255293` 8/8 green). WP2.1-B VERIFIED (PR #36, squash commit `fccc14bcdf581245bdefd7b67395ca96eafcf2f7`, post-merge CI run `37822195467` 8/8 green). WP2.2 VERIFIED (PR #40, approved HEAD `55744b6872b49854cad45c2ef69cd3c132f3c073`, squash/main commit `2aedd2b6d281214296009d3ff058d6fdb5677720`, post-merge CI run `37997452936` 8/8 green, independent review APPROVED: CRITICAL=0, HIGH=0, MEDIUM_BLOCKING=0). Next product goal: Minimum WhatsApp Alpha Vertical Slice (cross-WP minimum slice over channel-neutral Core). Parallel-safe: Mobile Readiness only. Full Mobile Product Experience deferred until after WhatsApp Alpha. Downstream full WPs remain unstarted.
+**Phase:** 0 — Foundation (VERIFIED, complete); 1 — Career Core (VERIFIED, complete); 2 — Jobs & Matching (WP2.1-A, WP2.1-B, WP2.2 VERIFIED; WP2.3 IMPLEMENTED / PENDING INDEPENDENT VERIFICATION); WhatsApp Alpha (VERIFIED, PR #42); Product Priority: WHATSAPP_LIVE_AND_COMMERCIAL_READINESS; Mobile Status: MOBILE_PRODUCT_STARTED=YES, MOBILE_PRODUCT_SCOPE=JOBS_DOMAIN_ONLY; FURTHER_MOBILE_PRODUCT_EXPANSION=PAUSED_UNTIL_WHATSAPP_LIVE/PILOT_COMMERCIAL_GATE  
+**Code status:** WP0.1 VERIFIED. WP0.2 VERIFIED. WP1.1 VERIFIED. WP1.2 VERIFIED. WP1.3 VERIFIED. WP2.1-A VERIFIED (PR #25, squash commit `38da12050d9613f502bce956edc7167c8427f3df`, post-merge CI run `37716255293` 8/8 green). WP2.1-B VERIFIED (PR #36, squash commit `fccc14bcdf581245bdefd7b67395ca96eafcf2f7`, post-merge CI run `37822195467` 8/8 green). WP2.2 VERIFIED (PR #40, approved HEAD `55744b6872b49854cad45c2ef69cd3c132f3c073`, squash/main commit `2aedd2b6d281214296009d3ff058d6fdb5677720`, post-merge CI run `37997452936` 8/8 green). MINIMUM_WHATSAPP_ALPHA_VERTICAL_SLICE=VERIFIED (PR #42, approved HEAD `b47426eb648a1e2fb2f1e076102e803c61391558`, squash/main commit `ad055e3516ada08cc7e5fc60eab3a439b28ef346`, post-merge CI run `38165824859` 8/8 green, tree equivalence YES, independent closeout CLOSED_AND_VERIFIED). Current Product Priority: WHATSAPP_LIVE_AND_COMMERCIAL_READINESS. Next execution after PR #43: WHATSAPP_LIVE_GATE. Mobile scope: MOBILE_PRODUCT_STARTED=YES, MOBILE_PRODUCT_SCOPE=JOBS_DOMAIN_ONLY (further mobile expansion PAUSED_UNTIL_WHATSAPP_LIVE/PILOT_COMMERCIAL_GATE). Current authorized capability WP: WP2.3 — Job Feed & Alerts (IMPLEMENTED / PENDING INDEPENDENT VERIFICATION; backend directly strengthens WhatsApp product with proactive job alerts). Downstream full WPs (WP3.x, WP4.x, WP5.x) remain unstarted.
 
 
 This file must reflect reality only.
@@ -280,9 +280,9 @@ O backend/Core permanece channel-neutral. Compartilham a mesma:
 Canais variam APRESENTAÇÃO e CAPACIDADES DE INTERFACE, nunca a verdade canônica.
 
 Specifically NOT implemented:
-- Full downstream work packages (WP2.3+ Job Feed & Alerts, WP3.x Resume & Application Kit, WP4.x Tracking & Agent, etc.);
-- WhatsApp Alpha product surface (next product goal via cross-WP minimum vertical slice over channel-neutral Core);
-- Mobile Product Experience (visual Job Feed, Job Detail, visual Match, Resume Studio, visual Kanban/Application Tracker, analytics, document manager, large Application Kit review, settings/integrations UI — deferred until after WhatsApp Alpha);
+- Full downstream work packages (WP3.x Resume & Application Kit, WP4.x Tracking & Agent, WP5.x Apply Engine, etc.);
+- WhatsApp Alpha beyond vertical slice (full WhatsApp feature suite deferred);
+- Mobile Product Experience beyond Jobs surface (Resume Studio, Kanban/Application Tracker, Analytics, Interviews — deferred);
 - Full mobile profile UI (WP1.2 and WP1.3 are backend-verified; mobile UI is deferred to Mobile Product stage);
 - AI-backed resume parser (deterministic parser implemented in WP1.3; AI extraction deferred);
 - Semantic layer (embeddings) and LLM re-score for matching (deferred from WP2.2);
@@ -401,60 +401,38 @@ Implemented adapters for Greenhouse, Lever, and Ashby conforming strictly to `po
 ### Phase 2: WP2.2 — Matching Engine (VERIFIED)
 Architecture, contracts, scoring models, explainability, cache, concurrency, evals, and implementation plan established in ADR-0014 (D-056). Implemented under `tapjob_api.matching` (pure internal domain logic, not a port protocol), consuming `TruthSnapshot` (confirmed facts only) and canonical `Job`; integer score scale 0..100; hard-filter knock-out gate (`WORK_AUTHORIZATION`, `WORKPLACE_TYPE`, `LOCATION`, `SALARY_MINIMUM`, `ROLE_ALIGNMENT`) with strict distinction between `HARD_BLOCKER`, `SOFT_MISMATCH`, and `UNKNOWN` (undisclosed job attributes never trigger blockers; hard blocker forces `overall_score = 0` and `eligibility = INELIGIBLE`); deterministic 5-component lexical scoring (title 25%, skills 35% with 75/25 required vs preferred weight, experience 20%, seniority 10%, location/workplace 10%) with pure basis points integer arithmetic and round-half-up, bilingual Portuguese/English normalization and technology alias map; neutral imputation (50/100, UNKNOWN) for omitted non-mandatory attributes; minimum eligible score threshold at 50; semantic layer (embeddings) and LLM re-score deferred to WP2.3+; grounded deterministic template explainability linking strengths directly to `ProfileFact.id` values with no LLM dependency in the WP2.2 runtime baseline (optional presentation-layer LLM synthesis via `AiGateway` `AiPurpose.JOB_MATCH_EXPLANATION` remains an architectural capability for future work packages); reproducibility invariant via `matching_policy_version` (`2026.1`), `profile_version`, `job_match_fingerprint`, and `evaluation_as_of_date`; PostgreSQL canonical `match_results` persistence with unique constraint `uq_match_results_user_job_versions` on `(user_id, job_id, profile_version, job_match_fingerprint, policy_version, evaluation_as_of_date)` (migration `0006`) + volatile Redis cache (24h TTL) with visibility pre-check; concurrency handling via `INSERT ... ON CONFLICT DO NOTHING` asserting equality of `deterministic_result_digest`; single match synchronous (< 50ms p95, benchmarked at < 1ms), bulk match deferred to WP2.3 (asynchronous Celery); authenticated `POST /api/v1/jobs/{job_id}/match` API endpoint; untrusted job descriptions treated as inert text (prompt injection impervious); 15 golden deterministic eval scenarios and 6 invariant suites passing. Independently reviewed across multiple rounds and approved with zero blocking findings (CRITICAL=0, HIGH=0, MEDIUM_BLOCKING=0); merged via squash into `main` as PR #40 (squash commit `2aedd2b6d281214296009d3ff058d6fdb5677720`, approved implementation HEAD `55744b6872b49854cad45c2ef69cd3c132f3c073`). Post-merge CI run `37997452936` on `main` is green 8/8. **WP2.2 is VERIFIED.**
 
-### Next Product Goal: Minimum WhatsApp Alpha Vertical Slice
-The next product milestone is a cross-WP minimum vertical slice delivering an end-to-end user journey on WhatsApp before heavy visual mobile construction:
+### Minimum WhatsApp Alpha Vertical Slice (VERIFIED)
+The cross-WP minimum vertical slice delivering an end-to-end user journey on WhatsApp over the channel-neutral Core was implemented, independently reviewed across multiple rounds (CRITICAL=0, HIGH=0, MEDIUM_BLOCKING=0: APPROVED), merged via squash into `main` as PR #42 (approved HEAD `b47426eb648a1e2fb2f1e076102e803c61391558`, squash/main commit `ad055e3516ada08cc7e5fc60eab3a439b28ef346`). Post-merge CI run `38165824859` on `main` is 8/8 green. Tree equivalence confirmed. Closeout: `CLOSED_AND_VERIFIED`.
 
-```text
-User says "oi"
-  -> channel identity
-  -> TapJob User linkage
-  -> resume/basic profile
-  -> PDF/DOCX intake
-  -> fact extraction
-  -> confirmation
-  -> target role/preferences
-  -> job import/recommendation
-  -> Matching Engine
-  -> match explanation
-  -> minimal grounded resume tailoring
-  -> basic Application Kit
-  -> document/link handoff
-  -> basic application tracking
-  -> reminders/follow-up
-  -> Career Agent tools
-  -> WhatsApp interaction surface
-```
+Included capabilities:
+- Channel identity models and linkage (`channel_providers`, `channel_identities`, `channel_identity_links`, migration `0007`);
+- Provider envelope lease fencing, inbound idempotency, and domain effects (`provider_event_envelopes`, `inbound_effects`, migrations `0008`, `0011`, `0012`);
+- Outbound message queue with retry, backoff, and outbox service (`outbound_message_queue`);
+- Minimal application tracking & reminders (`applications`, `application_kits`, `reminders`, migration `0009`);
+- Reviewable candidate drafts (`candidate_review_drafts`, migration `0010`);
+- Conversational intent routing, resume intake, tailored claims, grounded explanation, and follow-up tools;
+- Evolution API adapter isolated behind `MessagingChannel` port with echo dropping and webhook authentication;
+- Celery worker tasks with durable claims, soft time limits, and recovery sweeper.
 
-**Cross-WP Minimum Slice:** This slice anticipates only the minimal necessary capabilities from WP2.3, WP3.x, and WP4.x needed for the end-to-end WhatsApp experience. It does NOT reduce or remove the full scopes of WP2.3, WP3.1, WP3.2, WP3.3, WP4.1, WP4.2, and WP4.3, which continue to exist as planned in `IMPLEMENTATION_PLAN.md`.
-
-**Macro-Delivery Sequencing Direction:**
-- **Checkpoint A — WhatsApp Alpha Core:** Minimal shared capabilities: channel identity model and linking; minimal feed/alert backend required for the vertical slice; minimal grounded resume tailoring; basic Application Kit; minimal Application Tracker; Career Agent Core/tools required for alpha.
-- **Checkpoint B — WhatsApp Alpha Surface + Mobile Readiness:** `MessagingChannel` adapter; Evolution API initial adapter; normalized inbound/outbound contracts; webhook; conversational orchestration; confirmations; document handoff; reminders/follow-up; deep links; Mobile Readiness infrastructure.
-
-**Mobile Readiness is Parallel-Safe:**
-- Permitted Mobile Readiness scope (can progress in parallel when not blocking or delaying the WhatsApp vertical slice): Expo Development Build; Android native/build readiness; iOS native/build readiness; EAS configuration/profiles; environment configuration; Firebase mobile/auth wiring; generated OpenAPI API client integration foundation; session/secure-storage foundation; navigation shell; design tokens/design-system primitives; error/loading/network foundations; deep-link infrastructure; push-notification plumbing when backend contract exists; Sentry/observability; build/compile CI; package/bundle identifiers/configuration; icon/splash/native config. These technical readiness activities do NOT mean the Mobile Product has started.
-- **Mobile Product Experience is Deferred:** Full visual Job Feed, complete Job Detail, visual Match, Resume Studio, visual Kanban/Application Tracker, analytics, document manager, large Application Kit review, settings/integrations UI, and product screens remain strictly deferred until after the WhatsApp Alpha vertical slice is functional.
-
-**Provider Neutrality & Auxiliary Systems:**
-- **Evolution API:** Initial transport for development/alpha only, isolated behind the provider-neutral `MessagingChannel` port. No domain or Core business rules may depend on Baileys, QR/session quirks, Evolution webhook shapes, provider IDs, or provider retry semantics. The path to the official WhatsApp Cloud API is preserved.
-- **n8n:** Auxiliary integration and operations tool only. Never canonical owner of user state, matching, profile truth, application state, Career Agent policy, or critical business rules.
+Current product stage: **MOBILE APP / MOBILE PRODUCT EXPERIENCE**.  
+Current authorized capability WP: **WP2.3 — Job Feed & Alerts (IN PROGRESS)**.
 
 ## 5. Phase gates
 
 ### Gate 0
-Foundation and CI ready.
+Foundation and CI ready. (SATISFIED)
 
 ### Gate 1
-Career Core accepted.
+Career Core accepted. (SATISFIED)
 
 ### Gate 2
-Jobs & Matching accepted.
+Jobs & Matching accepted. (WP2.1-A, WP2.1-B, WP2.2 SATISFIED; WP2.3 IN PROGRESS)
 
 ### Gate 3
 Resume & Application Kit accepted.
 
 ### Gate 4
-Tracking + Agent + WhatsApp accepted.
+Tracking + Agent + WhatsApp accepted. (WhatsApp Alpha VERIFIED)
 
 ### Gate 5
 Assisted Apply accepted.
@@ -472,20 +450,26 @@ On every significant PR:
 
 ## 7. Current authoritative conclusion
 
-TapJob has a defined product and architecture baseline, a repository/engineering skeleton (WP0.1-A + WP0.1-B), and three verified technical-contracts checkpoints (WP0.2-A: HTTP/OpenAPI/client-generation conventions; WP0.2-B Checkpoint A: internal ports + capability model; WP0.2-B Checkpoint B: worker correlation + deployment/CD contract) — **Phase 0 / Foundation is VERIFIED and complete**. Phase 1 — Career Core baseline is **VERIFIED**: WP1.1 — Identity & User Account (`docs/adr/0009-identity-auth-user-account.md`, D-051) is **VERIFIED**; WP1.2 — Career Profile & Professional Truth Store (`docs/adr/0010-career-profile-truth-store.md`, D-052) is **VERIFIED**; and WP1.3 — Resume Import (`docs/adr/0011-resume-import.md`, D-053) is **VERIFIED**. Phase 2 — Jobs & Matching intake and deterministic matching foundation is **VERIFIED**: WP2.1-A — Jobs Domain, Manual Intake & Normalization Foundation (`docs/adr/0012-jobs-domain-manual-intake.md`, D-054) is **VERIFIED**; WP2.1-B — External Hosted ATS Connectors & Ingestion Scheduler (`docs/adr/0013-external-ats-connectors-ingestion.md`, D-055) is **VERIFIED**; and WP2.2 — Matching Engine (`docs/adr/0014-matching-engine.md`, D-056) is **VERIFIED** (PR #40, squash commit `2aedd2b6d281214296009d3ff058d6fdb5677720`, approved implementation HEAD `55744b6872b49854cad45c2ef69cd3c132f3c073`, post-merge CI run `37997452936` 8/8 green, independent review APPROVED).
+TapJob has a defined product and architecture baseline, a repository/engineering skeleton (WP0.1-A + WP0.1-B), and three verified technical-contracts checkpoints (WP0.2-A, WP0.2-B Checkpoint A, WP0.2-B Checkpoint B) — **Phase 0 / Foundation is VERIFIED and complete**.
 
-WP0.1 is independently reviewed, merged and verified with green CI on `main`. Gate 0 is satisfied. WP0.2-A is independently reviewed, merged (PR #9) and verified with green CI on `main` commit `706cc33d659c59db76cf4cd687a938f7558ba37b`. WP0.2-B Checkpoint A (seven internal ports + capability model) is independently reviewed across three rounds, merged via squash (PR #12, `main` commit `a8bfbe621e5a83ae5f205adb1919ce3250684efb`) and verified with green CI on that commit (run `37055251128`, 7/7). WP0.2-B Checkpoint B (worker correlation, deployment/CD contract) is independently reviewed across three rounds, merged via squash (PR #15, `main` commit `3edaf1cee33b892a5d753b07b9b9946cbcd28887`) and verified with green CI both pre-merge (run `37230556089`, 8/8) and post-merge (run `37231990603`, 8/8). WP0.2-B as a whole — and WP0.2 overall — is **VERIFIED**. Phase 0 / Foundation is complete.
+Phase 1 — Career Core baseline is **VERIFIED**:
+- WP1.1 — Identity & User Account (`docs/adr/0009-identity-auth-user-account.md`, D-051) is **VERIFIED**;
+- WP1.2 — Career Profile & Professional Truth Store (`docs/adr/0010-career-profile-truth-store.md`, D-052) is **VERIFIED**;
+- WP1.3 — Resume Import (`docs/adr/0011-resume-import.md`, D-053) is **VERIFIED**.
 
-WP1.1 (Identity & User Account) is independently reviewed across three rounds, merged via squash into `main` as PR #17 (squash commit `bc269d8dd99f1455d1d44cf8b3abb4ba8d7915e7`); CI green pre-merge (run `37254156902`, 8/8) and post-merge (run `37312677497`, 8/8). **WP1.1 is VERIFIED.**
+Phase 2 — Jobs & Matching intake and deterministic matching foundation is **VERIFIED**:
+- WP2.1-A — Jobs Domain, Manual Intake & Normalization Foundation (`docs/adr/0012-jobs-domain-manual-intake.md`, D-054) is **VERIFIED**;
+- WP2.1-B — External Hosted ATS Connectors & Ingestion Scheduler (`docs/adr/0013-external-ats-connectors-ingestion.md`, D-055) is **VERIFIED**;
+- WP2.2 — Matching Engine (`docs/adr/0014-matching-engine.md`, D-056) is **VERIFIED** (PR #40, squash commit `2aedd2b6d281214296009d3ff058d6fdb5677720`, approved implementation HEAD `55744b6872b49854cad45c2ef69cd3c132f3c073`, post-merge CI run `37997452936` 8/8 green).
 
-WP1.2 (Career Profile & Professional Truth Store) is independently reviewed across three rounds, merged via squash into `main` as PR #19 (squash commit `5c06c805ea2a68fcf100ec56cff5eaf715e962c2`), with corrective PR #20 (squash commit `f30590577cf25733de63025f987c251ebe0e89af`) resolving post-merge concurrency defect, CI green post-merge 8/8 (run `37397784331`). **WP1.2 is VERIFIED.**
+Channel Surface Slice:
+- **Minimum WhatsApp Alpha Vertical Slice is VERIFIED** (PR #42, approved HEAD `b47426eb648a1e2fb2f1e076102e803c61391558`, squash/main commit `ad055e3516ada08cc7e5fc60eab3a439b28ef346`, post-merge CI run `38165824859` 8/8 green, tree equivalence YES, independent closeout CLOSED_AND_VERIFIED).
 
-WP1.3 (Resume Import) — PDF/DOCX upload, bounded binary signature/container validation, private R2 object storage, bounded non-OCR extraction, deterministic candidate parser, fail-closed `FactValue` validation, explicit review/finalization, provenance (`FactSourceKind.RESUME_IMPORT`), master `Resume`/`ResumeVersion` creation grounded in confirmed facts, migration `0004` — is independently reviewed across two rounds (10 findings in Round 1, 7 findings + 2 hardening items in Round 2), rebased cleanly over Expo maintenance PR #23, merged via squash into `main` as PR #22 (squash commit `db1754acf2a6aabb4b13df3a7de35a8a0d795a48`, approved PR HEAD `fba5765a291abc0c9bfea548c6f97f7bf92e0db0`). CI green pre-merge (run `37538366658`, 8/8) and post-merge (run `37551974662`, 8/8). Tree equivalence confirmed (`af7d26f4544f573f4d93b212b4c11b070f3f2052`). **WP1.3 is VERIFIED.** Raw source blob retention/deletion lifecycle remains an open pre-production gate (Gate 1).
+Current Product Stage & Priority:
+- **CURRENT_PRODUCT_PRIORITY = WHATSAPP_LIVE_AND_COMMERCIAL_READINESS**: The immediate strategic objective is to achieve commercial readiness and live validation for the WhatsApp product before further expansion of the mobile app.
+- **MOBILE STATUS**: `MOBILE_PRODUCT_STARTED = YES`, `MOBILE_PRODUCT_SCOPE = JOBS_DOMAIN_ONLY`. Further expansion of the mobile client is paused (`FURTHER_MOBILE_PRODUCT_EXPANSION = PAUSED_UNTIL_WHATSAPP_LIVE/PILOT_COMMERCIAL_GATE`).
+- **NEXT_EXECUTION_AFTER_PR43 = WHATSAPP_LIVE_GATE**.
 
-WP2.1-A (Jobs Domain, Manual Intake & Normalization Foundation) — canonical `Company`, `Job`, `JobOrigin`, `IdempotencyKey` entities (migration `0005`), deterministic normalization, `SafeHttpClient` SSRF security boundary, authenticated manual paste intake, and authenticated safe URL intake — is independently reviewed, merged via squash into `main` as PR #25 (`main` commit `38da12050d9613f502bce956edc7167c8427f3df`), post-merge CI run `37716255293` 8/8 green. **WP2.1-A is VERIFIED.**
+Current Authorized Work Package:
+- **WP2.3 — Job Feed & Alerts is IMPLEMENTED / PENDING INDEPENDENT VERIFICATION** (backend feed, relevance ordering, bounded matching reuse, cursor pagination, search/filters, saved jobs, company watchlist, alerts preference/evaluation with WhatsApp OutboundMessageQueue integration, and mobile jobs domain surface). Note that the WP2.3 backend directly strengthens the WhatsApp product through proactive job alerts. Downstream full work packages (WP3.x, WP4.x, WP5.x) remain unstarted and are NOT automatically authorized.
 
-WP2.1-B (External Hosted ATS Connectors & Ingestion Scheduler) — Greenhouse, Lever, and Ashby adapters conforming strictly to `ports.JobSource` protocol, shared bounded SSRF-safe ATS HTTP transport, fail-closed `HostedAtsSourceEntry` configuration, canonical ingestion pipeline (`ingest_job_source`), source-scoped company identity without name merging, mutable posting updates, complete-discovery liveness guard, 3-strike absence closure with recovery, Celery worker tasks with stable task-ID-derived `cycle_id` ensuring redelivery idempotency, dedicated-connection PostgreSQL advisory locking with 64-bit key and verified release, and centralized Celery Beat scheduling — is independently reviewed across two rounds and two concurrency/idempotency hardening findings, merged via squash into `main` as PR #36 (squash commit `fccc14bcdf581245bdefd7b67395ca96eafcf2f7`, approved PR HEAD `8586c759f8ee28cfcead9310f4740f479cf4dfde`). CI green pre-merge (run `37800774060`, 8/8) and post-merge on `main` (run `37822195467`, 8/8). Tree equivalence confirmed (`e86f20fb132438725128a582638dfc8cf338e8d6`). Known blocking findings = none. Regressions on WP2.1-A = none. **WP2.1-B is VERIFIED.**
-
-WP2.2 (Matching Engine) — deterministic `MatchingEngine` under `tapjob_api.matching` consuming `TruthSnapshot` (confirmed facts only) and canonical `Job`, 0..100 integer score scale, hard-filter knock-out gate (`WORK_AUTHORIZATION`, `WORKPLACE_TYPE`, `LOCATION`, `SALARY_MINIMUM`, `ROLE_ALIGNMENT`) with strict `HARD_BLOCKER`/`SOFT_MISMATCH`/`UNKNOWN` classification, deterministic 5-component lexical scoring (25% title, 35% skills, 20% experience, 10% seniority, 10% location/workplace) via pure basis points integer arithmetic, bilingual normalization, neutral imputation, grounded deterministic template explainability linking strengths directly to `ProfileFact.id` values (no LLM dependency in the WP2.2 runtime baseline), reproducibility invariant (`matching_policy_version 2026.1`), PostgreSQL canonical `match_results` persistence (migration `0006`) with unique constraint, volatile Redis cache (24h TTL) with visibility pre-check, authenticated `POST /api/v1/jobs/{job_id}/match` endpoint, 15 golden deterministic evals, and 6 invariant suites — is independently reviewed across multiple rounds (CRITICAL=0, HIGH=0, MEDIUM_BLOCKING=0: APPROVED), merged via squash into `main` as PR #40 (squash commit `2aedd2b6d281214296009d3ff058d6fdb5677720`, approved implementation HEAD `55744b6872b49854cad45c2ef69cd3c132f3c073`), post-merge CI run `37997452936` on `main` is green 8/8. **WP2.2 is VERIFIED.**
-
-**Next Product Goal:** **Minimum WhatsApp Alpha Vertical Slice** (cross-WP minimum slice delivering end-to-end user value over the channel-neutral Core). **Parallel-safe:** Mobile Readiness only. Full Mobile Product Experience remains deferred until after the WhatsApp Alpha vertical slice is functional. Downstream full work packages remain unstarted.

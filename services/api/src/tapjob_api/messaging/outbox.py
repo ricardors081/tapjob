@@ -31,6 +31,7 @@ class OutboundMessageStatus(StrEnum):
     FAILED = "failed"
     RETRYABLE = "retryable"
     DEAD = "dead"
+    CANCELLED = "cancelled"
 
 
 class OutboundMessageQueue(Base):

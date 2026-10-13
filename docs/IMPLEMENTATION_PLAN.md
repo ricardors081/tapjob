@@ -29,10 +29,13 @@ Nenhum canal pode possuir:
 
 O backend/Core permanece channel-neutral. Compartilham a mesma User identity, Truth Store, Jobs, Matching, Resume, Application Kit, Applications/Tracker, Career Agent e política de notificações. Canais variam APRESENTAÇÃO e CAPACIDADES DE INTERFACE, nunca a verdade canônica.
 
-### WhatsApp-First Priority & Mobile Readiness
-- **WhatsApp-first product:** A prioridade absoluta após a fundação do Career Core é colocar o WhatsApp Alpha funcionando de ponta a ponta antes da construção pesada da experiência visual mobile. O WhatsApp Alpha consome o mesmo backend/Core channel-neutral, não sendo um chatbot isolado.
-- **Mobile Readiness é parallel-safe:** Atividades de infraestrutura e prontidão de build mobile (Expo Development Build, Android/iOS native readiness, EAS config, env config, Firebase auth wiring, generated OpenAPI client, session/secure-storage, navigation shell, tokens, network/error foundations, deep-links, push plumbing, Sentry, build CI) podem avançar em paralelo quando não bloquearem nem atrasarem o WhatsApp Alpha. Isso NÃO significa que a experiência de produto mobile foi iniciada.
-- **Mobile Product Experience continua depois do WhatsApp Alpha:** Construção visual completa de Job Feed, Job Detail, Match visual, Resume Studio, Kanban/Tracker, analytics, document manager, large Application Kit review e telas de produto pertence ao estágio posterior ao WhatsApp Alpha funcional.
+### WhatsApp-First Priority, Live Commercial Readiness & Mobile Scoping
+- **WhatsApp Alpha Code:** `WHATSAPP_ALPHA_CODE = VERIFIED` (PR #42 delivered vertical slice, channel identity, and ingress/outbox).
+- **Current Product Priority:** `CURRENT_PRODUCT_PRIORITY = WHATSAPP_LIVE_AND_COMMERCIAL_READINESS`. The business goal is to validate live WhatsApp operations and commercial traction before expanding further app features.
+- **Next Execution After PR #43:** `NEXT_EXECUTION_AFTER_PR43 = WHATSAPP_LIVE_GATE`.
+- **Mobile Scope:** `MOBILE_PRODUCT_STARTED = YES`, `MOBILE_PRODUCT_SCOPE = JOBS_DOMAIN_ONLY`. The Jobs surface built in WP2.3 remains intact.
+- **Further Mobile Expansion Paused:** `FURTHER_MOBILE_PRODUCT_EXPANSION = PAUSED_UNTIL_WHATSAPP_LIVE/PILOT_COMMERCIAL_GATE`. Downstream work packages (WP3.x, WP4.x, WP5.x) are NOT automatically authorized.
+- **WP2.3 Backend Value for WhatsApp:** The backend work of WP2.3 (Job Feed, Alerts, canonical batch matching) directly reinforces the WhatsApp product through proactive job alerts via `OutboundMessageQueue` and fair sweep scheduling.
 
 ## Rules
 
@@ -337,81 +340,46 @@ Decision gate defined and accepted in ADR-0014 (`docs/adr/0014-matching-engine.m
 
 ---
 
-## Next Product Goal — Minimum WhatsApp Alpha Vertical Slice
+## Minimum WhatsApp Alpha Vertical Slice (VERIFIED)
 
-O próximo grande marco de entrega de produto é um **Minimum WhatsApp Alpha Vertical Slice**, viabilizando o primeiro produto utilizável de ponta a ponta sem exigir a conclusão prévia e exaustiva de todos os WPs avançados.
+O marco de entrega **Minimum WhatsApp Alpha Vertical Slice** foi concluído, verificado independentemente e mergeado via PR #42 (approved HEAD `b47426eb648a1e2fb2f1e076102e803c61391558`, squash commit `ad055e3516ada08cc7e5fc60eab3a439b28ef346`, post-merge CI `38165824859` 8/8 green).
 
-### Target User Journey
-```text
-User says "oi"
-  -> channel identity
-  -> TapJob User linkage
-  -> resume/basic profile
-  -> PDF/DOCX intake
-  -> fact extraction
-  -> confirmation
-  -> target role/preferences
-  -> job import/recommendation
-  -> Matching Engine
-  -> match explanation
-  -> minimal grounded resume tailoring
-  -> basic Application Kit
-  -> document/link handoff
-  -> basic application tracking
-  -> reminders/follow-up
-  -> Career Agent tools
-  -> WhatsApp interaction surface
-```
-
-### Natureza do Checkpoint: Cross-WP Minimum Slice
-- Este checkpoint antecipa estritamente as capacidades mínimas necessárias de WP2.3, WP3.x e WP4.x para viabilizar a jornada conversacional completa no WhatsApp sobre o Core canônico.
-- **IMPORTANTE:** Não remove nem reduz os escopos completos existentes de:
-  - WP2.3 (Job Feed & Alerts completo);
-  - WP3.1 (Resume Studio completo);
-  - WP3.2 (ATS & Tailoring completo);
-  - WP3.3 (Application Kit completo);
-  - WP4.1 (Application Tracker completo);
-  - WP4.2 (Career Agent Core completo);
-  - WP4.3 (WhatsApp-first Product Surface completo).
-- As versões completas desses work packages continuam existindo e serão executadas conforme o roadmap.
-
-### Macro-Delivery Sequencing Direction
-Após a aprovação deste alinhamento, a execução deve ser estruturada em macro-entregas coerentes:
-- **CHECKPOINT A — WhatsApp Alpha Core:**
-  Capacidades mínimas compartilhadas no backend/Core:
-  - channel identity model e linkage com TapJob User canônico;
-  - backend mínimo de feed/alert necessário ao vertical slice;
-  - grounded resume tailoring mínimo;
-  - basic Application Kit;
-  - minimal Application Tracker;
-  - Career Agent Core e tool definitions necessários ao alpha.
-- **CHECKPOINT B — WhatsApp Alpha Surface + Mobile Readiness:**
-  - `MessagingChannel` adapter implementation;
-  - Evolution API initial adapter isolado atrás de `MessagingChannel`;
-  - contratos normalizados inbound/outbound;
-  - webhook de entrada e autenticação de eventos;
-  - conversational orchestration;
-  - confirmações interativas;
-  - document handoff (envio de kit/currículo);
-  - reminders e follow-up no WhatsApp;
-  - deep links;
-  - Mobile Readiness infrastructure (paralela e segura).
-
-### Regras de Neutralidade de Provedores e Ferramentas Auxiliares
-- **Evolution API Neutrality:** A Evolution API é o transporte inicial de desenvolvimento/alpha. Deve residir estritamente atrás do port `MessagingChannel`. Nenhuma regra de negócio ou Career Core pode depender de Baileys, quirks de QR/sessão, formatos de webhook da Evolution, IDs de provedor ou semântica de retentativa do provedor. O caminho arquitetural para migração para a WhatsApp Cloud API oficial é preservado.
-- **Papel do n8n:** O n8n é uma ferramenta auxiliar de integração e automação operacional. O n8n **NÃO** é dono canônico de: estado de usuário, matching, Professional Truth Store, estado de candidaturas, política do Career Agent ou regras críticas de negócio. Toda lógica essencial reside no Core versionado e testado do TapJob.
+### Delivered Capabilities
+- Channel identity models and user linkage (`channel_providers`, `channel_identities`, `channel_identity_links`);
+- Inbound event lease fencing, attempts tracking, idempotency, and domain effects (`provider_event_envelopes`, `inbound_effects`);
+- Outbound message queue and outbox service (`outbound_message_queue`);
+- Conversational orchestration for resume intake, matching, application kit, reminders, and review drafts;
+- Evolution API adapter conforming to `MessagingChannel` port with echo dropping;
+- Celery worker tasks with durable claim fencing, soft time limits, and recovery sweeper.
 
 ---
 
-## WP2.3 — Job Feed & Alerts
+## WP2.3 — Job Feed & Alerts (IN PROGRESS)
 
 ### Surface sequencing
-The underlying feed/search/filter APIs can be built before the app. The full visual mobile feed/detail/filter experience is delivered after the WhatsApp-first vertical slice.
+Este WP inicia formalmente a primeira superfície de **Mobile Product Experience** (`MOBILE_PRODUCT_STARTED = YES`), restrita estritamente ao domínio de Jobs/Vagas (`apps/mobile`).
 
-### Backend
-- relevance ordering;
-- freshness;
-- notification eligibility.
+### Backend Deliverables
+- **Ownership-Safe Job Feed:** Endpoint `GET /api/v1/jobs` listando jobs globais (`created_by_user_id IS NULL`) e jobs privados criados pelo usuário (`created_by_user_id == current_user.id`), excluindo jobs privados de outros usuários (BOLA/IDOR safe) e jobs dispensados (`dismissed`).
+- **Relevance Ordering:** Ordenação determinística total:
+  1. Eligibility rank (`eligible` = 0, `review_required` = 1, `ineligible` = 2);
+  2. Overall score (0..100) DESC;
+  3. Freshness (`created_at`) DESC;
+  4. Tie-breaker determinístico (`job.id` ASC).
+- **Bounded Matching Reuse:** Reúso estrito do Matching Engine de WP2.2 (`MatchingEngine`, `TruthSnapshot`, `job_match_fingerprint`, `MatchResult`). Zero lógica de score duplicada. Pool bounded (`FEED_MAX_CANDIDATES = 100`) com pré-filtragem no DB e batch loading para prevenção de N+1 queries. Sem embeddings/vector DB ou LLM re-score no feed baseline.
+- **Cursor Pagination:** Reúso do codec `tapjob_api.http.pagination`. Cursor estável codificando `sort`, `filters_fingerprint` (vinculando filtros, `profile_version` e `policy_version`) e `last_key`. Rejeição fail-closed para cursors adulterados ou de versões divergentes.
+- **Search & Filters:** Busca textual/título, empresa, localização, tipo de ambiente (`workplace_type`), tipo de contratação (`employment_type`), `eligibility`, `min_score`, estado de salvamento (`saved_only`).
+- **SavedJob & Dismiss:** Modelo `SavedJob` com `UNIQUE(user_id, job_id)`. Estados `saved` e `dismissed`. Endpoints idempotentes de salvar, remover, dispensar e desfazer dispensa. Listagem paginada de vagas salvas.
+- **Company Watchlist:** Modelo `CompanyWatch` com `UNIQUE(user_id, company_id)`. Endpoints de watch, unwatch e listagem.
+- **Job Alerts:** Preferências de alerta `JobAlertPreference` channel-neutral com default `enabled = False` (opt-in explícito obrigatório). Registro de intenção de notificação idempotente com dedupe durável (`user_id + job_id + policy_version`). Worker Celery periódico para avaliação de novas vagas e integração de outbox para entrega via WhatsApp (`FakeMessagingChannel` em testes, `WHATSAPP_REAL_SENDS = 0`).
+
+### Mobile Deliverables (`apps/mobile`)
+- **Job Feed:** Lista paginada com scroll infinito/cursor, loading, empty states, error retry, score badges, status de elegibilidade, cards com empresa/título/local/workplace/freshness e ação rápida de salvar.
+- **Search & Filters:** UI de filtros conectada estritamente aos parâmetros suportados pelo backend (pesquisa, workplace, elegibilidade, score mínimo).
+- **Job Detail:** Visualização completa da vaga com explicação determinística de match do WP2.2 (score, eligibility, hard blockers, strengths, missing requirements), botões de salvar, dispensar, seguir empresa e link de candidatura. Zero cálculo de matching no client.
+- **Saved Jobs & Watchlist:** Visualização de vagas salvas e empresas seguidas.
+- **Alert Settings:** Configuração de opt-in/opt-out e critérios de alerta.
+- **Deep Linking:** Suporte a `tapjob://jobs/{job_id}` consumindo `productConfig.deepLinkScheme`.
 
 ---
 

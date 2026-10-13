@@ -5,7 +5,10 @@
     "environmentLabel": "Ambiente",
     "localeLabel": "Idioma detectado",
     "apiLabel": "API",
-    "aboutLink": "Sobre este shell"
+    "aboutLink": "Sobre este shell",
+    "jobsCardSubtitle": "Veja oportunidades compatíveis com seu perfil",
+    "savedCardSubtitle": "Acesse as vagas que você favoritou",
+    "alertsCardSubtitle": "Configure alertas e notificações"
   },
   "about": {
     "title": "Sobre",
@@ -27,5 +30,68 @@
     "bootstrapError": "Não foi possível preparar sua conta.",
     "retry": "Tentar novamente",
     "signOut": "Sair"
+  },
+  "jobs": {
+    "feedTitle": "Vagas para você",
+    "searchPlaceholder": "Buscar por título...",
+    "filterButton": "Filtros",
+    "filterModalTitle": "Filtrar vagas",
+    "filterCompanyPlaceholder": "Nome da empresa...",
+    "filterLocationPlaceholder": "Cidade ou região...",
+    "filterMinScoreLabel": "Score mínimo (0-100)",
+    "filterSavedOnlyLabel": "Apenas vagas salvas",
+    "filterClear": "Limpar filtros",
+    "filterApply": "Aplicar filtros",
+    "emptyFeed": "Nenhuma vaga encontrada para os critérios selecionados.",
+    "emptySaved": "Você ainda não salvou nenhuma vaga.",
+    "loading": "Carregando vagas...",
+    "loadMore": "Carregar mais",
+    "errorLoading": "Não foi possível carregar as vagas.",
+    "retry": "Tentar novamente",
+    "save": "Salvar",
+    "saved": "Salva",
+    "dismiss": "Ocultar",
+    "watchCompany": "Seguir empresa",
+    "unwatchCompany": "Seguindo",
+    "savedTitle": "Vagas Salvas",
+    "removeSaved": "Remover",
+    "companyDefault": "Empresa",
+    "channelWhatsApp": "WhatsApp",
+    "channelInApp": "No app",
+    "alertsTitle": "Alertas de Vagas",
+    "alertsSubtitle": "Receba notificações proativas quando surgirem vagas compatíveis com seu perfil.",
+    "alertsToggle": "Ativar alertas de vagas",
+    "alertsMinScore": "Score mínimo para alerta",
+    "alertsMinScoreLabel": "Score mínimo para alerta: {{score}}%",
+    "alertsChannel": "Canal de envio",
+    "alertsSave": "Salvar preferências",
+    "alertsSavedSuccess": "Preferências de alerta atualizadas!",
+    "filterActiveSuffix": " (ativo)",
+    "checked": "[x]",
+    "unchecked": "[ ]",
+    "scorePlus": "{{score}}+",
+    "percentValue": "{{value}}%",
+    "locationPrefix": "Local:",
+    "workplace": {
+      "on_site": "Presencial",
+      "hybrid": "Híbrido",
+      "remote": "Remoto"
+    },
+    "eligibility": {
+      "eligible": "Compatível",
+      "review_required": "Requer atenção",
+      "ineligible": "Incompatível"
+    },
+    "detail": {
+      "compatibility": "Compatibilidade",
+      "whyFit": "Por que esta vaga?",
+      "strengths": "Seus pontos fortes",
+      "missingRequirements": "Requisitos a desenvolver",
+      "hardBlockers": "Atenção: critério excludente",
+      "description": "Descrição da vaga",
+      "source": "Fonte da vaga",
+      "applyExternal": "Abrir link original",
+      "back": "Voltar"
+    }
   }
 }
