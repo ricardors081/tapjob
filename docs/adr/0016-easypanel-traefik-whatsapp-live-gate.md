@@ -191,3 +191,73 @@ As verified in this checkpoint:
   - `OTHER_EASYPANEL_SERVICES_MUTATED = NO`
   - `N8N_MUTATED = NO`
   - `CUSTOM_DNS_MUTATED = NO`
+
+---
+
+## 6. Phase A: Live Webhook Activation Gate Evidence
+
+On branch `ops/whatsapp-live-activation-gate`, Phase A of the WhatsApp Live Activation Gate was executed in staging:
+
+### 1. Ingress Receiver Enablement
+- **Configuration Change:** `WHATSAPP_WEBHOOK_ENABLED = true` on `tapjob-api` service in project `julia`. All other environment variables (including existing cryptographic `WHATSAPP_WEBHOOK_SECRET`) preserved untouched.
+- **Redeployment:** Only `tapjob-api` redeployed. `tapjob-postgres`, `tapjob-redis`, `tapjob-worker`, `tapjob-beat` were not restarted.
+- **Health Verification:** Public probe `GET https://tapjob-api-julia.gdxvyl.easypanel.host/ready` returned HTTP 200 (`status=ok`, `postgresql=ok`, `redis=ok`). Zero restart loops or configuration failures.
+
+### 2. Fail-Closed Authentication Negative Tests
+- **Test A (No Secret Header):**
+  - Request: `POST https://tapjob-api-julia.gdxvyl.easypanel.host/webhooks/whatsapp` with `Content-Type: application/json`, payload `{}`, no secret header.
+  - Result: HTTP 401 `AUTHENTICATION_REQUIRED`.
+- **Test B (Synthetic Wrong Secret Header):**
+  - Request: `POST https://tapjob-api-julia.gdxvyl.easypanel.host/webhooks/whatsapp` with `Content-Type: application/json`, payload `{}`, header `X-Webhook-Secret: wrong-value`.
+  - Result: HTTP 401 `AUTHENTICATION_REQUIRED`.
+- **Side Effect Audit:**
+  - `UNAUTHENTICATED_ENVELOPE_CREATED = NO`
+  - Zero `ProviderEventEnvelope`, `ChannelIdentity`, `User`, or `OutboundMessageQueue` records created.
+
+### 3. Valid-Secret Harmless Synthetic Payload Test
+- **Test C (Configured Secret with Empty Body):**
+  - Request: `POST https://tapjob-api-julia.gdxvyl.easypanel.host/webhooks/whatsapp` with `Content-Type: application/json`, payload `{}`, valid header `X-Webhook-Secret: <configured secret>`.
+  - Result: HTTP 202 `{"status":"accepted"}`.
+  - Parsing Behavior: Because the payload contains no message envelopes or recognized event types, `EvolutionAdapter.parse_inbound` produced an empty message list, resulting in 0 database writes and 0 Celery task dispatches.
+  - `SYNTHETIC_VALID_AUTH_ENVELOPE_CREATED = NO`
+  - `WHATSAPP_REAL_SENDS = 0`
+
+### 4. Evolution API v2.3.7 Instance Webhook Configuration
+- **Contract Verification:** Verified against Evolution API v2.3.7 schema (`webhook.enabled`, `webhook.url`, `webhook.headers`, `webhook.byEvents`, `webhook.base64`, `webhook.events`).
+- **Endpoint:** `POST https://evo.koglim.com.br/webhook/set/TapJob` with instance-scoped API token. Global API key was neither used nor exposed.
+- **Configuration Applied:**
+  - `url`: `https://tapjob-api-julia.gdxvyl.easypanel.host/webhooks/whatsapp`
+  - `enabled`: `true`
+  - `byEvents`: `false`
+  - `base64`: `false`
+  - `events`: `["MESSAGES_UPSERT"]` (minimal event subscription, zero broad/unnecessary events)
+  - `headers`: `{"X-Webhook-Secret": "<secret>"}` (header value redacted)
+- **Response:** HTTP 201 Created.
+
+### 5. Evolution Webhook Persistence Verification
+- **Verification Call:** `GET https://evo.koglim.com.br/webhook/find/TapJob` with instance-scoped API token.
+- **Factual Persisted Configuration:**
+  - `enabled`: `true`
+  - `url`: `https://tapjob-api-julia.gdxvyl.easypanel.host/webhooks/whatsapp`
+  - `webhookByEvents`: `false`
+  - `webhookBase64`: `false`
+  - `events`: `["MESSAGES_UPSERT"]`
+  - `WEBHOOK_HEADER_PRESENT = YES` (secret value redacted)
+- **Precaution Maintained:** Evolution was NOT restarted or redeployed during this gate (`EVOLUTION_RESTARTED = NO`). Upstream persistence revalidation precaution remains required after any future Evolution restarts.
+
+### 6. Background Worker & Beat Health Verification
+- **Worker (`tapjob-worker`):** Running healthy (Up 19 hours), Celery concurrency = 2, connected to Redis broker, zero restart loops.
+- **Beat (`tapjob-beat`):** Running healthy (Up 2 hours), persistent scheduler `/data/celerybeat/celerybeat-schedule`, least-privilege configuration verified.
+
+### 7. Phase A Boundaries Preserved
+- `WHATSAPP_WEBHOOK_ENABLED = true`
+- `EVOLUTION_WEBHOOK_ENABLED = YES`
+- `EVOLUTION_WEBHOOK_EVENTS = MESSAGES_UPSERT`
+- `WEBHOOK_AUTH_HEADER = X-Webhook-Secret`
+- `WEBHOOK_HEADER_VALUE_REDACTED = YES`
+- `EVOLUTION_LIVE_INBOUND_VALIDATION = NO`
+- `EVOLUTION_SENDTEXT_RUNTIME_VERIFIED = NO`
+- `WHATSAPP_REAL_SENDS = 0`
+- `PRODUCTION_MUTATED = NO`
+- `N8N_MUTATED = NO`
+- `OTHER_EASYPANEL_SERVICES_MUTATED = NO`
