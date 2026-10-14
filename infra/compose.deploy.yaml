@@ -33,12 +33,20 @@ x-backend: &backend
   image: ghcr.io/ricardo081683/tapjob-backend@${BACKEND_IMAGE_DIGEST:?set BACKEND_IMAGE_DIGEST to sha256:<64 lowercase hex characters> -- never a tag, never a full reference -- see tools/deploy/validate_image_ref.mjs's validateImageDigest}
   restart: unless-stopped
 
-x-backend-env: &backend-env
+x-common-env: &common-env
   APP_ENV: ${APP_ENV:?set APP_ENV (staging|production)}
   LOG_LEVEL: ${LOG_LEVEL:?set LOG_LEVEL}
-  DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL -- staging and production never share a database}
-  REDIS_URL: ${REDIS_URL:?set REDIS_URL}
   SENTRY_DSN: ${SENTRY_DSN:-}
+
+x-redis-env: &redis-env
+  REDIS_URL: ${REDIS_URL:?set REDIS_URL}
+
+x-database-env: &database-env
+  # Synchronous SQLAlchemy runtime requires the postgresql+psycopg:// scheme (psycopg 3);
+  # postgresql+asyncpg:// must never be used. Staging and production never share a database.
+  DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL -- requires postgresql+psycopg:// scheme}
+
+x-r2-env: &r2-env
   # WP1.3 resume-import object storage (docs/adr/0011-resume-import.md "object storage", round-1
   # independent review "Finding 1"): required here, not optional -- staging/production must never
   # start without real R2 configured, and `tapjob_api.resume_import.storage.create_storage_adapter`
@@ -49,15 +57,19 @@ x-backend-env: &backend-env
   R2_BUCKET: ${R2_BUCKET:?set R2_BUCKET}
   R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:?set R2_ACCESS_KEY_ID}
   R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:?set R2_SECRET_ACCESS_KEY}
-  HOSTED_ATS_SOURCES: ${HOSTED_ATS_SOURCES:-}
+
+x-evolution-env: &evolution-env
+  EVOLUTION_API_URL: ${EVOLUTION_API_URL:?set EVOLUTION_API_URL}
+  EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:?set EVOLUTION_API_KEY}
+  EVOLUTION_INSTANCE_NAME: ${EVOLUTION_INSTANCE_NAME:?set EVOLUTION_INSTANCE_NAME}
 
 services:
   # PostgreSQL/Redis are listed here only for the topology this checkpoint documents (docs/
   # ARCHITECTURE.md §11): same-host Compose services, never bound to a host port, reachable only
-  # from other services on this Compose network -- never from the public Cloudflare-fronted
-  # ingress. A future environment that instead points DATABASE_URL/REDIS_URL at an externally
-  # managed instance simply omits these two services from its env/override; nothing else in this
-  # file assumes they are local.
+  # from other services on this Compose network -- never directly from public ingress (Cloudflare
+  # Tunnel or EasyPanel Traefik reverse proxy, ADR-0006, ADR-0016). A future environment that instead
+  # points DATABASE_URL/REDIS_URL at an externally managed instance simply omits these two services
+  # from its env/override; nothing else in this file assumes they are local.
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -91,7 +103,7 @@ services:
     restart: "no"
     command: ["alembic", "upgrade", "head"]
     environment:
-      <<: *backend-env
+      <<: [*common-env, *database-env, *redis-env]
     depends_on:
       postgres:
         condition: service_healthy
@@ -99,12 +111,10 @@ services:
   api:
     <<: *backend
     environment:
-      <<: *backend-env
-      EVOLUTION_API_URL: ${EVOLUTION_API_URL:?set EVOLUTION_API_URL}
-      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:?set EVOLUTION_API_KEY}
-      EVOLUTION_INSTANCE_NAME: ${EVOLUTION_INSTANCE_NAME:?set EVOLUTION_INSTANCE_NAME}
+      <<: [*common-env, *database-env, *redis-env, *r2-env, *evolution-env]
       WHATSAPP_WEBHOOK_ENABLED: ${WHATSAPP_WEBHOOK_ENABLED:-false}
       WHATSAPP_WEBHOOK_SECRET: ${WHATSAPP_WEBHOOK_SECRET:-}
+      HOSTED_ATS_SOURCES: ${HOSTED_ATS_SOURCES:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -119,18 +129,16 @@ services:
       interval: 10s
       timeout: 5s
       retries: 6
-    # No `ports:` publishing a host port: public ingress is Cloudflare Tunnel only
-    # (docs/ARCHITECTURE.md §11, docs/adr/0006-...md "Cloudflare boundary") -- out of scope for
-    # this checkpoint to configure, and never a directly-exposed container port either way.
+    # No `ports:` publishing a host port: public ingress is managed via reverse proxy
+    # (Cloudflare Tunnel or EasyPanel Traefik, per ADR-0006 and ADR-0016) -- out of scope for
+    # this compose file to expose directly, and never a raw host-bound container port.
 
   worker:
     <<: *backend
-    command: ["celery", "-A", "tapjob_worker.main:app", "worker", "--loglevel", "${LOG_LEVEL:?}"]
+    command: ["celery", "-A", "tapjob_worker.main:app", "worker", "--concurrency", "2", "--loglevel", "${LOG_LEVEL:?}"]
     environment:
-      <<: *backend-env
-      EVOLUTION_API_URL: ${EVOLUTION_API_URL:?set EVOLUTION_API_URL}
-      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:?set EVOLUTION_API_KEY}
-      EVOLUTION_INSTANCE_NAME: ${EVOLUTION_INSTANCE_NAME:?set EVOLUTION_INSTANCE_NAME}
+      <<: [*common-env, *database-env, *redis-env, *r2-env, *evolution-env]
+      HOSTED_ATS_SOURCES: ${HOSTED_ATS_SOURCES:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -145,9 +153,11 @@ services:
 
   beat:
     <<: *backend
-    command: ["celery", "-A", "tapjob_worker.beat:app", "beat", "--loglevel", "${LOG_LEVEL:?}"]
+    command: ["celery", "-A", "tapjob_worker.beat:app", "beat", "--loglevel", "${LOG_LEVEL:?}", "--schedule", "/data/celerybeat/celerybeat-schedule"]
     environment:
-      <<: *backend-env
+      <<: [*common-env, *redis-env]
+    volumes:
+      - beat-schedule-data:/data/celerybeat
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -156,3 +166,4 @@ services:
 
 volumes:
   postgres-data:
+  beat-schedule-data:

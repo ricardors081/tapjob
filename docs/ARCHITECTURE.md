@@ -232,16 +232,22 @@ Do not add a separate vector database without measured need.
 
 ## 11. Initial deployment topology
 
-Initial production/staging compute runs on the owner's Linux server with Docker Compose.
+Initial production/staging compute runs on the owner's Linux server with Docker Compose and EasyPanel.
 
-Target containers:
-- api;
-- worker;
-- postgres;
-- redis;
-- cloudflared.
-
-Cloudflare Tunnel is the preferred public ingress path so API services do not require public inbound ports.
+For the **WhatsApp Live Gate staging environment** (ADR-0016, D-058):
+- **Runtime control plane:** EasyPanel (v2.36.0+) managing services within project `julia`;
+- **Target workloads:**
+  - `tapjob-api` (FastAPI backend, Traefik HTTPS domain `https://tapjob-api-julia.gdxvyl.easypanel.host`, `/ready` HTTP 200);
+  - `tapjob-worker` (Celery background worker, concurrency=2, Redis connected);
+  - `tapjob-beat` (Celery beat periodic scheduler, persistent volume mounted at `/data/celerybeat`, `--schedule=/data/celerybeat/celerybeat-schedule`);
+  - `tapjob-postgres` (dedicated PostgreSQL 16, persistent volume, daily local backup `0 0 * * *`, non-public);
+  - `tapjob-redis` (dedicated Redis 7, persistent volume, password protected, non-public);
+  - `tapjob-migrate` (one-shot Alembic migration task, completed up to revision 0013, stopped with zero ongoing footprint).
+- **Database driver contract:** synchronous SQLAlchemy backend requiring `postgresql+psycopg://` scheme (psycopg 3).
+- **Object storage:** Cloudflare R2 bucket `tapjob-staging-resume-imports` (private, Standard storage, bucket-scoped Object Read & Write credential).
+- **Public ingress:** EasyPanel Traefik HTTPS ingress (automated Let's Encrypt TLS) routing to `tapjob-api`. Cloudflare Tunnel is no longer mandatory for this environment, while remaining supported for custom DNS and production environments.
+- **Messaging Integration:** Evolution API runs in project `koglim` (`https://evo.koglim.com.br`) with networks unbridged. Outbound calls use HTTPS; inbound webhooks route via Traefik HTTPS to TapJob API (Evolution webhook unconfigured/disabled, fail-closed HTTP 404 in TapJob).
+- **n8n:** strictly outside the synchronous messaging path.
 
 No Kubernetes in the initial architecture. AWS remains a migration/scale option rather than an initial dependency.
 

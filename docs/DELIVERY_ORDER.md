@@ -316,13 +316,20 @@ Estado atual dos work packages:
 - WP2.2 = **VERIFIED**
 - Minimum WhatsApp Alpha Vertical Slice = **VERIFIED** (PR #42, squash commit `ad055e3516ada08cc7e5fc60eab3a439b28ef346`, post-merge CI `38165824859` 8/8 green, tree equivalence YES, independent closeout CLOSED_AND_VERIFIED)
 
-**Estágio de Produto Atual:**
-**MOBILE APP / MOBILE PRODUCT EXPERIENCE** iniciado formalmente, restrito ao domínio de Jobs/Vagas.
+- WP2.3 — Job Feed & Alerts = **VERIFIED** (PR #43, squash commit `812b6200e125b14acabbd992b5e759f1ff0d879a`, post-merge CI `38400363321` 8/8 green)
 
-**Work Package Autorizado Atual:**
-**WP2.3 — Job Feed & Alerts (IN PROGRESS)**:
-- Backend: feed ownership-safe, relevance ordering determinística, bounded matching reusando WP2.2, paginação estável por cursor vinculada a filtros/versões, search/filtros, SavedJob, CompanyWatch, JobAlertPreference, worker de avaliação com dedupe durável e integração WhatsApp outbox.
-- Mobile: experiência de Jobs em `apps/mobile` (feed paginado, filtros, detalhe de vaga com explainability WP2.2, save/dismiss, watch de empresa, toggle de alertas, deep links).
+**Prioridade de Produto Atual:**
+**WHATSAPP_LIVE_AND_COMMERCIAL_READINESS** (Live validation and commercial readiness on WhatsApp).
+
+**Execução Operacional Ativa:**
+**WHATSAPP_LIVE_GATE (EasyPanel Staging & Traefik Ingress Authorization, ADR-0016, D-058)**:
+- Staging control plane: EasyPanel no servidor Linux do owner (projeto `julia`);
+- Ingress público: EasyPanel Traefik HTTPS (`https://tapjob-api-julia.gdxvyl.easypanel.host`, `/ready` HTTP 200);
+- Serviços dedicados isolados em execução: `tapjob-postgres` (PostgreSQL 16, backup diário local `0 0 * * *`), `tapjob-redis` (Redis 7), `tapjob-api`, `tapjob-worker` (concurrency=2), `tapjob-beat` (volume persistente `/data/celerybeat`), `tapjob-migrate` (migração concluída na revisão 0013, stopped);
+- Contrato de driver de banco: `postgresql+psycopg://` (psycopg 3 síncrono);
+- Armazenamento R2: bucket `tapjob-staging-resume-imports` verificado com smoke test PASS;
+- Imagem imutável GHCR digest (`sha256:73bca62692826567514f7fe689804534e4ef4eff0790a45f1b87c49fd3887eb2`);
+- Webhook Evolution desabilitado nesta etapa (`EVOLUTION_WEBHOOK_ENABLED = NO`, `WHATSAPP_REAL_SENDS = 0`, endpoint TapJob fail-closed HTTP 404);
 - Escopo downstream (WP3.x, WP4.x, WP5.x) permanece não iniciado.
 
 **Browser Extension:**

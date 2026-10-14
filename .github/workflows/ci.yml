@@ -297,12 +297,34 @@ jobs:
               print(f'worker missing {k}', file=sys.stderr)
               sys.exit(1)
           beat_env = d['services']['beat']['environment']
-          if 'EVOLUTION_API_KEY' in beat_env or 'WHATSAPP_WEBHOOK_SECRET' in beat_env:
-            print('beat leaked credentials', file=sys.stderr)
+          forbidden_beat_keys = (
+              'DATABASE_URL',
+              'R2_ENDPOINT_URL',
+              'R2_BUCKET',
+              'R2_ACCESS_KEY_ID',
+              'R2_SECRET_ACCESS_KEY',
+              'EVOLUTION_API_KEY',
+              'WHATSAPP_WEBHOOK_SECRET',
+              'HOSTED_ATS_SOURCES',
+          )
+          for k in forbidden_beat_keys:
+            if k in beat_env:
+              print(f'beat violates least privilege: contains forbidden {k}', file=sys.stderr)
+              sys.exit(1)
+          worker_cmd = d['services']['worker'].get('command', [])
+          if '--concurrency' not in worker_cmd or '2' not in worker_cmd:
+            print('worker must declare --concurrency 2', file=sys.stderr)
             sys.exit(1)
           beat_cmd = d['services']['beat'].get('command', [])
           if 'tapjob_worker.beat:app' not in beat_cmd:
             print('beat must use dedicated tapjob_worker.beat:app entrypoint', file=sys.stderr)
+            sys.exit(1)
+          if '--schedule' not in beat_cmd or '/data/celerybeat/celerybeat-schedule' not in beat_cmd:
+            print('beat must specify persistent schedule path', file=sys.stderr)
+            sys.exit(1)
+          beat_vols = [v.get('target') for v in d['services']['beat'].get('volumes', [])]
+          if '/data/celerybeat' not in beat_vols:
+            print('beat must mount persistent /data/celerybeat volume', file=sys.stderr)
             sys.exit(1)
           "
         env:

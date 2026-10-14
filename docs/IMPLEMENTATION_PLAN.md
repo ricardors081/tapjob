@@ -32,7 +32,7 @@ O backend/Core permanece channel-neutral. Compartilham a mesma User identity, Tr
 ### WhatsApp-First Priority, Live Commercial Readiness & Mobile Scoping
 - **WhatsApp Alpha Code:** `WHATSAPP_ALPHA_CODE = VERIFIED` (PR #42 delivered vertical slice, channel identity, and ingress/outbox).
 - **Current Product Priority:** `CURRENT_PRODUCT_PRIORITY = WHATSAPP_LIVE_AND_COMMERCIAL_READINESS`. The business goal is to validate live WhatsApp operations and commercial traction before expanding further app features.
-- **Next Execution After PR #43:** `NEXT_EXECUTION_AFTER_PR43 = WHATSAPP_LIVE_GATE`.
+- **Active Execution:** `ACTIVE_EXECUTION = WHATSAPP_LIVE_GATE` (EasyPanel Staging Deployment & Traefik Ingress Authorization, ADR-0016, D-058) on branch `ops/whatsapp-live-gate-easypanel` (staging runtime audited, verified, and reconciled; pre-live freeze preserved).
 - **Mobile Scope:** `MOBILE_PRODUCT_STARTED = YES`, `MOBILE_PRODUCT_SCOPE = JOBS_DOMAIN_ONLY`. The Jobs surface built in WP2.3 remains intact.
 - **Further Mobile Expansion Paused:** `FURTHER_MOBILE_PRODUCT_EXPANSION = PAUSED_UNTIL_WHATSAPP_LIVE/PILOT_COMMERCIAL_GATE`. Downstream work packages (WP3.x, WP4.x, WP5.x) are NOT automatically authorized.
 - **WP2.3 Backend Value for WhatsApp:** The backend work of WP2.3 (Job Feed, Alerts, canonical batch matching) directly reinforces the WhatsApp product through proactive job alerts via `OutboundMessageQueue` and fair sweep scheduling.
