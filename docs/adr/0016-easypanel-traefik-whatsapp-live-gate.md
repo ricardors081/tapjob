@@ -261,3 +261,146 @@ On branch `ops/whatsapp-live-activation-gate`, Phase A of the WhatsApp Live Acti
 - `PRODUCTION_MUTATED = NO`
 - `N8N_MUTATED = NO`
 - `OTHER_EASYPANEL_SERVICES_MUTATED = NO`
+
+---
+
+## 7. Phase B: First Real End-to-End Canary Evidence
+
+On branch `ops/whatsapp-live-canary-phase-b`, Phase B of the WhatsApp Live Activation Gate was executed in staging between dedicated test identities.
+
+### 1. Test Isolation & Strict Allowlist
+- **Instance Pair:**
+  - Evolution instance: `TapJob` (`ownerJid: ********8445@s.whatsapp.net`, state `open`)
+  - Test client instance: `TapJob-Canary-Client` (`ownerJid: ********8733@s.whatsapp.net`, state `open`)
+- **Execution-Time Allowlist:** Strictly locked to the pair above (`LIVE_ALLOWLIST_PAIR_VERIFIED = YES`). Zero customer or third-party phone numbers were involved.
+- **Baseline Chat Check:** Exactly 0 messages in chat between Canary and TapJob prior to test start (`BASELINE_CANARY_CHAT_MESSAGES = 0`, `BASELINE_TAPJOB_CHAT_MESSAGES = 0`).
+
+### 2. First Real Send — Canary Client to TapJob
+- **Action:** Canary client dispatched real WhatsApp message:
+  - Endpoint: `POST https://evo.koglim.com.br/message/sendText/TapJob-Canary-Client`
+  - Body: `{"number": "********8445", "text": "oi"}`
+  - Timestamp (T0): 1792004467.4 s
+- **Response:** HTTP 201 Created, provider message ID: `3EB0F08E1C1E850D2D8D21`.
+- `CANARY_CLIENT_SENDTEXT_RUNTIME_VERIFIED = YES`
+- `CANARY_CLIENT_TO_TAPJOB_SENDS = 1`
+- `CANARY_PROVIDER_MESSAGE_ID_PRESENT = YES`
+
+### 3. Real Webhook Ingress & Verification
+- **Delivery:** Evolution API delivered real `messages.upsert` event to TapJob public Traefik endpoint:
+  - Endpoint: `POST https://tapjob-api-julia.gdxvyl.easypanel.host/webhooks/whatsapp`
+  - Authentication: Header `X-Webhook-Secret` validated successfully.
+- **Result:** HTTP 202 `{"status":"accepted"}`.
+- `REAL_WEBHOOK_RECEIVED = YES`
+- `REAL_WEBHOOK_HTTP_STATUS = 202`
+- `REAL_WEBHOOK_AUTHENTICATED = YES`
+
+### 4. Inbound Envelope & Celery Worker Processing
+- **Persistence:** Exactly one `ProviderEventEnvelope` created for the Canary message:
+  - `provider = "evolution"`
+  - `provider_message_id = "3EB0F08E1C1E850D2D8D21"`
+  - `status = "PROCESSED"`
+  - `processing_attempts = 1`
+  - `duplicate_envelopes = 0`
+- `REAL_INBOUND_ENVELOPE_CREATED = YES`
+- `REAL_INBOUND_ENVELOPE_STATUS = PROCESSED`
+- `REAL_INBOUND_PROCESSING_ATTEMPTS = 1`
+- `REAL_INBOUND_DUPLICATE_ENVELOPES = 0`
+
+### 5. Identity & User Resolution
+- **First Contact Resolution:**
+  - Resolved phone number to single new `User`, `ChannelIdentity`, and `ChannelIdentityLink`.
+  - Zero duplicate users created.
+  - Zero cross-user linking.
+- `CANARY_IDENTITY_CREATED_OR_REUSED = CREATED`
+- `CANARY_USER_CREATED_OR_REUSED = CREATED`
+- `CANARY_DUPLICATE_USERS = 0`
+- `CANARY_DUPLICATE_IDENTITIES = 0`
+
+### 6. First-Contact Orchestration & Outbox Intent
+- **Orchestration Execution:** For inbound text `"oi"`, TapJob first-contact career assistant greeting was selected by orchestration.
+- **Outbox Intent:** Exactly one logical outbound message created in `OutboundMessageQueue`:
+  - Recipient: Canary test number (`********8733`)
+  - Intent count: 1
+- `GREETING_ORCHESTRATION_EXECUTED = YES`
+- `GREETING_OUTBOX_INTENTS_CREATED = 1`
+
+### 7. Real TapJob Outbound Dispatch
+- **Dispatcher:** Celery Beat / Worker background task dispatched outbound queue entry via Evolution adapter:
+  - Endpoint: `POST https://evo.koglim.com.br/message/sendText/TapJob`
+  - Body: Greeting text (`"Olá! Bem-vindo ao TapJob. Sou seu assistente de carreira pessoal..."`)
+- **Outbox Final Status:** `SENT`, provider message ID: `3EB0CAC4CDF3F4B420A546`.
+- `TAPJOB_OUTBOX_CREATED = YES`
+- `TAPJOB_OUTBOX_FINAL_STATUS = SENT`
+- `TAPJOB_PROVIDER_MESSAGE_ID_PRESENT = YES`
+- `EVOLUTION_SENDTEXT_RUNTIME_VERIFIED = YES`
+- `TAPJOB_TO_CANARY_SENDS = 1`
+
+### 8. Canary Reply Reception Verification
+- **Query:** `POST https://evo.koglim.com.br/chat/findMessages/TapJob-Canary-Client`
+- **Result:** Reply found with:
+  - `fromMe = false` from Canary perspective
+  - Message ID: `3EB0CAC4CDF3F4B420A546`
+  - Content non-empty (160 characters): `"Olá! Bem-vindo ao TapJob. Sou seu assistente de carreira pessoal.\nPara começar, envie seu currículo em PDF ou compartilhe suas principais experiências e competências."`
+  - Timestamp (T5): 1792004477.5 s
+- `CANARY_REPLY_FOUND = YES`
+- `CANARY_REPLY_NONEMPTY = YES`
+- `CANARY_REPLY_FROM_TAPJOB = YES`
+- `CANARY_REPLY_PROVIDER_MESSAGE_ID = 3EB0CAC4CDF3F4B420A546`
+
+### 9. Outbound fromMe Echo Safety
+- **Behavior:** Evolution instance `TapJob` generated an echo `messages.upsert` event for its own outbound message with `key.fromMe = true`.
+- **Filtering:** TapJob provider boundary filter identified `fromMe = true` and rejected the event from creating an inbound user message.
+- **Consequences:**
+  - Zero recursive user or envelope creation.
+  - Zero recursive greeting orchestration.
+  - Zero recursive outbox entries.
+  - Message loop prevented completely.
+- `OUTBOUND_FROMME_EVENT_OBSERVED = YES`
+- `OUTBOUND_FROMME_FILTERED = YES`
+- `OUTBOUND_ECHO_ENVELOPE_CREATED = NO`
+- `OUTBOUND_ECHO_RECURSIVE_OUTBOX_CREATED = 0`
+
+### 10. Live Replay / Idempotency Test
+- **Replay Execution:** Captured real inbound `messages.upsert` payload (with message ID `3EB0F08E1C1E850D2D8D21`) was replayed directly against the webhook endpoint with valid `X-Webhook-Secret`.
+- **Response:** HTTP 202 `{"status":"accepted"}`.
+- **Audit After 10s Window:**
+  - Zero duplicate envelopes created.
+  - Zero duplicate users or identities created.
+  - Zero duplicate outbox entries created.
+  - Exactly zero additional WhatsApp messages dispatched to Canary (`TOTAL_CANARY_REPLIES = 1`).
+- `REAL_EVENT_REPLAY_EXECUTED = YES`
+- `REPLAY_HTTP_STATUS = 202`
+- `REPLAY_DUPLICATE_ENVELOPES = 0`
+- `REPLAY_DUPLICATE_USERS = 0`
+- `REPLAY_DUPLICATE_OUTBOX_INTENTS = 0`
+- `REPLAY_ADDITIONAL_WHATSAPP_SENDS = 0`
+
+### 11. Final Send Operations Count
+- Real message Canary -> TapJob: 1
+- Real message TapJob -> Canary: 1
+- Total real WhatsApp operations: 2
+- `TOTAL_REAL_WHATSAPP_SEND_OPERATIONS = 2`
+
+### 12. Latency Evidence
+- T0 (Canary send accepted): 1792004467.4 s
+- T5 (Canary received reply): 1792004477.5 s
+- `END_TO_END_REPLY_MS = 10078.6` (~10.1 seconds, dominated by 5-second Celery Beat dispatch interval)
+
+### 13. Post-Canary Runtime Health
+- Public `/ready` endpoint: HTTP 200 (`status = ok`, `postgresql = ok`, `redis = ok`)
+- All 5 EasyPanel services (`tapjob-api`, `tapjob-worker`, `tapjob-beat`, `tapjob-postgres`, `tapjob-redis`) running healthy with zero restart loops or runaway retries.
+- `API_HEALTH_AFTER = healthy`
+- `WORKER_HEALTH_AFTER = healthy`
+- `BEAT_HEALTH_AFTER = healthy`
+- `POSTGRES_HEALTH_AFTER = healthy`
+- `REDIS_HEALTH_AFTER = healthy`
+
+### 14. Phase B Invariants Preserved
+- `CUSTOMER_OR_THIRD_PARTY_SENDS = 0`
+- `EVOLUTION_RESTARTED = NO`
+- `N8N_MUTATED = NO`
+- `PRODUCTION_MUTATED = NO`
+- `CRITICAL_FINDINGS = 0`
+- `HIGH_FINDINGS = 0`
+- `MEDIUM_BLOCKING_FINDINGS = 0`
+
