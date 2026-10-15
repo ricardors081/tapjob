@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+"""TapJob Governance & Safety Foundation Validator.
+
+Validates that all governance documentation, modular Antigravity rules,
+safety hooks, and local defense-in-depth files are properly configured,
+syntactically valid, and adhere to project invariants.
+
+Standard library only. Exits 0 on success, 1 on any validation failure.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+# Allowed official trigger values for Antigravity rules
+VALID_TRIGGERS = {"always_on", "model_decision", "glob", "manual"}
+
+# Required files across repository
+REQUIRED_FILES = [
+    "AGENTS.md",
+    ".agents/hooks.json",
+    ".agents/rules/governance.md",
+    ".agents/rules/architecture.md",
+    ".agents/rules/git-workflow.md",
+    ".agents/rules/runtime-safety.md",
+    ".agents/rules/secrets-security.md",
+    ".agents/rules/quality-gates.md",
+    "tools/agent_guard/pre_tool_guard.py",
+    "tools/agent_guard/test_pre_tool_guard.py",
+    "tools/agent_guard/validate_governance.py",
+    "tools/agent_guard/test_validate_governance.py",
+    "tools/agent_guard/install_local_guards.ps1",
+    "tools/agent_guard/test_pre_push_hook.py",
+    ".githooks/pre-push",
+    "docs/agent-factory/PERMISSION_MATRIX.md",
+    "docs/agent-factory/AUTONOMY_MODEL.md",
+    "docs/agent-factory/OPERATING_MODEL.md",
+]
+
+# Required phrases / invariants in AGENTS.md
+AGENTS_INVARIANTS = [
+    ("Antigravity 2.0", "Antigravity 2.0 multi-agent orchestrator declaration"),
+    ("Maestri", "Explicit exclusion of Maestri"),
+    ("Career Core", "Single Career Core architecture invariant"),
+    ("Evolution API", "Evolution API provider transport invariant"),
+    ("Professional Truth Store", "Professional Truth Store invariant"),
+]
+
+
+def parse_simple_yaml_frontmatter(content: str) -> tuple[dict[str, Any] | None, str]:
+    """Extract and parse YAML frontmatter from markdown without external libraries.
+
+    Supports simple key-value pairs, multiline strings, and basic lists.
+    Returns (frontmatter_dict, error_message).
+    """
+    if not content.startswith("---"):
+        return None, "File does not begin with '---' YAML frontmatter delimiter."
+
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        return None, "File does not contain matching closing '---' frontmatter delimiter."
+
+    raw_yaml = parts[1].strip()
+    if not raw_yaml:
+        return None, "YAML frontmatter is empty."
+
+    data: dict[str, Any] = {}
+    lines = raw_yaml.splitlines()
+    current_key: str | None = None
+    multiline_val: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        # Check for key: value
+        if ":" in line and not line.startswith(" ") and not line.startswith("\t"):
+            if current_key and multiline_val:
+                data[current_key] = "\n".join(multiline_val).strip()
+                multiline_val = []
+
+            key, val = line.split(":", 1)
+            key = key.strip()
+            val = val.strip()
+
+            if val in (">", ">-", "|", "|-"):
+                current_key = key
+                multiline_val = []
+            elif val.startswith("[") and val.endswith("]"):
+                # Simple list: [a, b, c]
+                items = [item.strip().strip("'\"") for item in val[1:-1].split(",") if item.strip()]
+                data[key] = items
+                current_key = None
+            else:
+                data[key] = val.strip("'\"")
+                current_key = None
+        elif current_key:
+            multiline_val.append(stripped)
+
+    if current_key and multiline_val:
+        data[current_key] = "\n".join(multiline_val).strip()
+
+    return data, ""
+
+
+def validate_rule_frontmatter(rule_path: Path) -> list[str]:
+    """Validate YAML frontmatter and triggers in an Antigravity rule file."""
+    errors: list[str] = []
+    try:
+        content = rule_path.read_text(encoding="utf-8")
+    except Exception as exc:
+        return [f"{rule_path}: Failed to read file: {exc}"]
+
+    fm, parse_err = parse_simple_yaml_frontmatter(content)
+    if parse_err or fm is None:
+        errors.append(f"{rule_path}: Frontmatter error: {parse_err}")
+        return errors
+
+    trigger = fm.get("trigger")
+    if not trigger:
+        errors.append(f"{rule_path}: Missing 'trigger' in frontmatter.")
+    elif trigger not in VALID_TRIGGERS:
+        triggers_str = sorted(VALID_TRIGGERS)
+        errors.append(
+            f"{rule_path}: Unsupported trigger '{trigger}'. Must be one of {triggers_str}."
+        )
+
+    # Validate trigger-specific fields
+    if trigger == "model_decision":
+        desc = fm.get("description")
+        if not desc or not str(desc).strip():
+            errors.append(
+                f"{rule_path}: Trigger 'model_decision' requires a non-empty 'description'."
+            )
+
+    if trigger == "glob":
+        glob_val = fm.get("glob") or fm.get("globs")
+        if not glob_val:
+            errors.append(
+                f"{rule_path}: Trigger 'glob' requires 'glob' or 'globs' pattern specification."
+            )
+
+    return errors
+
+
+def validate_hooks_json(hooks_path: Path, repo_root: Path) -> list[str]:
+    """Validate hooks.json structure and check that referenced command scripts exist."""
+    errors: list[str] = []
+    try:
+        content = hooks_path.read_text(encoding="utf-8")
+        data = json.loads(content)
+    except Exception as exc:
+        return [f"{hooks_path}: Invalid JSON or cannot read: {exc}"]
+
+    if not isinstance(data, dict):
+        return [f"{hooks_path}: Top-level structure must be a JSON object."]
+
+    # Inspect each hook handler
+    for hook_name, hook_spec in data.items():
+        if not isinstance(hook_spec, dict):
+            errors.append(f"{hooks_path}: Hook '{hook_name}' must be an object.")
+            continue
+
+        # Look for PreToolUse, PostToolUse, etc.
+        for event in ("PreToolUse", "PostToolUse", "PreInvocation", "PostInvocation", "Stop"):
+            event_handlers = hook_spec.get(event)
+            if not event_handlers:
+                continue
+
+            if not isinstance(event_handlers, list):
+                errors.append(
+                    f"{hooks_path}: Event '{event}' in hook '{hook_name}' must be a list."
+                )
+                continue
+
+            for group in event_handlers:
+                # Grouped events (PreToolUse, PostToolUse) contain 'hooks' list
+                handlers = (
+                    group.get("hooks") if isinstance(group, dict) and "hooks" in group else [group]
+                )
+                for handler in handlers:
+                    if not isinstance(handler, dict):
+                        continue
+                    cmd = handler.get("command")
+                    if not cmd:
+                        errors.append(
+                            f"{hooks_path}: Handler in '{hook_name}' is missing 'command'."
+                        )
+                        continue
+
+                    # Check if command refers to a local script (e.g. pre_tool_guard.py)
+                    match = re.search(
+                        r"(?:python3?|sh|bash|node)?\s*([a-zA-Z0-9_\-./\\]+\.(?:py|sh|mjs|js|ps1))",
+                        cmd,
+                    )
+                    if match:
+                        script_rel = match.group(1).replace("\\", "/")
+                        script_full = (hooks_path.parent / script_rel).resolve()
+                        if not script_full.exists():
+                            script_full = (repo_root / script_rel).resolve()
+                        if not script_full.exists():
+                            err_msg = (
+                                f"Hook '{hook_name}' references non-existent script '{script_rel}'."
+                            )
+                            errors.append(f"{hooks_path}: {err_msg}")
+
+    return errors
+
+
+def validate_agents_md(agents_md_path: Path) -> list[str]:
+    """Validate that AGENTS.md contains necessary invariants and reconciled bootstrap language."""
+    errors: list[str] = []
+    try:
+        content = agents_md_path.read_text(encoding="utf-8")
+    except Exception as exc:
+        return [f"{agents_md_path}: Cannot read: {exc}"]
+
+    for phrase, desc in AGENTS_INVARIANTS:
+        if phrase not in content:
+            errors.append(f"{agents_md_path}: Missing required invariant: {desc} ('{phrase}').")
+
+    # Verify that the historical pre-CI bootstrap exception is reconciled
+    has_bootstrap = "enquanto o repositório ainda não possui workflow de CI configurado" in content
+    reconciled = any(k in content for k in ("expirada", "expirou", "obrigatório"))
+    if has_bootstrap and not reconciled:
+        err_msg = "Pre-CI bootstrap exception appears active; must be reconciled as expired."
+        errors.append(f"{agents_md_path}: {err_msg}")
+
+    return errors
+
+
+def validate_pre_push_hook(pre_push_path: Path) -> list[str]:
+    """Validate that the git pre-push hook prevents pushing to main/master."""
+    errors: list[str] = []
+    try:
+        content = pre_push_path.read_text(encoding="utf-8")
+    except Exception as exc:
+        return [f"{pre_push_path}: Cannot read: {exc}"]
+
+    if "main" not in content or "master" not in content:
+        errors.append(
+            f"{pre_push_path}: Pre-push hook must explicitly block main and master branches."
+        )
+
+    return errors
+
+
+def validate_repository(repo_root: Path) -> list[str]:
+    """Run full governance validation across the repository."""
+    errors: list[str] = []
+
+    # 1. Check all required files
+    for rel_path in REQUIRED_FILES:
+        full_path = repo_root / rel_path
+        if not full_path.exists():
+            errors.append(f"Required governance file missing: {rel_path}")
+
+    # 2. Check rule frontmatter in .agents/rules/*.md
+    rules_dir = repo_root / ".agents" / "rules"
+    if rules_dir.exists():
+        rule_files = list(rules_dir.glob("*.md"))
+        if not rule_files:
+            errors.append(".agents/rules directory exists but contains no .md rules.")
+        for rf in rule_files:
+            errors.extend(validate_rule_frontmatter(rf))
+
+    # 3. Check .agents/hooks.json
+    hooks_file = repo_root / ".agents" / "hooks.json"
+    if hooks_file.exists():
+        errors.extend(validate_hooks_json(hooks_file, repo_root))
+
+    # 4. Check AGENTS.md invariants
+    agents_file = repo_root / "AGENTS.md"
+    if agents_file.exists():
+        errors.extend(validate_agents_md(agents_file))
+
+    # 5. Check .githooks/pre-push
+    pre_push_file = repo_root / ".githooks" / "pre-push"
+    if pre_push_file.exists():
+        errors.extend(validate_pre_push_hook(pre_push_file))
+
+    return errors
+
+
+def main() -> None:
+    # Repository root is two levels up from this script
+    script_dir = Path(__file__).resolve().parent
+    repo_root = script_dir.parent.parent
+
+    errors = validate_repository(repo_root)
+
+    if errors:
+        sys.stderr.write("[FAIL] TapJob Governance Validation Failed:\n")
+        for err in errors:
+            sys.stderr.write(f"  - {err}\n")
+        sys.exit(1)
+
+    sys.stdout.write(
+        "[PASS] TapJob Governance Validation Passed: "
+        "All rules, hooks, guards, and invariants verified.\n"
+    )
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

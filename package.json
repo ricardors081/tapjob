@@ -26,9 +26,11 @@
     "lint": "eslint .",
     "format:check": "prettier --check .",
     "format:write": "prettier --write .",
+    "governance:validate": "python tools/agent_guard/validate_governance.py",
+    "governance:test": "python -m unittest discover -s tools/agent_guard -p \"test_*.py\"",
     "check:js": "npm run tokens:check && npm run lint && npm run format:check && npm run typecheck && npm test",
     "check:py": "uv run ruff check . && uv run ruff format --check . && uv run python -m mypy && uv run python -m pytest",
-    "check": "npm run check:js && npm run check:py"
+    "check": "npm run check:js && npm run check:py && npm run governance:validate && npm run governance:test"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
