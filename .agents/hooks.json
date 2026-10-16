@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python tools/agent_guard/pre_tool_guard.py",
+            "command": "python ../tools/agent_guard/pre_tool_guard.py",
             "timeout": 30
           }
         ]

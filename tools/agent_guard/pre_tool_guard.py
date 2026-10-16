@@ -17,6 +17,8 @@ import re
 import shlex
 import subprocess
 import sys
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 # Protected branches that cannot be targeted directly
@@ -49,16 +51,58 @@ FORCE_ASK_PATTERNS = [
     ),
 ]
 
+SHELL_WRAPPERS = {
+    "sh",
+    "bash",
+    "zsh",
+    "dash",
+    "ksh",
+    "cmd",
+    "cmd.exe",
+    "powershell",
+    "powershell.exe",
+    "pwsh",
+    "pwsh.exe",
+}
 
-def get_current_git_branch() -> str | None:
-    """Determine current git branch safely without throwing exceptions."""
+READER_BINARIES = {"cat", "type", "get-content", "gc", "more", "head", "tail"}
+
+
+@dataclass
+class GitInvocation:
+    """Parsed representation of a git command with global options and subcommand."""
+
+    git_token_idx: int
+    cwd_override: str | None = None
+    config_overrides: list[str] = field(default_factory=list)
+    git_dir: str | None = None
+    work_tree: str | None = None
+    subcommand: str | None = None
+    subcommand_args: list[str] = field(default_factory=list)
+
+
+def get_current_git_branch(cwd: Path | str | None = None) -> str | None:
+    """Determine current git branch safely without throwing exceptions.
+
+    Resolves branch using exact target cwd to support worktrees and isolated checkouts.
+    """
+    cmd = ["git", "rev-parse", "--abbrev-ref", "HEAD"]
+    if cwd:
+        target_path = Path(cwd)
+        if not target_path.is_dir():
+            return None
+        cwd_str = str(target_path)
+    else:
+        cwd_str = None
+
     try:
-        proc = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],  # noqa: S607
+        proc = subprocess.run(  # noqa: S603
+            cmd,
+            cwd=cwd_str,
             capture_output=True,
             text=True,
             check=False,
-            timeout=3,
+            timeout=5,
         )
         if proc.returncode == 0:
             branch = proc.stdout.strip()
@@ -117,104 +161,419 @@ def split_command_chain(cmd: str) -> list[str]:
 
 def tokenize_command(cmd_str: str) -> list[str]:
     """Tokenize a single shell command into tokens handling Windows/POSIX quoting."""
-    # Normalize backslashes in binary names if any
     clean_cmd = cmd_str.strip()
     try:
-        # posix=False handles Windows paths and quoting styles gracefully
         return shlex.split(clean_cmd, posix=False)
     except Exception:
-        # Fallback to simple whitespace splitting
         return clean_cmd.split()
 
 
-def is_git_push_to_protected(tokens: list[str]) -> bool:
-    """Check if git push targets main or master branch."""
-    # Find position of git
-    git_idx = -1
-    for idx, t in enumerate(tokens):
-        base = t.strip("\"'").lower()
-        if base in ("git", "git.exe"):
-            git_idx = idx
-            break
-    if git_idx == -1 or git_idx + 1 >= len(tokens):
-        return False
+def parse_git_invocations(tokens: list[str]) -> list[GitInvocation]:
+    """Parse git commands from tokens, identifying global options and subcommands."""
+    invocations: list[GitInvocation] = []
+    n = len(tokens)
+    idx = 0
 
-    subcommand = tokens[git_idx + 1].strip("\"'").lower()
-    if subcommand != "push":
-        return False
+    while idx < n:
+        raw_token = tokens[idx].strip("\"'")
+        base_name = Path(raw_token).name.lower()
+        if base_name in ("git", "git.exe"):
+            inv = GitInvocation(git_token_idx=idx)
+            opt_idx = idx + 1
+            while opt_idx < n:
+                tok = tokens[opt_idx].strip("\"'")
+                if not tok.startswith("-"):
+                    # First non-option is the subcommand
+                    inv.subcommand = tok.lower()
+                    inv.subcommand_args = [t.strip("\"'") for t in tokens[opt_idx + 1 :]]
+                    break
 
-    # Check push args
-    push_args = [t.strip("\"'") for t in tokens[git_idx + 2 :]]
-    for arg in push_args:
-        lower_arg = arg.lower()
-        # Direct branch names
-        if lower_arg in ("main", "master", "refs/heads/main", "refs/heads/master"):
-            return True
-        # Refspecs: e.g. HEAD:main, HEAD:refs/heads/main, feature:main, :main
-        if ":" in lower_arg:
-            dest = lower_arg.split(":", 1)[1]
-            if dest in ("main", "master", "refs/heads/main", "refs/heads/master"):
-                return True
-    return False
+                # Global options before subcommand
+                if tok == "-C":
+                    if opt_idx + 1 < n:
+                        inv.cwd_override = tokens[opt_idx + 1].strip("\"'")
+                        opt_idx += 2
+                        continue
+                elif tok.startswith("-C") and len(tok) > 2:
+                    inv.cwd_override = tok[2:]
+                    opt_idx += 1
+                    continue
+                elif tok == "-c":
+                    if opt_idx + 1 < n:
+                        inv.config_overrides.append(tokens[opt_idx + 1].strip("\"'"))
+                        opt_idx += 2
+                        continue
+                elif tok.startswith("-c") and len(tok) > 2:
+                    inv.config_overrides.append(tok[2:])
+                    opt_idx += 1
+                    continue
+                elif tok == "--config-env" or tok.startswith("--config-env="):
+                    if "=" in tok:
+                        inv.config_overrides.append(tok.split("=", 1)[1])
+                    elif opt_idx + 1 < n:
+                        inv.config_overrides.append(tokens[opt_idx + 1].strip("\"'"))
+                        opt_idx += 1
+                elif tok == "--git-dir" or tok.startswith("--git-dir="):
+                    if "=" in tok:
+                        inv.git_dir = tok.split("=", 1)[1]
+                    elif opt_idx + 1 < n:
+                        inv.git_dir = tokens[opt_idx + 1].strip("\"'")
+                        opt_idx += 1
+                elif tok == "--work-tree" or tok.startswith("--work-tree="):
+                    if "=" in tok:
+                        inv.work_tree = tok.split("=", 1)[1]
+                    elif opt_idx + 1 < n:
+                        inv.work_tree = tokens[opt_idx + 1].strip("\"'")
+                        opt_idx += 1
+
+                opt_idx += 1
+
+            invocations.append(inv)
+            idx = opt_idx
+        else:
+            idx += 1
+
+    return invocations
 
 
-def is_git_push_force_or_no_verify(tokens: list[str]) -> tuple[bool, str]:
-    """Check for force push or --no-verify bypasses."""
-    git_idx = -1
-    for idx, t in enumerate(tokens):
-        base = t.strip("\"'").lower()
-        if base in ("git", "git.exe"):
-            git_idx = idx
-            break
-    if git_idx == -1 or git_idx + 1 >= len(tokens):
-        return False, ""
+def is_core_hookspath_tampering(inv: GitInvocation) -> tuple[bool, str]:
+    """Check if git command attempts to override or tamper with core.hooksPath."""
+    # 1. Check -c global overrides
+    for cfg in inv.config_overrides:
+        cfg_lower = cfg.lower()
+        if cfg_lower.startswith("core.hookspath"):
+            return (
+                True,
+                f"Overriding core.hooksPath via git -c is strictly prohibited ({cfg}).",
+            )
 
-    subcommand = tokens[git_idx + 1].strip("\"'").lower()
-    if subcommand != "push":
-        return False, ""
+    # 2. Check git config subcommand
+    if inv.subcommand == "config":
+        args_lower = [a.lower() for a in inv.subcommand_args]
+        if "core.hookspath" in args_lower:
+            # Unsetting hooks is strictly prohibited
+            if any(unset_flag in args_lower for unset_flag in ("--unset", "--unset-all")):
+                return True, "Unsetting core.hooksPath is strictly prohibited by governance."
 
-    for t in tokens[git_idx + 2 :]:
-        cleaned = t.strip("\"'").lower()
-        if cleaned in ("-f", "--force", "--force-with-lease", "--force-if-includes"):
-            return True, "Force push is strictly prohibited by TapJob governance."
-        if cleaned == "--no-verify":
-            return True, "--no-verify is prohibited on git push; safeguards cannot be bypassed."
+            # Check target value being configured
+            non_flags = [a for a in inv.subcommand_args if not a.startswith("-")]
+            if len(non_flags) >= 2 and non_flags[0].lower() == "core.hookspath":
+                target_val = non_flags[1].strip("\"'").replace("\\", "/")
+                # Only canonical .githooks is permitted
+                if target_val not in (".githooks", ".githooks/"):
+                    return (
+                        True,
+                        f"Setting core.hooksPath to non-canonical location '{target_val}' "
+                        "is prohibited.",
+                    )
+
     return False, ""
 
 
-def is_git_commit_on_main(tokens: list[str], current_branch: str | None) -> bool:
+def is_git_push_to_protected(
+    inv: GitInvocation, effective_branch: str | None = None
+) -> tuple[bool, str]:
+    """Check if git push targets main or master branch."""
+    if inv.subcommand != "push":
+        return False, ""
+
+    args = inv.subcommand_args
+    # Non-flag arguments to push: [<repository>] [<refspec>...]
+    positional = [a for a in args if not a.startswith("-")]
+
+    for arg in positional:
+        lower_arg = arg.lower()
+        # Direct branch name: e.g. origin main
+        if lower_arg in PROTECTED_BRANCHES:
+            return True, f"Direct push to protected branch '{arg}' is strictly prohibited."
+
+        # Refspec formats:
+        # HEAD:main, +HEAD:refs/heads/main, branch:main, :main (deletion)
+        clean_ref = lower_arg.lstrip("+")
+        if ":" in clean_ref:
+            dest = clean_ref.split(":", 1)[1]
+            if dest in PROTECTED_BRANCHES or dest in ("main", "master"):
+                return True, f"Pushing refspec to protected branch '{dest}' is strictly prohibited."
+
+    # If no refspec specified, git pushes current branch to tracking upstream
+    if (
+        (not positional or (len(positional) == 1 and not positional[0].startswith("refs/")))
+        and effective_branch
+        and effective_branch.lower() in ("main", "master")
+    ):
+        return (
+            True,
+            f"Pushing without refspec while on protected branch '{effective_branch}' "
+            "is prohibited.",
+        )
+
+    return False, ""
+
+
+def is_git_push_force_or_no_verify(inv: GitInvocation) -> tuple[bool, str]:
+    """Check for force push or --no-verify bypasses across all syntax variants."""
+    if inv.subcommand != "push":
+        return False, ""
+
+    args = inv.subcommand_args
+    for arg in args:
+        lower_arg = arg.lower()
+
+        # Flags: -f, --force, --force-with-lease, --force-if-includes
+        if lower_arg in ("-f", "--force", "--force-if-includes"):
+            return True, "Force push (-f, --force) is strictly prohibited by TapJob governance."
+
+        if lower_arg.startswith("--force-with-lease"):
+            return (
+                True,
+                "Force push (--force-with-lease) is strictly prohibited by TapJob governance.",
+            )
+
+        if lower_arg.startswith("--force="):
+            return True, "Force push (--force) is strictly prohibited by TapJob governance."
+
+        if lower_arg == "--no-verify":
+            return True, "--no-verify is prohibited on git push; safeguards cannot be bypassed."
+
+        # Leading '+' in any non-flag refspec represents a force push
+        if not arg.startswith("-") and arg.startswith("+"):
+            return True, f"Force push via '+' refspec '{arg}' is strictly prohibited."
+
+    return False, ""
+
+
+def is_git_commit_on_main(
+    inv: GitInvocation, effective_branch: str | None = None
+) -> tuple[bool, str]:
     """Check if git commit is being run directly on main or master."""
-    git_idx = -1
-    for idx, t in enumerate(tokens):
-        base = t.strip("\"'").lower()
-        if base in ("git", "git.exe"):
-            git_idx = idx
-            break
-    if git_idx == -1 or git_idx + 1 >= len(tokens):
+    if inv.subcommand != "commit":
+        return False, ""
+
+    if effective_branch and effective_branch.lower() in ("main", "master"):
+        return (
+            True,
+            f"Direct commits to protected branch '{effective_branch}' are strictly prohibited. "
+            "Use a dedicated feature branch.",
+        )
+    return False, ""
+
+
+def is_git_commit_no_verify(inv: GitInvocation) -> tuple[bool, str]:
+    """Check if git commit bypasses hooks via --no-verify or -n."""
+    if inv.subcommand != "commit":
+        return False, ""
+
+    for arg in inv.subcommand_args:
+        lower_arg = arg.lower()
+        if lower_arg in ("--no-verify", "-n"):
+            return (
+                True,
+                "Bypassing git commit hooks via --no-verify or -n is strictly prohibited.",
+            )
+    return False, ""
+
+
+def is_gh_or_curl_merge_or_mutation(tokens: list[str], cmd_str: str) -> tuple[bool, str]:
+    """Detect and deny terminal-based GitHub PR merges and protected ref mutations."""
+    if not tokens:
+        return False, ""
+
+    cmd_lower = cmd_str.lower()
+    binary = Path(tokens[0].strip("\"'")).name.lower()
+
+    # 1. gh pr merge
+    if (
+        binary in ("gh", "gh.exe")
+        and len(tokens) >= 3
+        and tokens[1].strip("\"'").lower() == "pr"
+        and tokens[2].strip("\"'").lower() == "merge"
+    ):
+        return True, "Automated PR merge via 'gh pr merge' is prohibited by TapJob governance."
+
+    # 2. gh api calls targeting merge endpoints or mutations
+    if binary in ("gh", "gh.exe") and len(tokens) >= 2 and tokens[1].strip("\"'").lower() == "api":
+        # Check GraphQL mutations
+        if "graphql" in cmd_lower and "mergepullrequest" in cmd_lower:
+            return (
+                True,
+                "Automated GitHub PR merge via GraphQL mergePullRequest is prohibited.",
+            )
+
+        # Check REST merge endpoints
+        merge_endpoint_match = re.search(
+            r"(?:/?repos/[^/\s]+/[^/\s]+/)?pulls/\d+/(?:merge|merge-async)\b",
+            cmd_lower,
+        )
+        if merge_endpoint_match:
+            # Check HTTP method (GET is read-only; PUT/POST/PATCH or data is merge mutation)
+            has_explicit_get = any(
+                m in cmd_lower
+                for m in ("-x get", "--method get", "-x=get", "--method=get", "get /repos")
+            )
+            if not has_explicit_get:
+                return (
+                    True,
+                    "Automated GitHub PR merge via 'gh api .../merge' is prohibited.",
+                )
+
+        # Check direct mutation of protected git refs: /git/refs/heads/main
+        protected_ref_match = re.search(
+            r"(?:/?repos/[^/\s]+/[^/\s]+/)?git/refs/heads/(?:main|master)\b",
+            cmd_lower,
+        )
+        if protected_ref_match:
+            is_mutation_method = any(
+                m in cmd_lower
+                for m in (
+                    "-x put",
+                    "--method put",
+                    "-x patch",
+                    "--method patch",
+                    "-x post",
+                    "--method post",
+                    "-x delete",
+                    "--method delete",
+                    "-x=put",
+                    "--method=put",
+                    "-x=patch",
+                    "--method=patch",
+                    "-x=post",
+                    "--method=post",
+                    "-x=delete",
+                    "--method=delete",
+                )
+            )
+            if is_mutation_method:
+                return (
+                    True,
+                    "Direct GitHub API mutation of protected branch ref 'main'/'master' "
+                    "is prohibited.",
+                )
+
+    # 3. curl / Invoke-RestMethod targeting GitHub merge or ref mutation
+    http_clients = (
+        "curl",
+        "curl.exe",
+        "wget",
+        "invoke-restmethod",
+        "irm",
+        "invoke-webrequest",
+        "iwr",
+    )
+    if binary in http_clients and "api.github.com" in cmd_lower:
+        if re.search(r"/pulls/\d+/(?:merge|merge-async)\b", cmd_lower):
+            has_explicit_get = any(
+                m in cmd_lower for m in ("-x get", "--request get", "-x=get", "--request=get")
+            )
+            if not has_explicit_get:
+                return (
+                    True,
+                    "Terminal HTTP request attempting to merge PR is prohibited by governance.",
+                )
+
+        if re.search(r"/git/refs/heads/(?:main|master)\b", cmd_lower):
+            is_mutation = any(
+                m in cmd_lower
+                for m in (
+                    "-x put",
+                    "-x post",
+                    "-x patch",
+                    "-x delete",
+                    "--request put",
+                    "--request post",
+                    "--request patch",
+                    "--request delete",
+                )
+            )
+            if is_mutation:
+                return (
+                    True,
+                    "Terminal HTTP request attempting to mutate protected branch ref "
+                    "is prohibited.",
+                )
+
+    return False, ""
+
+
+def is_secret_dump_command(tokens: list[str]) -> bool:
+    """Check for secret-dumping commands targeting env or private keys with path awareness."""
+    if not tokens:
         return False
 
-    subcommand = tokens[git_idx + 1].strip("\"'").lower()
-    if subcommand != "commit":
-        return False
+    for i, token in enumerate(tokens):
+        base = Path(token.strip("\"'")).name.lower()
+        if base in READER_BINARIES:
+            for arg in tokens[i + 1 :]:
+                clean_arg = arg.strip("\"'")
+                if clean_arg.startswith("-"):
+                    continue
 
-    branch = current_branch if current_branch else get_current_git_branch()
-    return bool(branch and branch.lower() in ("main", "master"))
+                normalized_path = clean_arg.replace("\\", "/")
+                filename = Path(normalized_path).name.lower()
 
+                # Check for .env variants
+                if filename == ".env" or filename.startswith(".env."):
+                    # ALLOW canonical sample/example/template configurations
+                    if filename in (
+                        ".env.example",
+                        ".env.sample",
+                        ".env.template",
+                    ) or filename.endswith((".example", ".sample", ".template")):
+                        continue
+                    return True
 
-def is_gh_pr_merge(tokens: list[str]) -> bool:
-    """Check if gh pr merge is invoked."""
-    for i in range(len(tokens) - 2):
-        t0 = tokens[i].strip("\"'").lower()
-        t1 = tokens[i + 1].strip("\"'").lower()
-        t2 = tokens[i + 2].strip("\"'").lower()
-        if t0 in ("gh", "gh.exe") and t1 == "pr" and t2 == "merge":
-            return True
+                # Check for SSH and TLS private keys
+                if filename in ("id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"):
+                    return True
+                if "id_rsa" in filename:
+                    return True
+                if filename.endswith((".key", ".pem")) and not any(
+                    safe in filename for safe in ("cert", "public", "pub", "chain")
+                ):
+                    return True
+
     return False
+
+
+def extract_nested_shell_command(tokens: list[str]) -> str | None:
+    """Extract wrapped command string from recognized shell wrappers for recursive evaluation."""
+    if not tokens:
+        return None
+
+    binary = Path(tokens[0].strip("\"'")).name.lower()
+    if binary not in SHELL_WRAPPERS:
+        return None
+
+    # POSIX shells: sh -c <cmd>, bash -c <cmd>, zsh -c <cmd>
+    if binary in ("sh", "bash", "zsh", "dash", "ksh"):
+        for i in range(1, len(tokens)):
+            arg = tokens[i].strip("\"'")
+            if arg == "-c" and i + 1 < len(tokens):
+                return " ".join(tokens[i + 1 :])
+            if arg.startswith("-c") and len(arg) > 2:
+                return arg[2:]
+
+    # Windows CMD: cmd /c <cmd>
+    if binary in ("cmd", "cmd.exe"):
+        for i in range(1, len(tokens)):
+            arg = tokens[i].strip("\"'").lower()
+            if arg in ("/c", "/k") and i + 1 < len(tokens):
+                return " ".join(tokens[i + 1 :])
+
+    # PowerShell: powershell -Command <cmd>, pwsh -c <cmd>
+    if binary in ("powershell", "powershell.exe", "pwsh", "pwsh.exe"):
+        for i in range(1, len(tokens)):
+            arg = tokens[i].strip("\"'").lower()
+            if arg in ("-c", "-command") and i + 1 < len(tokens):
+                return " ".join(tokens[i + 1 :])
+            if arg.startswith("-c=") or arg.startswith("-command="):
+                return arg.split("=", 1)[1]
+
+    return None
 
 
 def is_evolution_send_endpoint(cmd_str: str) -> bool:
     """Check if command directly invokes Evolution API live message send endpoints."""
-    # Matches live messaging send paths in Evolution API
     lower = cmd_str.lower()
     patterns = [
         "/message/sendtext",
@@ -234,17 +593,18 @@ def is_guard_tampering(cmd_str: str) -> bool:
     if re.search(r">\s*(?:\.agents[/\\]hooks\.json|\.githooks[/\\]pre-push)", lower):
         return True
 
-    # Attempts to remove or disable .agents/hooks.json or .githooks
+    # Tampering targets
     tamper_patterns = [
-        "core.hookspath",  # e.g. git config --unset core.hooksPath
+        "core.hookspath",
         ".agents/hooks.json",
         ".agents\\hooks.json",
         ".githooks/pre-push",
         ".githooks\\pre-push",
-        "pre_tool_guard.py",
-        "validate_governance.py",
+        "tools/agent_guard/pre_tool_guard.py",
+        "tools\\agent_guard\\pre_tool_guard.py",
+        "tools/agent_guard/validate_governance.py",
+        "tools\\agent_guard\\validate_governance.py",
     ]
-    # Use word boundary regex for destructive commands
     destructive_pattern = re.compile(
         r"\b(?:rm|del|erase|remove-item|unset|unlink)\b",
         re.IGNORECASE,
@@ -258,25 +618,48 @@ def is_guard_tampering(cmd_str: str) -> bool:
     return False
 
 
-def is_secret_dump_command(cmd_str: str) -> bool:
-    """Check for obvious secret-dumping commands targeting env or private keys."""
-    lower = cmd_str.lower()
-    # e.g. cat .env, type .env (unless .env.example)
-    if re.search(r"\b(?:cat|type|Get-Content)\s+(?:\.env|\.env\.(?!example))", lower):
-        return True
-    # e.g. printing private keys
-    return bool("id_rsa" in lower and any(v in lower for v in ("cat", "type", "get-content")))
+def resolve_effective_cwd(base_cwd: Path | None, cwd_override: str | None) -> Path | None:
+    """Resolve effective git directory considering base tool Cwd and git -C overrides."""
+    if not cwd_override:
+        return base_cwd
+
+    override_path = Path(cwd_override)
+    if override_path.is_absolute():
+        return override_path.resolve()
+    if base_cwd:
+        return (base_cwd / override_path).resolve()
+    return override_path.resolve()
 
 
-def evaluate_command(command_line: str, current_branch: str | None = None) -> tuple[str, str]:
-    """Evaluate a command string against safety policies.
+def evaluate_command(
+    command_line: str,
+    cwd: Path | str | None = None,
+    current_branch: str | None = None,
+    depth: int = 0,
+) -> tuple[str, str]:
+    """Evaluate a command string against repository safety policies.
 
-    Returns (decision, reason).
-    decision is one of: "allow", "deny", "ask", "force_ask".
+    Parameters
+    ----------
+    command_line : str
+        The raw shell command line to evaluate.
+    cwd : Path | str | None
+        Target working directory for the tool call (Cwd-aware).
+    current_branch : str | None
+        Explicit branch override (used primarily for unit testing).
+    depth : int
+        Recursion depth for nested shell evaluation.
+
+    Returns
+    -------
+    tuple[str, str]
+        (decision, reason) where decision is one of:
+        "allow", "deny", "ask", "force_ask".
     """
     if not command_line or not command_line.strip():
         return "allow", "Empty command line."
 
+    resolved_base_cwd = Path(cwd).resolve() if cwd else None
     sub_commands = split_command_chain(command_line)
 
     for sub_cmd in sub_commands:
@@ -284,81 +667,138 @@ def evaluate_command(command_line: str, current_branch: str | None = None) -> tu
         if not tokens:
             continue
 
-        # 1. HARD DENY: Push to protected branch
-        if is_git_push_to_protected(tokens):
-            return (
-                "deny",
-                "Direct push to main or master branch is strictly prohibited by TapJob governance.",
+        # 0. Recursive evaluation of nested shell wrappers (powershell -c, bash -c, cmd /c)
+        if depth < 5:
+            nested_cmd = extract_nested_shell_command(tokens)
+            if nested_cmd:
+                clean_nested = nested_cmd.strip()
+                if (clean_nested.startswith('"') and clean_nested.endswith('"')) or (
+                    clean_nested.startswith("'") and clean_nested.endswith("'")
+                ):
+                    clean_nested = clean_nested[1:-1]
+                nested_dec, nested_reason = evaluate_command(
+                    clean_nested,
+                    cwd=resolved_base_cwd,
+                    current_branch=current_branch,
+                    depth=depth + 1,
+                )
+                if nested_dec != "allow":
+                    return nested_dec, f"Nested shell wrapper blocked: {nested_reason}"
+
+        # 1. Parse git invocations and global options
+        git_invocations = parse_git_invocations(tokens)
+        for inv in git_invocations:
+            # Resolve effective Cwd for this specific git command
+            effective_git_cwd = resolve_effective_cwd(resolved_base_cwd, inv.cwd_override)
+            effective_branch = (
+                current_branch
+                if current_branch is not None
+                else get_current_git_branch(effective_git_cwd)
             )
 
-        # 2. HARD DENY: Force push or --no-verify bypass
-        is_force, force_reason = is_git_push_force_or_no_verify(tokens)
-        if is_force:
-            return "deny", force_reason
+            # HARD DENY: core.hooksPath override via -c or invalid git config
+            tamper_hook, hook_reason = is_core_hookspath_tampering(inv)
+            if tamper_hook:
+                return "deny", hook_reason
 
-        # 3. HARD DENY: Commit on main
-        if is_git_commit_on_main(tokens, current_branch):
-            return (
-                "deny",
-                "Direct commit to main or master branch is prohibited; must use feature branches.",
-            )
+            # HARD DENY: Direct git push to main / master
+            push_prot, push_reason = is_git_push_to_protected(inv, effective_branch)
+            if push_prot:
+                return "deny", push_reason
 
-        # 4. HARD DENY: gh pr merge during baseline governance
-        if is_gh_pr_merge(tokens):
-            return (
-                "deny",
-                "Automated PR merge via 'gh pr merge' is prohibited; merges require human review.",
-            )
+            # HARD DENY: Force push or --no-verify on git push
+            push_force, force_reason = is_git_push_force_or_no_verify(inv)
+            if push_force:
+                return "deny", force_reason
 
-        # 5. HARD DENY: Direct Evolution live messaging endpoints
+            # HARD DENY: Git commit directly on main / master
+            commit_prot, commit_reason = is_git_commit_on_main(inv, effective_branch)
+            if commit_prot:
+                return "deny", commit_reason
+
+            # HARD DENY: Git commit --no-verify or -n
+            commit_noverify, noverify_reason = is_git_commit_no_verify(inv)
+            if commit_noverify:
+                return "deny", noverify_reason
+
+        # 2. HARD DENY: gh pr merge, gh api PR merge / ref mutation, curl merge
+        gh_denied, gh_reason = is_gh_or_curl_merge_or_mutation(tokens, sub_cmd)
+        if gh_denied:
+            return "deny", gh_reason
+
+        # 3. HARD DENY: Direct live messaging via Evolution API endpoints
         if is_evolution_send_endpoint(sub_cmd):
             return (
                 "deny",
-                "Direct invocation of Evolution live messaging send endpoint is prohibited.",
+                "Live WhatsApp messaging via Evolution API send endpoints is strictly prohibited "
+                "outside explicit, human-authorized canary runs.",
             )
 
-        # 6. HARD DENY: Tampering with governance guards
+        # 4. HARD DENY: Tampering with governance guards
         if is_guard_tampering(sub_cmd):
             return (
                 "deny",
                 "Disabling, removing, or tampering with governance guards is strictly prohibited.",
             )
 
-        # 7. HARD DENY: Secret dump commands
-        if is_secret_dump_command(sub_cmd):
+        # 5. HARD DENY: Secret dump commands targeting private keys / .env
+        if is_secret_dump_command(tokens):
             return (
                 "deny",
                 "Command appears to dump secret credentials or private environment files.",
             )
 
-        # 8. FORCE_ASK / HUMAN GATE: Destructive git reset/clean
+        # 6. FORCE_ASK / HUMAN GATE: Destructive git reset/clean
         if DESTRUCTIVE_GIT_RE.search(sub_cmd):
             return (
                 "force_ask",
                 "Destructive git operation (reset --hard or clean) requires human authorization.",
             )
 
-        # 9. FORCE_ASK / HUMAN GATE: Production, infrastructure or DB mutation
+        # 7. FORCE_ASK / HUMAN GATE: Production, infrastructure or DB mutation
         for pattern, reason in FORCE_ASK_PATTERNS:
             if pattern.search(sub_cmd):
                 return "force_ask", reason
 
-    # Routine development commands are allowed by default
+    # Routine development commands permitted by default
     return "allow", "Routine development command permitted."
 
 
 def handle_pre_tool_use(payload: dict[str, Any]) -> dict[str, Any]:
-    """Handle Antigravity PreToolUse hook payload."""
+    """Handle Antigravity PreToolUse hook payload with Cwd and workspace awareness."""
     tool_call = payload.get("toolCall", {})
     tool_name = tool_call.get("name", "")
 
     if tool_name == "run_command":
         args = tool_call.get("args", {})
         command_line = args.get("CommandLine", "")
-        decision, reason = evaluate_command(command_line)
+        cwd_arg = args.get("Cwd")
+        workspace_paths = payload.get("workspacePaths", [])
+
+        resolved_cwd: Path | None = None
+        if cwd_arg and str(cwd_arg).strip():
+            try:
+                candidate_cwd = Path(cwd_arg).resolve()
+                if workspace_paths:
+                    is_safe = False
+                    for wp in workspace_paths:
+                        try:
+                            wp_path = Path(wp).resolve()
+                            if candidate_cwd == wp_path or wp_path in candidate_cwd.parents:
+                                is_safe = True
+                                break
+                        except (ValueError, OSError):
+                            is_safe = False
+                    if is_safe and candidate_cwd.is_dir():
+                        resolved_cwd = candidate_cwd
+                elif candidate_cwd.is_dir():
+                    resolved_cwd = candidate_cwd
+            except (ValueError, OSError):
+                resolved_cwd = None
+
+        decision, reason = evaluate_command(command_line, cwd=resolved_cwd)
         return {"decision": decision, "reason": reason}
 
-    # All other tool calls (view_file, write_to_file, etc.) are allowed by default
     return {"decision": "allow", "reason": f"Tool '{tool_name}' permitted."}
 
 
@@ -366,7 +806,6 @@ def main() -> None:
     try:
         raw_input = sys.stdin.read()
         if not raw_input.strip():
-            # If no input provided, default to allow
             result = {"decision": "allow", "reason": "No input payload provided."}
         else:
             payload = json.loads(raw_input)

@@ -24,3 +24,10 @@ description: Runtime safety gates, production protection, staging boundaries, an
 - **No Uncontrolled WhatsApp Sends**: Agents must never trigger unapproved live sends to real WhatsApp recipients or third parties.
 - **Canary Scope**: Real messaging tests must be constrained to dedicated test numbers/identities under explicit canary scopes.
 - **No Mock Bypasses**: Never mock or bypass external dependencies in a manner that manufactures false verification evidence.
+
+## 3. MCP & Non-Terminal Safety Invariants
+
+- **No MCP Bypass**: Introduction of Model Context Protocol (MCP) or custom tools must never bypass PreToolUse or runtime invariants.
+- **GitHub MCP Gating**: Tools enabling PR merge, PR approval, or direct branch mutation remain strictly disabled during baseline governance.
+- **Live Transport MCP**: Messaging or deployment MCP tools remain bound to Tier B/C authority models.
+

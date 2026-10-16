@@ -70,3 +70,14 @@ TapJob operates on a GitHub Free private repository where server-side branch pro
 - **Local Enforcement**: Local git hooks and Antigravity guards are client-side controls. They are not cryptographically equivalent to server-side branch protection rules.
 - **Fail-Closed Design**: The Antigravity PreToolUse guard fails closed (`deny`) if an unhandled exception occurs.
 - **Process Compliance**: Procedural compliance remains mandatory: no PR may merge without an independent review and 100% green CI on the exact HEAD commit.
+
+---
+
+## 3. Model Context Protocol (MCP) Safety Invariants
+
+As TapJob evolves toward AF-1 and beyond, Model Context Protocol (MCP) servers and custom tool integrations may be introduced. The presence of non-terminal tools introduces alternative invocation pathways that must adhere to the same governance:
+
+1. **GitHub MCP Gating**: Any GitHub MCP server or tool with capability to merge Pull Requests, approve PRs, or mutate protected branch refs (`main`/`master`) remains strictly **disabled** during baseline governance. Enabling such tools without independent guardrails is prohibited.
+2. **Production & Messaging MCP Gating**: Any MCP tool capable of triggering live Evolution API messaging, production deployments, or database migrations is bound to the exact same **Tier B / Tier C authority model**. Autonomous agents may never invoke live sends or production mutations through MCP interfaces.
+3. **No Safeguard Bypass**: Enabling MCP tools must never silently bypass Terminal/PreToolUse safety invariants. All tool calls, whether native, CLI-based, or MCP-driven, are subject to equivalent deterministic safety gating.
+

@@ -40,3 +40,12 @@ Dynamic specialists may be instantiated by the Engineering Manager to tackle spe
 - **Product / Data Analyst**: Career analytics metrics, telemetry design, and conversion tracking specifications.
 
 Dynamic specialists operate under the same invariants: work in isolated branches/worktrees, require independent QA and review, and have zero merge or production authority.
+
+---
+
+## 4. MCP & Custom Tool Authority Boundaries
+
+1. **GitHub MCP Server Policy**: Tools offering automated pull request merge, pull request approval, or direct branch reference updates are disabled during baseline governance. No agent role may exercise PR merge authority through MCP tools.
+2. **Evolution API & Live Transport MCP**: MCP tools exposing messaging endpoints are subject to Tier C human gates. Direct sends to real candidates or non-canary numbers are strictly prohibited.
+3. **Parity with PreToolUse Guards**: Introduction of MCP servers must never circumvent client-side safety invariants. Any tool invoked via MCP must adhere to the same least-privilege boundaries as CLI terminal executions.
+
