@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -658,6 +659,188 @@ class TestPreToolGuard(unittest.TestCase):
                     decision,
                     "allow",
                     f"Feature push '{cmd}' must be allowed, got {decision} ({reason})",
+                )
+
+    def test_nested_shell_recursion_depth_fail_closed(self) -> None:
+        """Tests: 6-level nested wrapper must fail closed (DENY), shallow safe wrappers allowed."""
+
+        def make_deep_wrapper(target: str, levels: int = 6) -> str:
+            res = target
+            for _ in range(levels):
+                res = f"bash -c {shlex.quote(res)}"
+            return res
+
+        deep_targets = [
+            "git push origin main",
+            "gh pr merge 52",
+            "cat .env",
+        ]
+        for target in deep_targets:
+            cmd = make_deep_wrapper(target, levels=6)
+            with self.subTest(target=target):
+                decision, reason = evaluate_command(cmd, current_branch="feat/test")
+                self.assertEqual(
+                    decision,
+                    "deny",
+                    f"Deep shell wrapper for '{target}' must fail closed, got {decision}",
+                )
+                self.assertIn("recursion depth", reason.lower())
+
+        # Shallow safe wrappers must remain allowed
+        shallow_safe = [
+            'bash -c "npm test"',
+            'powershell -Command "git status"',
+            'sh -c "echo safe"',
+            'pwsh -c "pytest"',
+        ]
+        for cmd in shallow_safe:
+            with self.subTest(cmd=cmd):
+                decision, reason = evaluate_command(cmd, current_branch="feat/test")
+                self.assertEqual(
+                    decision,
+                    "allow",
+                    f"Shallow safe wrapper '{cmd}' should be allowed, got {decision} ({reason})",
+                )
+
+    def test_launcher_prefixes_and_powershell_call_operator(self) -> None:
+        """Tests: launcher prefixes (&, command, env, exec, nohup) are stripped and inspected."""
+        denied_launcher_cmds = [
+            "& gh pr merge 52",
+            '& "gh" pr merge 52',
+            "command gh pr merge 52",
+            "env gh pr merge 52",
+            "env FOO=1 BAR=2 gh pr merge 52",
+            "exec gh pr merge 52",
+            "nohup gh pr merge 52",
+            "& curl -X PUT https://api.github.com/repos/ricardos081/tapjob/pulls/52/merge",
+            "& cat .env",
+            "command cat .env",
+            "env cat .env",
+            "& git push origin main",
+            "command git push origin main",
+            "env git push origin main",
+        ]
+        for cmd in denied_launcher_cmds:
+            with self.subTest(cmd=cmd):
+                decision, reason = evaluate_command(cmd, current_branch="feat/test")
+                self.assertEqual(
+                    decision,
+                    "deny",
+                    f"Launcher command '{cmd}' must be denied, got {decision} ({reason})",
+                )
+
+        allowed_launcher_cmds = [
+            "command git status",
+            "env git status",
+            "& git status",
+            "nohup npm test",
+            "env FOO=1 npm run check",
+        ]
+        for cmd in allowed_launcher_cmds:
+            with self.subTest(cmd=cmd):
+                decision, reason = evaluate_command(cmd, current_branch="feat/test")
+                self.assertEqual(
+                    decision,
+                    "allow",
+                    f"Safe launcher command '{cmd}' should be allowed, got {decision} ({reason})",
+                )
+
+    def test_git_push_head_or_at_on_protected_branch_denied(self) -> None:
+        """Tests: pushing HEAD or @ while on protected branch (main/master) must be denied."""
+        # On main branch: HEAD and @ resolve to main
+        main_denied = [
+            "git push origin HEAD",
+            "git push origin @",
+            "git push HEAD",
+            "git push @",
+            "git push origin feat/test:HEAD",
+            "git push origin feat/test:@",
+        ]
+        for cmd in main_denied:
+            with self.subTest(cmd=cmd, branch="main"):
+                decision, reason = evaluate_command(cmd, current_branch="main")
+                self.assertEqual(
+                    decision,
+                    "deny",
+                    f"Pushing '{cmd}' on main must be denied, got {decision} ({reason})",
+                )
+
+        # On master branch: HEAD and @ resolve to master
+        master_denied = [
+            "git push origin HEAD",
+            "git push origin @",
+        ]
+        for cmd in master_denied:
+            with self.subTest(cmd=cmd, branch="master"):
+                decision, reason = evaluate_command(cmd, current_branch="master")
+                self.assertEqual(
+                    decision,
+                    "deny",
+                    f"Pushing '{cmd}' on master must be denied, got {decision} ({reason})",
+                )
+
+        # On feature branch: HEAD and @ resolve to the feature branch and are allowed
+        feature_allowed = [
+            "git push origin HEAD",
+            "git push origin @",
+            "git push origin feat/test",
+            "git push origin HEAD:feat/test",
+        ]
+        for cmd in feature_allowed:
+            with self.subTest(cmd=cmd, branch="feat/test"):
+                decision, reason = evaluate_command(cmd, current_branch="feat/test")
+                self.assertEqual(
+                    decision,
+                    "allow",
+                    f"Pushing '{cmd}' on feat/test should be allowed, got {decision} ({reason})",
+                )
+
+    def test_github_api_merge_and_ref_mutations_harden(self) -> None:
+        """Tests: PR merge endpoints and plural refs are unconditionally blocked."""
+        denied_api_cmds = [
+            # Unconditional block on /pulls/<n>/merge regardless of claimed GET method
+            "gh api repos/ricardos081/tapjob/pulls/52/merge -X GET",
+            "gh api repos/ricardos081/tapjob/pulls/52/merge --method GET",
+            "gh api repos/ricardos081/tapjob/pulls/52/merge",
+            'gh api repos/ricardos081/tapjob/pulls/52/merge -f commit_title="-X GET bypass"',
+            "curl -X GET https://api.github.com/repos/ricardos081/tapjob/pulls/52/merge",
+            "curl -X PUT https://api.github.com/repos/ricardos081/tapjob/pulls/52/merge",
+            (
+                "curl -X PUT https://api.github.com/repos/ricardos081/tapjob/pulls/52/merge "
+                '-d \'{"title": "-X GET"}\''
+            ),
+            # Plural refs endpoint unconditionally blocked
+            "gh api repos/ricardos081/tapjob/git/refs/heads/main",
+            "gh api repos/ricardos081/tapjob/git/refs/heads/master",
+            "curl https://api.github.com/repos/ricardos081/tapjob/git/refs/heads/main",
+            # Singular ref mutation blocked
+            "gh api repos/ricardos081/tapjob/git/ref/heads/main -X PATCH -f sha=123",
+            "curl -X DELETE https://api.github.com/repos/ricardos081/tapjob/git/ref/heads/main",
+            "curl -X PATCH https://api.github.com/repos/ricardos081/tapjob/git/ref/heads/main",
+        ]
+        for cmd in denied_api_cmds:
+            with self.subTest(cmd=cmd):
+                decision, reason = evaluate_command(cmd, current_branch="feat/test")
+                self.assertEqual(
+                    decision,
+                    "deny",
+                    f"API command '{cmd}' must be denied, got {decision} ({reason})",
+                )
+
+        allowed_api_cmds = [
+            # Singular ref read-only inspection allowed
+            "gh api repos/ricardos081/tapjob/git/ref/heads/main",
+            "curl https://api.github.com/repos/ricardos081/tapjob/git/ref/heads/main",
+            "gh pr view 52",
+            "gh pr list",
+        ]
+        for cmd in allowed_api_cmds:
+            with self.subTest(cmd=cmd):
+                decision, reason = evaluate_command(cmd, current_branch="feat/test")
+                self.assertEqual(
+                    decision,
+                    "allow",
+                    f"Read-only API command '{cmd}' should be allowed, got {decision} ({reason})",
                 )
 
 

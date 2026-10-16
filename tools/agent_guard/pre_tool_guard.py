@@ -67,6 +67,9 @@ SHELL_WRAPPERS = {
 
 READER_BINARIES = {"cat", "type", "get-content", "gc", "more", "head", "tail"}
 
+MAX_NESTED_SHELL_DEPTH = 5
+LAUNCHER_PREFIXES = {"&", "command", "env", "exec", "nohup"}
+
 # Environment variables used to retarget git repository, worktree, or configuration
 GIT_ENV_RETARGET_RE = re.compile(
     r"(?:"
@@ -207,6 +210,78 @@ def tokenize_command(cmd_str: str) -> list[str]:
         return shlex.split(clean_cmd, posix=False)
     except Exception:
         return clean_cmd.split()
+
+
+def extract_effective_tokens(tokens: list[str]) -> list[str]:
+    """Strip launcher prefixes (&, command, env, exec, nohup) and env assignments."""
+    if not tokens:
+        return []
+    idx = 0
+    n = len(tokens)
+    while idx < n:
+        raw = tokens[idx].strip("\"'")
+        lower = raw.lower()
+        if lower in LAUNCHER_PREFIXES:
+            idx += 1
+            if lower == "env":
+                while idx < n:
+                    t_clean = tokens[idx].strip("\"'")
+                    if t_clean.startswith("-") or "=" in t_clean:
+                        idx += 1
+                    else:
+                        break
+            continue
+        break
+    return tokens[idx:]
+
+
+def extract_http_method(tokens: list[str]) -> str:
+    """Extract effective HTTP method from command tokens handling flags and defaults."""
+    n = len(tokens)
+    idx = 0
+    explicit_method: str | None = None
+    has_body_data = False
+
+    while idx < n:
+        raw = tokens[idx].strip("\"'")
+        lower = raw.lower()
+
+        # Check explicit method flags: -X, --method, --request, -Method
+        if lower in ("-x", "--method", "--request", "-method"):
+            if idx + 1 < n:
+                explicit_method = tokens[idx + 1].strip("\"'").upper()
+                idx += 2
+                continue
+        elif lower.startswith(("-x=", "--method=", "--request=", "-method:")):
+            explicit_method = raw.split("=", 1)[-1].split(":", 1)[-1].strip("\"'").upper()
+            idx += 1
+            continue
+        elif lower.startswith("-x") and len(lower) > 2 and not lower.startswith("--"):
+            explicit_method = raw[2:].strip("\"'").upper()
+            idx += 1
+            continue
+
+        # Check data flags that implicitly imply POST if no explicit method
+        if lower in (
+            "-d",
+            "--data",
+            "--data-raw",
+            "--data-binary",
+            "--data-urlencode",
+            "-f",
+            "--field",
+            "-F",
+            "--raw-field",
+        ) or lower.startswith(("-d", "--data-", "-f=", "--field=", "-F=", "--raw-field=")):
+            has_body_data = True
+
+        idx += 1
+
+    if explicit_method:
+        return explicit_method
+    if has_body_data:
+        return "POST"
+    return "GET"
 
 
 def parse_git_invocations(tokens: list[str]) -> list[GitInvocation]:
@@ -403,13 +478,35 @@ def is_git_push_to_protected(
         if lower_arg in PROTECTED_BRANCHES:
             return True, f"Direct push to protected branch '{arg}' is strictly prohibited."
 
+        # If on protected branch, pushing HEAD or @ resolves to the protected branch
+        clean_ref = lower_arg.lstrip("+")
+        if (
+            clean_ref in ("head", "@")
+            and effective_branch
+            and effective_branch.lower() in ("main", "master")
+        ):
+            return (
+                True,
+                f"Pushing '{arg}' while on protected branch '{effective_branch}' "
+                "is strictly prohibited.",
+            )
+
         # Refspec formats:
         # HEAD:main, +HEAD:refs/heads/main, branch:main, :main (deletion)
-        clean_ref = lower_arg.lstrip("+")
         if ":" in clean_ref:
             dest = clean_ref.split(":", 1)[1]
             if dest in PROTECTED_BRANCHES or dest in ("main", "master"):
                 return True, f"Pushing refspec to protected branch '{dest}' is strictly prohibited."
+            if (
+                dest in ("head", "@")
+                and effective_branch
+                and effective_branch.lower() in ("main", "master")
+            ):
+                return (
+                    True,
+                    f"Pushing refspec targeting '{dest}' on protected branch "
+                    f"'{effective_branch}' is prohibited.",
+                )
             if "*" in dest:
                 return (
                     True,
@@ -496,23 +593,28 @@ def is_git_commit_no_verify(inv: GitInvocation) -> tuple[bool, str]:
 
 def is_gh_or_curl_merge_or_mutation(tokens: list[str], cmd_str: str) -> tuple[bool, str]:
     """Detect and deny terminal-based GitHub PR merges and protected ref mutations."""
-    if not tokens:
+    eff_tokens = extract_effective_tokens(tokens)
+    if not eff_tokens:
         return False, ""
 
     cmd_lower = cmd_str.lower()
-    binary = Path(tokens[0].strip("\"'")).name.lower()
+    binary = Path(eff_tokens[0].strip("\"'")).name.lower()
 
     # 1. gh pr merge
     if (
         binary in ("gh", "gh.exe")
-        and len(tokens) >= 3
-        and tokens[1].strip("\"'").lower() == "pr"
-        and tokens[2].strip("\"'").lower() == "merge"
+        and len(eff_tokens) >= 3
+        and eff_tokens[1].strip("\"'").lower() == "pr"
+        and eff_tokens[2].strip("\"'").lower() == "merge"
     ):
         return True, "Automated PR merge via 'gh pr merge' is prohibited by TapJob governance."
 
     # 2. gh api calls targeting merge endpoints or mutations
-    if binary in ("gh", "gh.exe") and len(tokens) >= 2 and tokens[1].strip("\"'").lower() == "api":
+    if (
+        binary in ("gh", "gh.exe")
+        and len(eff_tokens) >= 2
+        and eff_tokens[1].strip("\"'").lower() == "api"
+    ):
         # Check GraphQL mutations
         if "graphql" in cmd_lower and "mergepullrequest" in cmd_lower:
             return (
@@ -520,54 +622,28 @@ def is_gh_or_curl_merge_or_mutation(tokens: list[str], cmd_str: str) -> tuple[bo
                 "Automated GitHub PR merge via GraphQL mergePullRequest is prohibited.",
             )
 
-        # Check REST merge endpoints
-        merge_endpoint_match = re.search(
-            r"(?:/?repos/[^/\s]+/[^/\s]+/)?pulls/\d+/(?:merge|merge-async)\b",
-            cmd_lower,
-        )
-        if merge_endpoint_match:
-            # Check HTTP method (GET is read-only; PUT/POST/PATCH or data is merge mutation)
-            has_explicit_get = any(
-                m in cmd_lower
-                for m in ("-x get", "--method get", "-x=get", "--method=get", "get /repos")
+        # UNCONDITIONAL BLOCK: REST pull request merge endpoints (/pulls/<n>/merge or merge-async)
+        if re.search(r"(?:/?repos/[^/\s]+/[^/\s]+/)?pulls/\d+/(?:merge|merge-async)\b", cmd_lower):
+            return (
+                True,
+                "Automated GitHub PR merge via pull request merge endpoint is strictly prohibited.",
             )
-            if not has_explicit_get:
-                return (
-                    True,
-                    "Automated GitHub PR merge via 'gh api .../merge' is prohibited.",
-                )
 
-        # Check direct mutation of protected git refs: /git/refs/heads/main
-        protected_ref_match = re.search(
-            r"(?:/?repos/[^/\s]+/[^/\s]+/)?git/refs/heads/(?:main|master)\b",
-            cmd_lower,
-        )
-        if protected_ref_match:
-            is_mutation_method = any(
-                m in cmd_lower
-                for m in (
-                    "-x put",
-                    "--method put",
-                    "-x patch",
-                    "--method patch",
-                    "-x post",
-                    "--method post",
-                    "-x delete",
-                    "--method delete",
-                    "-x=put",
-                    "--method=put",
-                    "-x=patch",
-                    "--method=patch",
-                    "-x=post",
-                    "--method=post",
-                    "-x=delete",
-                    "--method=delete",
-                )
+        # UNCONDITIONAL BLOCK: Plural protected git refs: /git/refs/heads/main or master
+        if re.search(r"(?:/?repos/[^/\s]+/[^/\s]+/)?git/refs/heads/(?:main|master)\b", cmd_lower):
+            return (
+                True,
+                "Direct GitHub API access targeting plural protected branch ref 'main'/'master' "
+                "is prohibited.",
             )
-            if is_mutation_method:
+
+        # Singular git ref mutation check: /git/ref/heads/main or master
+        if re.search(r"(?:/?repos/[^/\s]+/[^/\s]+/)?git/ref/heads/(?:main|master)\b", cmd_lower):
+            method = extract_http_method(eff_tokens)
+            if method in ("PUT", "POST", "PATCH", "DELETE"):
                 return (
                     True,
-                    "Direct GitHub API mutation of protected branch ref 'main'/'master' "
+                    f"Direct GitHub API mutation ({method}) of protected ref 'main'/'master' "
                     "is prohibited.",
                 )
 
@@ -582,34 +658,27 @@ def is_gh_or_curl_merge_or_mutation(tokens: list[str], cmd_str: str) -> tuple[bo
         "iwr",
     )
     if binary in http_clients and "api.github.com" in cmd_lower:
+        # UNCONDITIONAL BLOCK: REST PR merge endpoints
         if re.search(r"/pulls/\d+/(?:merge|merge-async)\b", cmd_lower):
-            has_explicit_get = any(
-                m in cmd_lower for m in ("-x get", "--request get", "-x=get", "--request=get")
+            return (
+                True,
+                "Terminal HTTP request attempting to merge PR is strictly prohibited.",
             )
-            if not has_explicit_get:
-                return (
-                    True,
-                    "Terminal HTTP request attempting to merge PR is prohibited by governance.",
-                )
 
+        # UNCONDITIONAL BLOCK: Plural protected branch refs
         if re.search(r"/git/refs/heads/(?:main|master)\b", cmd_lower):
-            is_mutation = any(
-                m in cmd_lower
-                for m in (
-                    "-x put",
-                    "-x post",
-                    "-x patch",
-                    "-x delete",
-                    "--request put",
-                    "--request post",
-                    "--request patch",
-                    "--request delete",
-                )
+            return (
+                True,
+                "Terminal HTTP request targeting plural protected branch ref is prohibited.",
             )
-            if is_mutation:
+
+        # Singular protected branch ref mutation check
+        if re.search(r"/git/ref/heads/(?:main|master)\b", cmd_lower):
+            method = extract_http_method(eff_tokens)
+            if method in ("PUT", "POST", "PATCH", "DELETE"):
                 return (
                     True,
-                    "Terminal HTTP request attempting to mutate protected branch ref "
+                    f"Terminal HTTP request attempting to mutate ({method}) protected branch ref "
                     "is prohibited.",
                 )
 
@@ -618,13 +687,14 @@ def is_gh_or_curl_merge_or_mutation(tokens: list[str], cmd_str: str) -> tuple[bo
 
 def is_secret_dump_command(tokens: list[str]) -> bool:
     """Check for secret-dumping commands targeting env or private keys with path awareness."""
-    if not tokens:
+    eff_tokens = extract_effective_tokens(tokens)
+    if not eff_tokens:
         return False
 
-    for i, token in enumerate(tokens):
+    for i, token in enumerate(eff_tokens):
         base = Path(token.strip("\"'")).name.lower()
         if base in READER_BINARIES:
-            for arg in tokens[i + 1 :]:
+            for arg in eff_tokens[i + 1 :]:
                 clean_arg = arg.strip("\"'")
                 if clean_arg.startswith("-"):
                     continue
@@ -656,24 +726,49 @@ def is_secret_dump_command(tokens: list[str]) -> bool:
     return False
 
 
-def extract_nested_shell_command(tokens: list[str]) -> str | None:
+def extract_nested_shell_command(tokens: list[str], raw_cmd: str | None = None) -> str | None:
     """Extract wrapped command string from recognized shell wrappers for recursive evaluation."""
-    if not tokens:
+    eff_tokens = extract_effective_tokens(tokens)
+    if not eff_tokens:
         return None
 
-    binary = Path(tokens[0].strip("\"'")).name.lower()
+    binary = Path(eff_tokens[0].strip("\"'")).name.lower()
     if binary not in SHELL_WRAPPERS:
         return None
 
     # POSIX shells: sh, bash, zsh, dash, ksh
     if binary in ("sh", "bash", "zsh", "dash", "ksh"):
-        for i in range(1, len(tokens)):
-            arg = tokens[i].strip("\"'")
+        # If raw_cmd is provided, try POSIX-mode split first for clean nested quote handling
+        if raw_cmd:
+            try:
+                posix_toks = extract_effective_tokens(shlex.split(raw_cmd.strip(), posix=True))
+                if posix_toks and Path(posix_toks[0].strip("\"'")).name.lower() in (
+                    "sh",
+                    "bash",
+                    "zsh",
+                    "dash",
+                    "ksh",
+                ):
+                    for i in range(1, len(posix_toks)):
+                        arg = posix_toks[i].strip("\"'")
+                        if arg.startswith("-") and not arg.startswith("--") and "c" in arg:
+                            if i + 1 < len(posix_toks):
+                                return posix_toks[i + 1]
+                            c_idx = arg.index("c")
+                            rem = arg[c_idx + 1 :].lstrip("=")
+                            if rem:
+                                return rem
+                            return "__GUARD_FAIL_CLOSED__"
+            except (ValueError, OSError):
+                pass
+
+        for i in range(1, len(eff_tokens)):
+            arg = eff_tokens[i].strip("\"'")
             # Support standalone -c or combined flag clusters like -lc, -ec, -xce
             if arg.startswith("-") and not arg.startswith("--") and "c" in arg:
                 # If command argument follows as next token(s), extract it
-                if i + 1 < len(tokens):
-                    return " ".join(tokens[i + 1 :])
+                if i + 1 < len(eff_tokens):
+                    return " ".join(eff_tokens[i + 1 :])
                 # Check for inline command attached (e.g. -c"cmd", -c=cmd, -lc"cmd")
                 c_idx = arg.index("c")
                 rem = arg[c_idx + 1 :].lstrip("=")
@@ -683,17 +778,17 @@ def extract_nested_shell_command(tokens: list[str]) -> str | None:
 
     # Windows CMD: cmd /c <cmd>, cmd /k <cmd>
     if binary in ("cmd", "cmd.exe"):
-        for i in range(1, len(tokens)):
-            arg = tokens[i].strip("\"'").lower()
-            if arg in ("/c", "/k") and i + 1 < len(tokens):
-                return " ".join(tokens[i + 1 :])
+        for i in range(1, len(eff_tokens)):
+            arg = eff_tokens[i].strip("\"'").lower()
+            if arg in ("/c", "/k") and i + 1 < len(eff_tokens):
+                return " ".join(eff_tokens[i + 1 :])
 
     # PowerShell: powershell -Command <cmd>, pwsh -c <cmd>
     if binary in ("powershell", "powershell.exe", "pwsh", "pwsh.exe"):
-        for i in range(1, len(tokens)):
-            arg = tokens[i].strip("\"'").lower()
-            if arg in ("-c", "-command") and i + 1 < len(tokens):
-                return " ".join(tokens[i + 1 :])
+        for i in range(1, len(eff_tokens)):
+            arg = eff_tokens[i].strip("\"'").lower()
+            if arg in ("-c", "-command") and i + 1 < len(eff_tokens):
+                return " ".join(eff_tokens[i + 1 :])
             if arg.startswith("-c=") or arg.startswith("-command="):
                 return arg.split("=", 1)[1]
 
@@ -702,11 +797,12 @@ def extract_nested_shell_command(tokens: list[str]) -> str | None:
 
 def is_powershell_encoded_command(tokens: list[str]) -> bool:
     """Detect if command invokes PowerShell with encoded execution (-EncodedCommand/-enc/-e)."""
-    if not tokens:
+    eff_tokens = extract_effective_tokens(tokens)
+    if not eff_tokens:
         return False
-    binary = Path(tokens[0].strip("\"'")).name.lower()
+    binary = Path(eff_tokens[0].strip("\"'")).name.lower()
     if binary in ("powershell", "powershell.exe", "pwsh", "pwsh.exe"):
-        for tok in tokens[1:]:
+        for tok in eff_tokens[1:]:
             clean = tok.strip("\"'").lower()
             if clean.startswith("-") or clean.startswith("/"):
                 flag = clean.lstrip("-/")
@@ -831,28 +927,33 @@ def evaluate_command(
             )
 
         # 0. Recursive evaluation of nested shell wrappers (powershell -c, bash -c, cmd /c)
-        if depth < 5:
-            nested_cmd = extract_nested_shell_command(tokens)
-            if nested_cmd == "__GUARD_FAIL_CLOSED__":
+        nested_cmd = extract_nested_shell_command(tokens, raw_cmd=sub_cmd)
+        if nested_cmd == "__GUARD_FAIL_CLOSED__":
+            return (
+                "deny",
+                "Shell wrapper specifies -c command flag but command payload "
+                "cannot be safely parsed.",
+            )
+        if nested_cmd:
+            if depth >= MAX_NESTED_SHELL_DEPTH:
                 return (
                     "deny",
-                    "Shell wrapper specifies -c command flag but command payload "
-                    "cannot be safely parsed.",
+                    f"Maximum nested shell wrapper recursion depth ({MAX_NESTED_SHELL_DEPTH}) "
+                    "exceeded; execution denied to fail closed.",
                 )
-            if nested_cmd:
-                clean_nested = nested_cmd.strip()
-                if (clean_nested.startswith('"') and clean_nested.endswith('"')) or (
-                    clean_nested.startswith("'") and clean_nested.endswith("'")
-                ):
-                    clean_nested = clean_nested[1:-1]
-                nested_dec, nested_reason = evaluate_command(
-                    clean_nested,
-                    cwd=resolved_base_cwd,
-                    current_branch=current_branch,
-                    depth=depth + 1,
-                )
-                if nested_dec != "allow":
-                    return nested_dec, f"Nested shell wrapper blocked: {nested_reason}"
+            clean_nested = nested_cmd.strip()
+            if (clean_nested.startswith('"') and clean_nested.endswith('"')) or (
+                clean_nested.startswith("'") and clean_nested.endswith("'")
+            ):
+                clean_nested = clean_nested[1:-1]
+            nested_dec, nested_reason = evaluate_command(
+                clean_nested,
+                cwd=resolved_base_cwd,
+                current_branch=current_branch,
+                depth=depth + 1,
+            )
+            if nested_dec != "allow":
+                return nested_dec, f"Nested shell wrapper blocked: {nested_reason}"
 
         # 1. Parse git invocations and global options
         git_invocations = parse_git_invocations(tokens)
