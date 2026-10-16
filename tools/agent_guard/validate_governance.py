@@ -250,6 +250,103 @@ def validate_pre_push_hook(pre_push_path: Path) -> list[str]:
     return errors
 
 
+def validate_canonical_ownership(repo_root: Path) -> list[str]:
+    """Validate canonical owner ricardos081 and lack of obsolete operational references."""
+    errors: list[str] = []
+
+    # Check AGENTS.md and governance.md declare canonical repo
+    agents_file = repo_root / "AGENTS.md"
+    if agents_file.exists():
+        content = agents_file.read_text(encoding="utf-8")
+        if "ricardos081/tapjob" not in content:
+            errors.append("AGENTS.md must declare 'ricardos081/tapjob' as canonical repository.")
+
+    gov_rule = repo_root / ".agents" / "rules" / "governance.md"
+    if gov_rule.exists():
+        content = gov_rule.read_text(encoding="utf-8")
+        if "ricardos081/tapjob" not in content:
+            errors.append(
+                ".agents/rules/governance.md must declare 'ricardos081/tapjob' as canonical."
+            )
+
+    # Check that no obsolete operational references to old owner exist in active directories
+    target_needle = "ricardo" + "081683"
+    operational_dirs = [".agents", ".github", "infra", "tools"]
+    for dir_name in operational_dirs:
+        target_dir = repo_root / dir_name
+        if not target_dir.exists():
+            continue
+        for p in target_dir.rglob("*"):
+            if not p.is_file() or "__pycache__" in p.parts or p.suffix in (".pyc", ".pyo"):
+                continue
+            if p.name == "validate_governance.py":
+                continue
+            try:
+                text = p.read_text(encoding="utf-8", errors="ignore")
+                if target_needle in text:
+                    errors.append(
+                        f"Obsolete operational reference '{target_needle}' found in "
+                        f"{p.relative_to(repo_root)}."
+                    )
+            except (OSError, UnicodeDecodeError):
+                continue
+
+    return errors
+
+
+def validate_agent_factory_status(repo_root: Path) -> list[str]:
+    """Validate that AF-0 is recognized and AF-1 remains not started in PROJECT_STATE.md."""
+    errors: list[str] = []
+    proj_state = repo_root / "docs" / "PROJECT_STATE.md"
+    if not proj_state.exists():
+        return ["docs/PROJECT_STATE.md is missing."]
+
+    content = proj_state.read_text(encoding="utf-8")
+    if "AF-1 = NOT STARTED" not in content and "AF-1: NOT STARTED" not in content:
+        errors.append("docs/PROJECT_STATE.md must state that AF-1 is NOT STARTED.")
+
+    return errors
+
+
+def validate_required_rule_triggers(repo_root: Path) -> list[str]:
+    """Validate specific required triggers for core Antigravity rule files."""
+    errors: list[str] = []
+    rules_dir = repo_root / ".agents" / "rules"
+    if not rules_dir.exists():
+        return []
+
+    always_on_rules = [
+        "governance.md",
+        "git-workflow.md",
+        "runtime-safety.md",
+        "secrets-security.md",
+    ]
+    model_decision_rules = [
+        "architecture.md",
+        "quality-gates.md",
+    ]
+
+    for r_name in always_on_rules:
+        r_path = rules_dir / r_name
+        if r_path.exists():
+            content = r_path.read_text(encoding="utf-8")
+            fm, _ = parse_simple_yaml_frontmatter(content)
+            if fm and fm.get("trigger") != "always_on":
+                errors.append(f"{r_name} must have trigger 'always_on', got '{fm.get('trigger')}'.")
+
+    for r_name in model_decision_rules:
+        r_path = rules_dir / r_name
+        if r_path.exists():
+            content = r_path.read_text(encoding="utf-8")
+            fm, _ = parse_simple_yaml_frontmatter(content)
+            if fm and fm.get("trigger") != "model_decision":
+                errors.append(
+                    f"{r_name} must have trigger 'model_decision', got '{fm.get('trigger')}'."
+                )
+
+    return errors
+
+
 def validate_repository(repo_root: Path) -> list[str]:
     """Run full governance validation across the repository."""
     errors: list[str] = []
@@ -269,20 +366,29 @@ def validate_repository(repo_root: Path) -> list[str]:
         for rf in rule_files:
             errors.extend(validate_rule_frontmatter(rf))
 
-    # 3. Check .agents/hooks.json
+    # 3. Check specific required rule triggers
+    errors.extend(validate_required_rule_triggers(repo_root))
+
+    # 4. Check .agents/hooks.json
     hooks_file = repo_root / ".agents" / "hooks.json"
     if hooks_file.exists():
         errors.extend(validate_hooks_json(hooks_file, repo_root))
 
-    # 4. Check AGENTS.md invariants
+    # 5. Check AGENTS.md invariants
     agents_file = repo_root / "AGENTS.md"
     if agents_file.exists():
         errors.extend(validate_agents_md(agents_file))
 
-    # 5. Check .githooks/pre-push
+    # 6. Check .githooks/pre-push
     pre_push_file = repo_root / ".githooks" / "pre-push"
     if pre_push_file.exists():
         errors.extend(validate_pre_push_hook(pre_push_file))
+
+    # 7. Check canonical repository ownership and zero operational old-owner residuals
+    errors.extend(validate_canonical_ownership(repo_root))
+
+    # 8. Check Agent Factory status (AF-1 not started)
+    errors.extend(validate_agent_factory_status(repo_root))
 
     return errors
 

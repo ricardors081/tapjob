@@ -67,6 +67,16 @@ SHELL_WRAPPERS = {
 
 READER_BINARIES = {"cat", "type", "get-content", "gc", "more", "head", "tail"}
 
+# Environment variables used to retarget git repository, worktree, or configuration
+GIT_ENV_RETARGET_RE = re.compile(
+    r"(?:"
+    r"(?:\$env:|env:)\s*(?:GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_CONFIG|GIT_CONFIG_GLOBAL|GIT_CONFIG_SYSTEM|GIT_CONFIG_COUNT|GIT_CONFIG_PARAMETERS|GIT_CONFIG_KEY_\w+|GIT_CONFIG_VALUE_\w+)\b|"
+    r"\b(?:export|set|env)\s+(?:GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_CONFIG|GIT_CONFIG_GLOBAL|GIT_CONFIG_SYSTEM|GIT_CONFIG_COUNT|GIT_CONFIG_PARAMETERS|GIT_CONFIG_KEY_\w+|GIT_CONFIG_VALUE_\w+)\b|"
+    r"\b(?:GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_CONFIG|GIT_CONFIG_GLOBAL|GIT_CONFIG_SYSTEM|GIT_CONFIG_COUNT|GIT_CONFIG_PARAMETERS|GIT_CONFIG_KEY_\w+|GIT_CONFIG_VALUE_\w+)\s*="
+    r")",
+    re.IGNORECASE,
+)
+
 
 @dataclass
 class GitInvocation:
@@ -113,16 +123,18 @@ def get_current_git_branch(cwd: Path | str | None = None) -> str | None:
 
 
 def split_command_chain(cmd: str) -> list[str]:
-    """Split chained commands separated by &&, ;, || or newlines.
+    """Split chained commands separated by &&, ;, ||, &, |, or newlines.
 
-    Carefully handles quotes so tokens inside strings are not split.
+    Carefully handles quotes so tokens inside strings are not split, and distinguishes
+    normal shell redirections (2>&1, >&2, &>file) from command-separating & operators.
     """
     sub_commands: list[str] = []
     current: list[str] = []
     in_single = False
     in_double = False
     i = 0
-    while i < len(cmd):
+    n = len(cmd)
+    while i < n:
         char = cmd[i]
         if char == "'" and not in_double:
             in_single = not in_single
@@ -136,18 +148,47 @@ def split_command_chain(cmd: str) -> list[str]:
                 if segment:
                     sub_commands.append(segment)
                 current = []
-            elif char == "&" and i + 1 < len(cmd) and cmd[i + 1] == "&":
-                segment = "".join(current).strip()
-                if segment:
-                    sub_commands.append(segment)
-                current = []
-                i += 1  # Skip second &
-            elif char == "|" and i + 1 < len(cmd) and cmd[i + 1] == "|":
-                segment = "".join(current).strip()
-                if segment:
-                    sub_commands.append(segment)
-                current = []
-                i += 1  # Skip second |
+            elif char == "&":
+                if i + 1 < n and cmd[i + 1] == "&":
+                    # '&&' operator
+                    segment = "".join(current).strip()
+                    if segment:
+                        sub_commands.append(segment)
+                    current = []
+                    i += 1  # Skip second &
+                else:
+                    # Single '&':
+                    # Check if part of redirection: '>&' (e.g. 2>&1) or '&>' (e.g. &>file)
+                    prev_char = cmd[i - 1] if i > 0 else ""
+                    next_char = cmd[i + 1] if i + 1 < n else ""
+                    if prev_char == ">" or next_char == ">":
+                        # Redirection, NOT a command separator
+                        current.append(char)
+                    else:
+                        segment = "".join(current).strip()
+                        if segment:
+                            sub_commands.append(segment)
+                            current = []
+                        else:
+                            # If segment is empty, '&' is at start of command
+                            # (e.g. PowerShell call operator '& cmd')
+                            current.append(char)
+            elif char == "|":
+                if i + 1 < n and cmd[i + 1] == "|":
+                    # '||' operator
+                    segment = "".join(current).strip()
+                    if segment:
+                        sub_commands.append(segment)
+                    current = []
+                    i += 1  # Skip second |
+                else:
+                    # Single '|': pipeline separator (including '|&' pipeline)
+                    segment = "".join(current).strip()
+                    if segment:
+                        sub_commands.append(segment)
+                    current = []
+                    if i + 1 < n and cmd[i + 1] == "&":
+                        i += 1  # Skip '&' in '|&'
             else:
                 current.append(char)
         else:
@@ -219,12 +260,16 @@ def parse_git_invocations(tokens: list[str]) -> list[GitInvocation]:
                     elif opt_idx + 1 < n:
                         inv.git_dir = tokens[opt_idx + 1].strip("\"'")
                         opt_idx += 1
+                    else:
+                        inv.git_dir = ""
                 elif tok == "--work-tree" or tok.startswith("--work-tree="):
                     if "=" in tok:
                         inv.work_tree = tok.split("=", 1)[1]
                     elif opt_idx + 1 < n:
                         inv.work_tree = tokens[opt_idx + 1].strip("\"'")
                         opt_idx += 1
+                    else:
+                        inv.work_tree = ""
 
                 opt_idx += 1
 
@@ -270,19 +315,90 @@ def is_core_hookspath_tampering(inv: GitInvocation) -> tuple[bool, str]:
     return False, ""
 
 
+def is_git_alias_tampering_or_override(inv: GitInvocation) -> tuple[bool, str]:
+    """Check if command overrides Git aliases via -c or creates/modifies git config alias.*."""
+    # 1. Inline -c alias overrides and --config-env
+    for cfg in inv.config_overrides:
+        cfg_lower = cfg.lower()
+        if cfg_lower.startswith("alias.") or re.search(r"\balias\.[a-zA-Z0-9_\-]+", cfg_lower):
+            return (
+                True,
+                f"Defining or overriding Git aliases via git -c is strictly prohibited ({cfg}).",
+            )
+
+    # 2. git config alias.* modification
+    if inv.subcommand == "config":
+        combined_args = " ".join(inv.subcommand_args).lower()
+        if re.search(r"\balias\.[a-zA-Z0-9_\-]+", combined_args):
+            return (
+                True,
+                "Configuring or modifying Git aliases via 'git config alias.*' "
+                "is strictly prohibited.",
+            )
+
+    return False, ""
+
+
+def is_git_alias_invocation(subcommand: str | None, effective_cwd: Path | None) -> tuple[bool, str]:
+    """Detect if requested git subcommand resolves to a configured git alias."""
+    if not subcommand or subcommand.startswith("-"):
+        return False, ""
+
+    cmd = ["git", "config", "--get", f"alias.{subcommand}"]
+    cwd_str = str(effective_cwd) if effective_cwd and effective_cwd.is_dir() else None
+    try:
+        proc = subprocess.run(  # noqa: S603
+            cmd,
+            cwd=cwd_str,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=3,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            alias_val = proc.stdout.strip()
+            return (
+                True,
+                f"Invocation of configured Git alias '{subcommand}' ({alias_val}) "
+                "is prohibited by baseline governance.",
+            )
+    except (subprocess.SubprocessError, OSError):
+        pass
+
+    return False, ""
+
+
 def is_git_push_to_protected(
     inv: GitInvocation, effective_branch: str | None = None
 ) -> tuple[bool, str]:
-    """Check if git push targets main or master branch."""
+    """Check if git push targets main or master branch directly, in bulk, or via wildcards."""
     if inv.subcommand != "push":
         return False, ""
 
     args = inv.subcommand_args
-    # Non-flag arguments to push: [<repository>] [<refspec>...]
+
+    # 1. HARD DENY: Bulk push flags --all and --mirror
+    for arg in args:
+        lower_arg = arg.lower()
+        if lower_arg in ("--all", "--mirror") or lower_arg.startswith(("--all=", "--mirror=")):
+            return (
+                True,
+                f"Bulk push using '{arg}' is strictly prohibited as it targets protected branches.",
+            )
+
+    # 2. Check positional refspecs and arguments
     positional = [a for a in args if not a.startswith("-")]
 
     for arg in positional:
         lower_arg = arg.lower()
+
+        # Wildcard refspecs affecting protected branches
+        if "*" in lower_arg:
+            return (
+                True,
+                f"Wildcard push refspec '{arg}' is strictly prohibited by TapJob governance.",
+            )
+
         # Direct branch name: e.g. origin main
         if lower_arg in PROTECTED_BRANCHES:
             return True, f"Direct push to protected branch '{arg}' is strictly prohibited."
@@ -294,8 +410,13 @@ def is_git_push_to_protected(
             dest = clean_ref.split(":", 1)[1]
             if dest in PROTECTED_BRANCHES or dest in ("main", "master"):
                 return True, f"Pushing refspec to protected branch '{dest}' is strictly prohibited."
+            if "*" in dest:
+                return (
+                    True,
+                    f"Wildcard push destination refspec '{dest}' is strictly prohibited.",
+                )
 
-    # If no refspec specified, git pushes current branch to tracking upstream
+    # 3. If no refspec specified, git pushes current branch to tracking upstream
     if (
         (not positional or (len(positional) == 1 and not positional[0].startswith("refs/")))
         and effective_branch
@@ -544,16 +665,23 @@ def extract_nested_shell_command(tokens: list[str]) -> str | None:
     if binary not in SHELL_WRAPPERS:
         return None
 
-    # POSIX shells: sh -c <cmd>, bash -c <cmd>, zsh -c <cmd>
+    # POSIX shells: sh, bash, zsh, dash, ksh
     if binary in ("sh", "bash", "zsh", "dash", "ksh"):
         for i in range(1, len(tokens)):
             arg = tokens[i].strip("\"'")
-            if arg == "-c" and i + 1 < len(tokens):
-                return " ".join(tokens[i + 1 :])
-            if arg.startswith("-c") and len(arg) > 2:
-                return arg[2:]
+            # Support standalone -c or combined flag clusters like -lc, -ec, -xce
+            if arg.startswith("-") and not arg.startswith("--") and "c" in arg:
+                # If command argument follows as next token(s), extract it
+                if i + 1 < len(tokens):
+                    return " ".join(tokens[i + 1 :])
+                # Check for inline command attached (e.g. -c"cmd", -c=cmd, -lc"cmd")
+                c_idx = arg.index("c")
+                rem = arg[c_idx + 1 :].lstrip("=")
+                if rem:
+                    return rem
+                return "__GUARD_FAIL_CLOSED__"
 
-    # Windows CMD: cmd /c <cmd>
+    # Windows CMD: cmd /c <cmd>, cmd /k <cmd>
     if binary in ("cmd", "cmd.exe"):
         for i in range(1, len(tokens)):
             arg = tokens[i].strip("\"'").lower()
@@ -570,6 +698,22 @@ def extract_nested_shell_command(tokens: list[str]) -> str | None:
                 return arg.split("=", 1)[1]
 
     return None
+
+
+def is_powershell_encoded_command(tokens: list[str]) -> bool:
+    """Detect if command invokes PowerShell with encoded execution (-EncodedCommand/-enc/-e)."""
+    if not tokens:
+        return False
+    binary = Path(tokens[0].strip("\"'")).name.lower()
+    if binary in ("powershell", "powershell.exe", "pwsh", "pwsh.exe"):
+        for tok in tokens[1:]:
+            clean = tok.strip("\"'").lower()
+            if clean.startswith("-") or clean.startswith("/"):
+                flag = clean.lstrip("-/")
+                # Match -EncodedCommand, -enc, -encoded, -e, -en, etc.
+                if flag.startswith("enc") or flag in ("e", "en", "encodedcommand"):
+                    return True
+    return False
 
 
 def is_evolution_send_endpoint(cmd_str: str) -> bool:
@@ -589,13 +733,16 @@ def is_evolution_send_endpoint(cmd_str: str) -> bool:
 def is_guard_tampering(cmd_str: str) -> bool:
     """Check if command attempts to delete, disable, or tamper with agent guards/hooks."""
     lower = cmd_str.lower()
-    # Check for direct file redirection overwriting guards
-    if re.search(r">\s*(?:\.agents[/\\]hooks\.json|\.githooks[/\\]pre-push)", lower):
+    # Check for direct file redirection overwriting guards or git config
+    guard_redir_re = r">\s*(?:\.agents[/\\]hooks\.json|\.githooks[/\\]pre-push|\.git[/\\]config)"
+    if re.search(guard_redir_re, lower):
         return True
 
     # Tampering targets
     tamper_patterns = [
         "core.hookspath",
+        ".git/config",
+        ".git\\config",
         ".agents/hooks.json",
         ".agents\\hooks.json",
         ".githooks/pre-push",
@@ -663,13 +810,35 @@ def evaluate_command(
     sub_commands = split_command_chain(command_line)
 
     for sub_cmd in sub_commands:
+        # HARD DENY: Git environment variable retargeting
+        if GIT_ENV_RETARGET_RE.search(sub_cmd):
+            return (
+                "deny",
+                "Overriding repository or config targeting via Git environment variables "
+                "is strictly prohibited.",
+            )
+
         tokens = tokenize_command(sub_cmd)
         if not tokens:
             continue
 
+        # HARD DENY: Encoded PowerShell commands (-EncodedCommand/-enc/-e)
+        if is_powershell_encoded_command(tokens):
+            return (
+                "deny",
+                "Encoded PowerShell commands (-EncodedCommand/-enc) are strictly "
+                "prohibited by governance.",
+            )
+
         # 0. Recursive evaluation of nested shell wrappers (powershell -c, bash -c, cmd /c)
         if depth < 5:
             nested_cmd = extract_nested_shell_command(tokens)
+            if nested_cmd == "__GUARD_FAIL_CLOSED__":
+                return (
+                    "deny",
+                    "Shell wrapper specifies -c command flag but command payload "
+                    "cannot be safely parsed.",
+                )
             if nested_cmd:
                 clean_nested = nested_cmd.strip()
                 if (clean_nested.startswith('"') and clean_nested.endswith('"')) or (
@@ -688,6 +857,13 @@ def evaluate_command(
         # 1. Parse git invocations and global options
         git_invocations = parse_git_invocations(tokens)
         for inv in git_invocations:
+            # HARD DENY: --git-dir or --work-tree retargeting
+            if inv.git_dir is not None or inv.work_tree is not None:
+                return (
+                    "deny",
+                    "Specifying --git-dir or --work-tree is prohibited in agent Git invocations.",
+                )
+
             # Resolve effective Cwd for this specific git command
             effective_git_cwd = resolve_effective_cwd(resolved_base_cwd, inv.cwd_override)
             effective_branch = (
@@ -700,6 +876,16 @@ def evaluate_command(
             tamper_hook, hook_reason = is_core_hookspath_tampering(inv)
             if tamper_hook:
                 return "deny", hook_reason
+
+            # HARD DENY: Defining or modifying Git aliases
+            alias_ov, alias_ov_reason = is_git_alias_tampering_or_override(inv)
+            if alias_ov:
+                return "deny", alias_ov_reason
+
+            # HARD DENY: Invocation of configured Git aliases
+            alias_inv, alias_reason = is_git_alias_invocation(inv.subcommand, effective_git_cwd)
+            if alias_inv:
+                return "deny", alias_reason
 
             # HARD DENY: Direct git push to main / master
             push_prot, push_reason = is_git_push_to_protected(inv, effective_branch)

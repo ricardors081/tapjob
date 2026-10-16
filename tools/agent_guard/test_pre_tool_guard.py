@@ -440,6 +440,226 @@ class TestPreToolGuard(unittest.TestCase):
             )
             self.assertEqual(res_feat2.get("decision"), "allow")
 
+    def test_git_dir_and_work_tree_denied(self) -> None:
+        """Adversarial tests: --git-dir and --work-tree must be strictly denied."""
+        denied_commands = [
+            "git --git-dir=/tmp/other.git commit -m 'test'",
+            "git --work-tree=/tmp/other commit -m 'test'",
+            "git --git-dir=/tmp/other.git --work-tree=/tmp/other commit -m 'test'",
+            "git --git-dir=.git push origin feat/test",
+            "git --work-tree=. status",
+            "git --git-dir=/path status",
+        ]
+        for cmd in denied_commands:
+            with self.subTest(cmd=cmd):
+                decision, reason = evaluate_command(cmd, current_branch="feat/test")
+                self.assertEqual(
+                    decision,
+                    "deny",
+                    f"Command '{cmd}' with --git-dir/--work-tree must be denied, "
+                    f"got {decision} ({reason})",
+                )
+
+    def test_git_env_retargeting_denied(self) -> None:
+        """Adversarial tests: Git environment variable overrides must be strictly denied."""
+        denied_env_commands = [
+            "GIT_DIR=/tmp/main.git git commit -m 'test'",
+            "GIT_WORK_TREE=/tmp/main git commit -m 'test'",
+            "export GIT_DIR=/tmp/main.git && git commit -m 'test'",
+            "$env:GIT_DIR = '/tmp/main.git'; git commit -m 'test'",
+            "$env:GIT_WORK_TREE = '/tmp/main'; git commit -m 'test'",
+            "env GIT_COMMON_DIR=/tmp git commit -m 'test'",
+            "Set-Item env:GIT_CONFIG /tmp/gitconfig",
+            "set GIT_CONFIG_GLOBAL=/tmp/gitconfig",
+            "GIT_CONFIG_COUNT=1 git commit -m 'test'",
+        ]
+        for cmd in denied_env_commands:
+            with self.subTest(cmd=cmd):
+                decision, reason = evaluate_command(cmd, current_branch="feat/test")
+                self.assertEqual(
+                    decision,
+                    "deny",
+                    f"Git env retargeting '{cmd}' must be denied, got {decision} ({reason})",
+                )
+
+    def test_git_alias_inline_and_config_denied(self) -> None:
+        """Tests: inline aliases (-c alias.*) and git config alias.* must be denied."""
+        denied_alias_commands = [
+            "git -c alias.x='!echo test' x",
+            "git -c alias.foo='status' foo",
+            "git -c alias.p='push origin main' p",
+            "git --config-env=alias.x=MY_ENV x",
+            "git config alias.mycmd '!echo test'",
+            "git config --global alias.st 'status'",
+            "git config --local alias.cm 'commit'",
+            "git config --unset alias.mycmd",
+        ]
+        for cmd in denied_alias_commands:
+            with self.subTest(cmd=cmd):
+                decision, reason = evaluate_command(cmd, current_branch="feat/test")
+                self.assertEqual(
+                    decision,
+                    "deny",
+                    f"Alias command '{cmd}' must be denied, got {decision} ({reason})",
+                )
+
+    def test_configured_alias_invocation_denied_in_repo(self) -> None:
+        """Tests: invoking any configured git alias in target repo must be detected and denied."""
+        import shutil
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repo_path = Path(tmp_dir) / "repo"
+            repo_path.mkdir()
+            git_bin = shutil.which("git") or "git"
+
+            subprocess.run(  # noqa: S603
+                [git_bin, "init", "-b", "feat/test"],
+                cwd=str(repo_path),
+                check=True,
+                capture_output=True,
+            )
+            # Configure a shell alias
+            subprocess.run(  # noqa: S603
+                [git_bin, "config", "alias.mytest", "!echo safe-test"],
+                cwd=str(repo_path),
+                check=True,
+                capture_output=True,
+            )
+            # Configure a built-in alias expansion
+            subprocess.run(  # noqa: S603
+                [git_bin, "config", "alias.st", "status"],
+                cwd=str(repo_path),
+                check=True,
+                capture_output=True,
+            )
+
+            # Invocation of shell alias must be denied
+            dec_test, r_test = evaluate_command("git mytest", cwd=repo_path)
+            self.assertEqual(dec_test, "deny")
+            self.assertIn("alias", r_test.lower())
+
+            # Invocation of status alias must be denied
+            dec_st, r_st = evaluate_command("git st", cwd=repo_path)
+            self.assertEqual(dec_st, "deny")
+            self.assertIn("alias", r_st.lower())
+
+            # Regular git status must remain allowed
+            dec_status, _ = evaluate_command("git status", cwd=repo_path)
+            self.assertEqual(dec_status, "allow")
+
+    def test_nested_shell_combined_posix_flags(self) -> None:
+        """Tests: combined POSIX flags like -lc, -ec, -xce must be parsed and inspected."""
+        denied_nested = [
+            'bash -lc "git push origin main"',
+            'sh -ec "cat .env"',
+            'bash -xce "git push origin main"',
+            'zsh -lc "gh pr merge 52"',
+            "bash -c",
+        ]
+        for cmd in denied_nested:
+            with self.subTest(cmd=cmd):
+                decision, reason = evaluate_command(cmd, current_branch="feat/test")
+                self.assertEqual(
+                    decision,
+                    "deny",
+                    f"Combined flag wrapper '{cmd}' must be denied, got {decision} ({reason})",
+                )
+
+        # Harmless combined flag wrapper allowed
+        dec_safe, _ = evaluate_command('bash -lc "npm test"', current_branch="feat/test")
+        self.assertEqual(dec_safe, "allow")
+
+    def test_single_ampersand_and_pipe_chaining(self) -> None:
+        """Tests: single & (when not redirection) and single | pipeline separators are parsed."""
+        denied_chains = [
+            'cmd /c "echo safe & git push origin main"',
+            'sh -c "echo safe | cat .env"',
+            "echo safe & git push origin main",
+            "npm test | cat .env",
+        ]
+        for cmd in denied_chains:
+            with self.subTest(cmd=cmd):
+                decision, reason = evaluate_command(cmd, current_branch="feat/test")
+                self.assertEqual(
+                    decision,
+                    "deny",
+                    f"Chained command '{cmd}' must be denied, got {decision} ({reason})",
+                )
+
+        # Normal shell redirection must NOT be split as command separator
+        safe_redirections = [
+            "npm test 2>&1",
+            "pytest > /dev/null 2>&1",
+            "npm run check 2>&1",
+        ]
+        for cmd in safe_redirections:
+            with self.subTest(cmd=cmd):
+                decision, reason = evaluate_command(cmd, current_branch="feat/test")
+                self.assertEqual(
+                    decision,
+                    "allow",
+                    f"Redirection '{cmd}' must be allowed, got {decision} ({reason})",
+                )
+
+    def test_powershell_encoded_command_denied(self) -> None:
+        """Tests: PowerShell -EncodedCommand / -enc must be strictly denied."""
+        denied_encoded = [
+            "powershell -EncodedCommand JABlAG4AdgA6A...",
+            "pwsh -enc VABlAHMAdAA=",
+            "powershell.exe -e 'dGVzdA=='",
+            "pwsh -encodedcommand 'dGVzdA=='",
+        ]
+        for cmd in denied_encoded:
+            with self.subTest(cmd=cmd):
+                decision, reason = evaluate_command(cmd, current_branch="feat/test")
+                self.assertEqual(
+                    decision,
+                    "deny",
+                    f"Encoded command '{cmd}' must be denied, got {decision} ({reason})",
+                )
+
+        # Normal PowerShell command execution allowed
+        dec_normal, _ = evaluate_command(
+            'powershell -Command "npm test"', current_branch="feat/test"
+        )
+        self.assertEqual(dec_normal, "allow")
+
+    def test_bulk_and_wildcard_push_denied(self) -> None:
+        """Tests: bulk push (--all, --mirror) and wildcard refspecs must be denied."""
+        denied_pushes = [
+            "git push --all origin",
+            "git push --all",
+            "git push --mirror origin",
+            "git push --mirror",
+            "git push origin refs/heads/*:refs/heads/*",
+            "git push origin +refs/heads/*",
+            "git push origin *",
+            "git push origin refs/heads/*",
+        ]
+        for cmd in denied_pushes:
+            with self.subTest(cmd=cmd):
+                decision, reason = evaluate_command(cmd, current_branch="feat/test")
+                self.assertEqual(
+                    decision,
+                    "deny",
+                    f"Bulk/wildcard push '{cmd}' must be denied, got {decision} ({reason})",
+                )
+
+        # Explicit feature-only push remains allowed
+        allowed_pushes = [
+            "git push origin feat/valid-branch",
+            "git push -u origin feat/valid-branch",
+            "git push origin chore/agent-factory-af0-governance",
+        ]
+        for cmd in allowed_pushes:
+            with self.subTest(cmd=cmd):
+                decision, reason = evaluate_command(cmd, current_branch="feat/valid-branch")
+                self.assertEqual(
+                    decision,
+                    "allow",
+                    f"Feature push '{cmd}' must be allowed, got {decision} ({reason})",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
