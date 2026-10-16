@@ -4,7 +4,7 @@ import { describe, test } from "node:test";
 import { validateImageDigest, validateImageRef } from "./validate_image_ref.mjs";
 
 const VALID_DIGEST = "a".repeat(64);
-const REF = `ghcr.io/ricardo081683/tapjob-backend@sha256:${VALID_DIGEST}`;
+const REF = `ghcr.io/ricardos081/tapjob-backend@sha256:${VALID_DIGEST}`;
 
 describe("validateImageRef", () => {
   test("a valid sha256 digest reference passes", () => {
@@ -19,33 +19,33 @@ describe("validateImageRef", () => {
   });
 
   test("a bare ':latest' tag (no digest) fails", () => {
-    const result = validateImageRef("ghcr.io/ricardo081683/tapjob-backend:latest");
+    const result = validateImageRef("ghcr.io/ricardos081/tapjob-backend:latest");
     assert.equal(result.ok, false);
     assert.match(result.problems[0], /immutable/);
   });
 
   test("a mutable tag with no digest at all fails", () => {
-    const result = validateImageRef("ghcr.io/ricardo081683/tapjob-backend:v1.2.3");
+    const result = validateImageRef("ghcr.io/ricardos081/tapjob-backend:v1.2.3");
     assert.equal(result.ok, false);
   });
 
   test("a bare repository name with no tag and no digest fails", () => {
-    const result = validateImageRef("ghcr.io/ricardo081683/tapjob-backend");
+    const result = validateImageRef("ghcr.io/ricardos081/tapjob-backend");
     assert.equal(result.ok, false);
   });
 
   test("a malformed digest (too short) fails", () => {
-    const result = validateImageRef("ghcr.io/ricardo081683/tapjob-backend@sha256:abc123");
+    const result = validateImageRef("ghcr.io/ricardos081/tapjob-backend@sha256:abc123");
     assert.equal(result.ok, false);
   });
 
   test("a digest with uppercase hex characters fails", () => {
-    const result = validateImageRef(`ghcr.io/ricardo081683/tapjob-backend@sha256:${"A".repeat(64)}`);
+    const result = validateImageRef(`ghcr.io/ricardos081/tapjob-backend@sha256:${"A".repeat(64)}`);
     assert.equal(result.ok, false);
   });
 
   test("a non-hex digest body fails", () => {
-    const result = validateImageRef(`ghcr.io/ricardo081683/tapjob-backend@sha256:${"g".repeat(64)}`);
+    const result = validateImageRef(`ghcr.io/ricardos081/tapjob-backend@sha256:${"g".repeat(64)}`);
     assert.equal(result.ok, false);
   });
 
@@ -66,7 +66,7 @@ describe("validateImageRef", () => {
   });
 
   test("a tag combined with a digest is rejected (digest alone is the promotion identity)", () => {
-    const result = validateImageRef(`ghcr.io/ricardo081683/tapjob-backend:v1@sha256:${VALID_DIGEST}`);
+    const result = validateImageRef(`ghcr.io/ricardos081/tapjob-backend:v1@sha256:${VALID_DIGEST}`);
     assert.equal(result.ok, false);
     assert.match(result.problems[0], /mutable tag with the digest/);
   });
@@ -84,7 +84,7 @@ describe("validateImageRef", () => {
   });
 
   test("a name component containing a space is rejected", () => {
-    const result = validateImageRef(`ghcr.io/ricardo081683/tapjob backend@sha256:${VALID_DIGEST}`);
+    const result = validateImageRef(`ghcr.io/ricardos081/tapjob backend@sha256:${VALID_DIGEST}`);
     assert.equal(result.ok, false);
   });
 });
@@ -110,7 +110,7 @@ describe("validateImageDigest", () => {
   });
 
   test("a full name@sha256:<digest> reference is rejected (no repo slot here)", () => {
-    const result = validateImageDigest(`ghcr.io/ricardo081683/tapjob-backend@sha256:${VALID_DIGEST}`);
+    const result = validateImageDigest(`ghcr.io/ricardos081/tapjob-backend@sha256:${VALID_DIGEST}`);
     assert.equal(result.ok, false);
   });
 

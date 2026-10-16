@@ -4,7 +4,7 @@
 // the unit of promotion between environments is an IMMUTABLE image digest, never a mutable tag.
 //
 // Accepts only `<name>@sha256:<64 lowercase hex characters>` -- e.g.
-// `ghcr.io/ricardo081683/tapjob-backend@sha256:<64 hex>`. Rejects, among other things, a bare
+// `ghcr.io/ricardos081/tapjob-backend@sha256:<64 hex>`. Rejects, among other things, a bare
 // `:latest` tag, any other mutable tag, a tag combined with a digest, a malformed/short/uppercase
 // digest, and an empty value. This intentionally does not implement the full OCI reference grammar
 // (docs/adr/0006-...md): it is a small, auditable allowlist of the one shape this deployment
@@ -74,7 +74,7 @@ export function validateImageRef(ref) {
  * Validates a BARE digest -- `sha256:<64 lowercase hex characters>` -- with no repository name,
  * no `@` separator and no tag slot at all (2026 review, Finding 2). This is the shape
  * `infra/compose.deploy.yaml`'s `BACKEND_IMAGE_DIGEST` variable must hold: the canonical
- * repository (`ghcr.io/ricardo081683/tapjob-backend`) is fixed directly in that file's image
+ * repository (`ghcr.io/ricardos081/tapjob-backend`) is fixed directly in that file's image
  * template, not interpolated from an environment variable, so there is no slot left for an
  * operator to substitute a foreign repository or a mutable tag into -- only this bare digest is
  * ever accepted as the variable part. `validateImageRef` above remains the full-reference

@@ -51,7 +51,7 @@ class TestPrePushHook(unittest.TestCase):
                 self.shell,
                 str(self.hook_path),
                 "origin",
-                "https://github.com/ricardo081683/tapjob.git",
+                "https://github.com/ricardos081/tapjob.git",
             ],
             input=stdin_text,
             capture_output=True,
