@@ -156,9 +156,11 @@ The `WorktreeDispatcher` (`tools/agent_factory/worktree_dispatcher.py`) provides
 1. **Isolation Topology**: Worktrees are created strictly outside the repository working tree in a sibling directory (`../tapjob-worktrees/<task-slug>` or custom `TAPJOB_WORKTREES_DIR`). Setting `worktrees_dir` to `repo_root` or inside `repo_root` is forbidden.
 2. **Branch Protection**: Dispatching on or creating branches named `main` or `master` is strictly prohibited (`InvalidBranchNameError`).
 3. **Base Commit Pinning**: Every worktree is created from an exact, verified 40-character hexadecimal commit SHA matching `^[0-9a-fA-F]{40}$`.
-4. **Dirty Worktree Protection**: Cleanup via `remove_worktree()` executes `git status --porcelain`. If uncommitted changes exist, cleanup is blocked with `DirtyWorktreeError`. Force deletion (`--force`) has been completely eliminated from production paths.
-5. **Target Bounds Protection**: `remove_worktree()` strictly refuses `repo_root`, paths outside `worktrees_dir`, or directories that are not registered Git worktrees belonging to the repository.
-6. **Scope Enforcement**: `validate_worktree_scope()` inspects all unstaged, staged, and committed changes against `allowed_paths` and `forbidden_paths`, blocking path traversal and directory escapes.
+4. **Persistent Cross-Process Task Registry**: All active task reservations and contracts persist to `<worktrees_dir>/.tapjob-agent-factory/registry.json` using atomic file replacement and directory locking (`_registry_lock`). Separate dispatcher instances and subprocesses reconstruct reservations from disk, preventing contract overwrites and detecting cross-instance path collisions. Corrupted or unparseable registries fail closed (`CorruptRegistryError`). Dispatcher provides `reconcile_registry()` to cleanly prune externally removed worktrees while keeping active reservations intact.
+5. **Role Permission & Scope Containment Enforcement**: Before creating a worktree, `_validate_role_ownership(contract)` checks the assigned role against the role registry. Write tasks assigned to read-only roles are rejected (`RolePermissionError`). Every declared `allowed_path` must be fully contained within the role's declared `ownership_paths` (`RoleOwnershipViolationError`).
+6. **Dirty Worktree Protection**: Cleanup via `remove_worktree()` executes `git status --porcelain`. If uncommitted changes exist, cleanup is blocked with `DirtyWorktreeError`. Force deletion (`--force`) has been completely eliminated from production paths.
+7. **Target Bounds Protection**: `remove_worktree()` strictly refuses `repo_root`, paths outside `worktrees_dir`, or directories that are not registered Git worktrees belonging to the repository.
+8. **Scope Enforcement & Mandatory Lifecycle Gate**: `validate_worktree_scope()` inspects all unstaged, staged, and committed changes against `allowed_paths` and `forbidden_paths`, blocking path traversal and directory escapes. If `git diff` or `git status` fails, validation fails closed with `ScopeViolationError`. Furthermore, `verify_task_scope(task_id)` is a mandatory lifecycle gate that verifies the worktree diff against the contract and marks the task as `scope_verified`. Calling `release_task(task_id)` without prior successful verification raises `ScopeVerificationRequiredError`.
 
 ---
 
@@ -193,3 +195,22 @@ python -m tools.agent_factory.bootstrap --list-worktrees
 python -m tools.agent_factory.bootstrap --export-manifests
 python -m tools.agent_factory.bootstrap --export-manifests custom/path
 ```
+
+---
+
+## 9. Test Suite & Verification
+
+The Agent Factory is verified by an extensive 25-test unit suite in `tools/agent_factory/test_agent_factory.py`, executed both locally and during GitHub CI:
+
+```bash
+uv run python -m unittest discover -s tools/agent_factory -p "test_*.py"
+```
+
+The test suite exercises:
+- 14 agent profiles, fail-closed boolean validation, and Antigravity payload serialization.
+- TaskContract schema validation, 40-char base SHA pinning, critical serial path locks, and pairwise disjoint ownership collision checks.
+- WorktreeDispatcher lifecycle: creation, dirty worktree protection, scope containment, and traversal defenses.
+- Persistent task registry: cross-instance discovery, corrupted registry fail-closed behavior, atomic persistence, and stale reconciliation.
+- Role permission and scope containment: write rejection for read-only roles, out-of-boundary path rejection.
+- Mandatory lifecycle gates: git diff failure handling and `verify_task_scope` gating before task release.
+- RepairLoopController: budget cap (5 loops), reviewer separation of duties, and unconditional `can_merge() == False`.

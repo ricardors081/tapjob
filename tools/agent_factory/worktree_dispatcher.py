@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import contextlib
+import json
 import os
 import re
 import shutil
 import subprocess
-from collections.abc import Sequence
+import time
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from tools.agent_factory.task_contract import TaskContract
+from tools.agent_factory.team import load_profile
 
 BRANCH_NAME_REGEX = re.compile(r"^(chore|feat|fix|docs|test|security|ops)/[a-zA-Z0-9_\-]+$")
 BLOCKED_BRANCHES = {"main", "master", "origin/main", "origin/master"}
@@ -42,6 +48,26 @@ class ScopeViolationError(WorktreeDispatchError):
     """Raised when changes in a worktree violate the allowed/forbidden path contract."""
 
 
+class DuplicateTaskIdError(WorktreeDispatchError):
+    """Raised when attempting to dispatch a task whose task_id is already registered."""
+
+
+class CorruptRegistryError(WorktreeDispatchError):
+    """Raised when the persistent task registry is malformed, unparseable, or invalid."""
+
+
+class RolePermissionError(WorktreeDispatchError):
+    """Raised when a task with write permissions is dispatched to a read-only role."""
+
+
+class RoleOwnershipViolationError(WorktreeDispatchError):
+    """Raised when a task claims allowed_paths outside the role's authorized ownership_paths."""
+
+
+class ScopeVerificationRequiredError(WorktreeDispatchError):
+    """Raised when release_task is invoked before verify_task_scope has succeeded."""
+
+
 @dataclass(frozen=True)
 class WorktreeInfo:
     """Descriptor for an active Git worktree."""
@@ -63,8 +89,137 @@ class WorktreeDispatcher:
     ) -> None:
         self.repo_root = self._resolve_repo_root(repo_root)
         self.worktrees_dir = self._resolve_worktrees_dir(worktrees_dir)
+        self.registry_dir = (self.worktrees_dir / ".tapjob-agent-factory").resolve()
+        self.registry_file = self.registry_dir / "registry.json"
+        self.lock_path = self.registry_dir / ".lock"
         self._active_contracts: dict[str, tuple[TaskContract, WorktreeInfo]] = {}
         self._reserved_tasks: dict[str, TaskContract] = {}
+
+    @contextmanager
+    def _registry_lock(self, timeout_seconds: float = 10.0) -> Iterator[None]:
+        """Cross-platform directory-based file lock ensuring single-writer registry mutations."""
+        self.registry_dir.mkdir(parents=True, exist_ok=True)
+        start_time = time.time()
+        acquired = False
+        while time.time() - start_time < timeout_seconds:
+            try:
+                self.lock_path.mkdir(parents=False, exist_ok=False)
+                acquired = True
+                break
+            except FileExistsError:
+                with contextlib.suppress(Exception):
+                    mtime = self.lock_path.stat().st_mtime
+                    if time.time() - mtime > 60:
+                        self.lock_path.rmdir()
+                        continue
+                time.sleep(0.05)
+        if not acquired:
+            raise WorktreeDispatchError(f"Timed out acquiring registry lock at '{self.lock_path}'.")
+        try:
+            yield
+        finally:
+            with contextlib.suppress(Exception):
+                self.lock_path.rmdir()
+
+    def _read_registry_file(self) -> dict[str, Any]:
+        """Read and validate the persistent registry file. Fails closed on corruption."""
+        if not self.registry_file.exists():
+            return {}
+        try:
+            raw = self.registry_file.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except Exception as exc:
+            raise CorruptRegistryError(
+                f"Failed to parse registry file '{self.registry_file}': {exc}"
+            ) from exc
+
+        if not isinstance(data, dict):
+            raise CorruptRegistryError(
+                f"Registry at '{self.registry_file}' must be a JSON object, "
+                f"got {type(data).__name__}"
+            )
+
+        required_keys = (
+            "task_id",
+            "owner_role",
+            "canonical_base_sha",
+            "target_branch",
+            "worktree_path",
+            "allowed_paths",
+            "forbidden_paths",
+            "parallel_safe",
+            "contracts_frozen",
+            "status",
+        )
+        for tid, entry in data.items():
+            if not isinstance(entry, dict):
+                raise CorruptRegistryError(
+                    f"Registry entry '{tid}' must be a dict, got {type(entry).__name__}"
+                )
+            for rk in required_keys:
+                if rk not in entry:
+                    raise CorruptRegistryError(
+                        f"Registry entry '{tid}' missing required field '{rk}'"
+                    )
+        return data
+
+    def _write_registry_file(self, data: dict[str, Any]) -> None:
+        """Atomically write the registry data to disk."""
+        self.registry_dir.mkdir(parents=True, exist_ok=True)
+        tmp_name = f"registry.json.tmp.{os.getpid()}.{time.time_ns()}"
+        tmp_file = self.registry_dir / tmp_name
+        tmp_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        tmp_file.replace(self.registry_file)
+
+    def reconcile_registry(self) -> list[str]:
+        """Prune stale entries from the persistent registry whose worktrees no longer exist."""
+        with self._registry_lock():
+            data = self._read_registry_file()
+            existing_worktrees = {w.worktree_path.resolve() for w in self.list_worktrees()}
+            stale: list[str] = []
+            for task_id, entry in list(data.items()):
+                wpath_str = entry.get("worktree_path", "")
+                if not wpath_str:
+                    continue
+                wpath = Path(wpath_str).resolve()
+                if not wpath.exists() and wpath not in existing_worktrees:
+                    stale.append(task_id)
+                    del data[task_id]
+            if stale:
+                self._write_registry_file(data)
+            return stale
+
+    def _validate_role_ownership(self, contract: TaskContract) -> None:
+        """Validate that the contract conforms to the owner_role's permissions and ownership."""
+        try:
+            profile = load_profile(contract.owner_role)
+        except Exception as exc:
+            raise WorktreeDispatchError(
+                f"Failed to load agent profile for owner_role '{contract.owner_role}': {exc}"
+            ) from exc
+
+        if not profile.enable_write_tools and contract.allowed_paths:
+            raise RolePermissionError(
+                f"Role '{contract.owner_role}' is read-only (enable_write_tools=False) "
+                "and cannot receive write tasks with allowed_paths."
+            )
+
+        for path in contract.allowed_paths:
+            norm_allowed = TaskContract._normalize_path(path).strip("/")
+            covered = False
+            for op in profile.ownership_paths:
+                norm_op = TaskContract._normalize_path(op).strip("/")
+                if norm_op in ("", "."):
+                    covered = True
+                    break
+                if norm_allowed == norm_op or norm_allowed.startswith(norm_op + "/"):
+                    covered = True
+                    break
+            if not covered:
+                raise RoleOwnershipViolationError(
+                    f"Role '{contract.owner_role}' is not authorized to modify path '{path}'. "
+                    f"Authorized ownership paths: {profile.ownership_paths}"
+                )
 
     def _resolve_repo_root(self, provided: Path | str | None) -> Path:
         """Resolve canonical repository root safely."""
@@ -361,7 +516,7 @@ class WorktreeDispatcher:
         contract: TaskContract,
         active_contracts: Sequence[TaskContract] | None = None,
     ) -> WorktreeInfo:
-        """Canonical dispatch: validate contract, SHA, branch, human-gate, and concurrency."""
+        """Canonical dispatch with persistent registry, role ownership, and duplicate guards."""
         # 1. contract.validate()
         contract.validate()
 
@@ -381,49 +536,112 @@ class WorktreeDispatcher:
                 "autonomous dispatch refused."
             )
 
-        # 6, 7, 8. Active tasks and parallel safety check
-        existing_active = list(self._reserved_tasks.values())
-        if active_contracts:
-            existing_active.extend(active_contracts)
-        peer_tasks = [t for t in existing_active if t.task_id != contract.task_id]
+        # 6. Role ownership and write permission check
+        self._validate_role_ownership(contract)
 
-        if peer_tasks:
-            if not contract.parallel_safe:
-                raise WorktreeDispatchError(
-                    f"Task '{contract.task_id}' is marked parallel_safe=False and cannot "
-                    "be dispatched concurrently."
+        # 7. Persistent registry check for duplicate task_id and concurrency checks
+        reservation_created = False
+        with self._registry_lock():
+            registry_data = self._read_registry_file()
+
+            # Fail closed on duplicate task_id
+            if contract.task_id in registry_data:
+                existing_status = registry_data[contract.task_id].get("status", "unknown")
+                raise DuplicateTaskIdError(
+                    f"Task '{contract.task_id}' is already registered with status "
+                    f"'{existing_status}'. Duplicate dispatch refused."
                 )
-            if not contract.contracts_frozen:
-                raise WorktreeDispatchError(
-                    "Parallel task dispatch requires contracts_frozen=True for task "
-                    f"'{contract.task_id}'."
-                )
-            for peer in peer_tasks:
-                if peer.canonical_base_sha != contract.canonical_base_sha:
-                    raise WorktreeDispatchError(
-                        f"Base SHA mismatch between concurrent tasks: '{contract.task_id}' "
-                        f"({contract.canonical_base_sha}) vs '{peer.task_id}' "
-                        f"({peer.canonical_base_sha})."
-                    )
-                if not peer.parallel_safe:
-                    raise WorktreeDispatchError(
-                        f"Concurrent active task '{peer.task_id}' is marked parallel_safe=False."
-                    )
-                if not peer.contracts_frozen:
-                    raise WorktreeDispatchError(
-                        f"Concurrent active task '{peer.task_id}' has contracts_frozen=False."
-                    )
-                conflicts = contract.check_ownership_conflict(peer)
-                if conflicts:
-                    raise OwnershipCollisionError(
-                        f"Ownership collision between '{contract.task_id}' and '{peer.task_id}': "
-                        f"{', '.join(conflicts)}"
-                    )
 
-        # 9. Reserve ownership before creating worktree
-        self._reserved_tasks[contract.task_id] = contract
+            # Reconstruct peer tasks from persistent registry
+            peer_tasks: list[TaskContract] = []
+            for _tid, entry in registry_data.items():
+                if "contract" in entry and isinstance(entry["contract"], dict):
+                    with contextlib.suppress(Exception):
+                        peer_tasks.append(TaskContract.from_dict(entry["contract"]))
+                else:
+                    with contextlib.suppress(Exception):
+                        peer_tasks.append(
+                            TaskContract(
+                                task_id=entry["task_id"],
+                                outcome="persistent_task",
+                                scope=entry.get("allowed_paths", []),
+                                non_goals=entry.get("non_goals", []),
+                                canonical_base_sha=entry["canonical_base_sha"],
+                                owner_role=entry["owner_role"],
+                                allowed_paths=entry.get("allowed_paths", []),
+                                forbidden_paths=entry.get("forbidden_paths", []),
+                                dependencies=entry.get("dependencies", []),
+                                contracts_frozen=entry.get("contracts_frozen", True),
+                                test_requirements=entry.get("test_requirements", ["unit tests"]),
+                                acceptance_criteria=entry.get(
+                                    "acceptance_criteria", ["scope verified"]
+                                ),
+                                risk_level=entry.get("risk_level", "LOW"),
+                                parallel_safe=entry.get("parallel_safe", True),
+                                human_gate_required=entry.get("human_gate_required", False),
+                                target_branch=entry.get("target_branch", ""),
+                            )
+                        )
 
-        # 10 & 11. Create worktree exactly from canonical_base_sha and associate
+            if active_contracts:
+                known_ids = {t.task_id for t in peer_tasks}
+                for ac in active_contracts:
+                    if ac.task_id != contract.task_id and ac.task_id not in known_ids:
+                        peer_tasks.append(ac)
+
+            if peer_tasks:
+                if not contract.parallel_safe:
+                    raise WorktreeDispatchError(
+                        f"Task '{contract.task_id}' is marked parallel_safe=False and cannot "
+                        "be dispatched concurrently."
+                    )
+                if not contract.contracts_frozen:
+                    raise WorktreeDispatchError(
+                        "Parallel task dispatch requires contracts_frozen=True for task "
+                        f"'{contract.task_id}'."
+                    )
+                for peer in peer_tasks:
+                    if peer.canonical_base_sha != contract.canonical_base_sha:
+                        raise WorktreeDispatchError(
+                            f"Base SHA mismatch between concurrent tasks: '{contract.task_id}' "
+                            f"({contract.canonical_base_sha}) vs '{peer.task_id}' "
+                            f"({peer.canonical_base_sha})."
+                        )
+                    if not peer.parallel_safe:
+                        raise WorktreeDispatchError(
+                            f"Concurrent active task '{peer.task_id}' is marked "
+                            "parallel_safe=False."
+                        )
+                    if not peer.contracts_frozen:
+                        raise WorktreeDispatchError(
+                            f"Concurrent active task '{peer.task_id}' has contracts_frozen=False."
+                        )
+                    conflicts = contract.check_ownership_conflict(peer)
+                    if conflicts:
+                        raise OwnershipCollisionError(
+                            f"Ownership collision between '{contract.task_id}' and "
+                            f"'{peer.task_id}': {', '.join(conflicts)}"
+                        )
+
+            # Reserve ownership in persistent registry before creating worktree
+            registry_data[contract.task_id] = {
+                "task_id": contract.task_id,
+                "owner_role": contract.owner_role,
+                "canonical_base_sha": contract.canonical_base_sha,
+                "target_branch": valid_branch,
+                "worktree_path": "",
+                "allowed_paths": contract.allowed_paths,
+                "forbidden_paths": contract.forbidden_paths,
+                "parallel_safe": contract.parallel_safe,
+                "contracts_frozen": contract.contracts_frozen,
+                "status": "reserved",
+                "scope_verified": False,
+                "contract": contract.to_dict(),
+            }
+            self._write_registry_file(registry_data)
+            reservation_created = True
+
+        # 8. Create worktree and promote status to active
         try:
             folder_id = contract.task_id.lower().replace("_", "-")
             info = self.create_worktree(
@@ -431,18 +649,147 @@ class WorktreeDispatcher:
                 base_sha=resolved_base,
                 worktree_id=folder_id,
             )
+            with self._registry_lock():
+                registry_data = self._read_registry_file()
+                if contract.task_id in registry_data:
+                    registry_data[contract.task_id]["worktree_path"] = str(
+                        info.worktree_path.resolve()
+                    )
+                    registry_data[contract.task_id]["status"] = "active"
+                    self._write_registry_file(registry_data)
             self._active_contracts[contract.task_id] = (contract, info)
+            self._reserved_tasks[contract.task_id] = contract
             return info
         except Exception:
-            self._reserved_tasks.pop(contract.task_id, None)
+            if reservation_created:
+                with contextlib.suppress(Exception), self._registry_lock():
+                    registry_data = self._read_registry_file()
+                    registry_data.pop(contract.task_id, None)
+                    self._write_registry_file(registry_data)
             raise
 
+    def verify_task_scope(self, task_id: str) -> None:
+        """Canonical verification: validate contract, worktree binding, branch, and scope."""
+        with self._registry_lock():
+            registry_data = self._read_registry_file()
+
+        if task_id not in registry_data:
+            raise WorktreeDispatchError(f"Task '{task_id}' not found in persistent registry.")
+
+        entry = registry_data[task_id]
+        wpath_str = entry.get("worktree_path", "")
+        if not wpath_str:
+            raise WorktreeDispatchError(
+                f"Task '{task_id}' has no associated worktree_path in registry."
+            )
+
+        wpath = Path(wpath_str).resolve()
+        if not wpath.exists():
+            raise ScopeViolationError(
+                f"Worktree path '{wpath}' for task '{task_id}' does not exist on disk."
+            )
+
+        registered_worktrees = {w.worktree_path.resolve() for w in self.list_worktrees()}
+        if wpath not in registered_worktrees:
+            raise ScopeViolationError(
+                f"Path '{wpath}' is not a registered git worktree of this repository."
+            )
+
+        # Validate branch binding
+        br_proc = subprocess.run(  # noqa: S603
+            [GIT_EXE, "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(wpath),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if br_proc.returncode != 0:
+            raise ScopeViolationError(
+                f"Failed to query branch in worktree '{wpath}': {br_proc.stderr.strip()}"
+            )
+        current_branch = br_proc.stdout.strip()
+        expected_branch = entry.get("target_branch")
+        if current_branch != expected_branch:
+            raise ScopeViolationError(
+                f"Branch mismatch for task '{task_id}': expected '{expected_branch}', "
+                f"got '{current_branch}'."
+            )
+
+        # Reconstruct contract
+        contract: TaskContract
+        if "contract" in entry and isinstance(entry["contract"], dict):
+            contract = TaskContract.from_dict(entry["contract"])
+        else:
+            contract = TaskContract(
+                task_id=entry["task_id"],
+                outcome="persistent_task",
+                scope=entry.get("allowed_paths", []),
+                non_goals=entry.get("non_goals", []),
+                canonical_base_sha=entry["canonical_base_sha"],
+                owner_role=entry["owner_role"],
+                allowed_paths=entry.get("allowed_paths", []),
+                forbidden_paths=entry.get("forbidden_paths", []),
+                dependencies=entry.get("dependencies", []),
+                contracts_frozen=entry.get("contracts_frozen", True),
+                test_requirements=entry.get("test_requirements", ["unit tests"]),
+                acceptance_criteria=entry.get("acceptance_criteria", ["scope verified"]),
+                risk_level=entry.get("risk_level", "LOW"),
+                parallel_safe=entry.get("parallel_safe", True),
+                human_gate_required=entry.get("human_gate_required", False),
+                target_branch=entry.get("target_branch", ""),
+            )
+        contract.validate()
+
+        # Verify base SHA exists in worktree git repo
+        sha_proc = subprocess.run(  # noqa: S603
+            [GIT_EXE, "cat-file", "-e", f"{contract.canonical_base_sha}^{{commit}}"],
+            cwd=str(wpath),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if sha_proc.returncode != 0:
+            raise ScopeViolationError(
+                f"Base SHA '{contract.canonical_base_sha}' does not exist in worktree '{wpath}'."
+            )
+
+        # Enforce scope
+        self.enforce_worktree_scope(contract, wpath)
+
+        # Mark scope_verified in persistent registry
+        with self._registry_lock():
+            registry_data = self._read_registry_file()
+            if task_id in registry_data:
+                registry_data[task_id]["status"] = "scope_verified"
+                registry_data[task_id]["scope_verified"] = True
+                self._write_registry_file(registry_data)
+
     def release_task(self, task_id: str) -> None:
-        """Safely clean up worktree and release ownership reservation."""
-        if task_id in self._active_contracts:
-            _, info = self._active_contracts[task_id]
-            self.remove_worktree(info.worktree_path)
-            del self._active_contracts[task_id]
+        """Safely clean up worktree and release ownership after mandatory scope verification."""
+        with self._registry_lock():
+            registry_data = self._read_registry_file()
+            if task_id not in registry_data:
+                return
+
+            entry = registry_data[task_id]
+            is_verified = (
+                entry.get("scope_verified", False) or entry.get("status") == "scope_verified"
+            )
+            if not is_verified:
+                raise ScopeVerificationRequiredError(
+                    f"Task '{task_id}' cannot be released before successful scope verification. "
+                    f"Call verify_task_scope('{task_id}') first."
+                )
+
+            wpath_str = entry.get("worktree_path")
+            if wpath_str:
+                wpath = Path(wpath_str).resolve()
+                self.remove_worktree(wpath)
+
+            del registry_data[task_id]
+            self._write_registry_file(registry_data)
+
+        self._active_contracts.pop(task_id, None)
         self._reserved_tasks.pop(task_id, None)
 
     def validate_worktree_scope(
@@ -453,7 +800,7 @@ class WorktreeDispatcher:
         """Verify altered files in worktree strictly adhere to allowed_paths and forbidden_paths."""
         target = Path(worktree_path).resolve()
         if not target.exists():
-            return [f"Worktree path '{target}' does not exist."]
+            raise ScopeViolationError(f"Worktree path '{target}' does not exist.")
 
         altered_files: set[str] = set()
 
@@ -466,7 +813,9 @@ class WorktreeDispatcher:
             check=False,
         )
         if st_proc.returncode != 0:
-            return [f"Failed to check git status in '{target}': {st_proc.stderr.strip()}"]
+            raise ScopeViolationError(
+                f"Failed to check git status in '{target}': {st_proc.stderr.strip()}"
+            )
 
         for line in st_proc.stdout.splitlines():
             line_str = line.strip()
@@ -487,11 +836,15 @@ class WorktreeDispatcher:
             text=True,
             check=False,
         )
-        if diff_proc.returncode == 0:
-            for line in diff_proc.stdout.splitlines():
-                clean_line = line.strip().strip('"').replace("\\", "/")
-                if clean_line:
-                    altered_files.add(clean_line)
+        if diff_proc.returncode != 0:
+            raise ScopeViolationError(
+                f"Failed to check git diff in '{target}': {diff_proc.stderr.strip()}"
+            )
+
+        for line in diff_proc.stdout.splitlines():
+            clean_line = line.strip().strip('"').replace("\\", "/")
+            if clean_line:
+                altered_files.add(clean_line)
 
         violations: list[str] = []
         for file_path in sorted(altered_files):

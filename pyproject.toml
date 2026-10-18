@@ -69,6 +69,7 @@ files = [
   "services/worker/tests",
   "packages/product-config/src",
   "packages/product-config/tests",
+  "tools/agent_factory",
 ]
 explicit_package_bases = true
 mypy_path = [
@@ -76,6 +77,7 @@ mypy_path = [
   "services/api/tests",
   "services/worker/src",
   "packages/product-config/src",
+  ".",
 ]
 
 [[tool.mypy.overrides]]
