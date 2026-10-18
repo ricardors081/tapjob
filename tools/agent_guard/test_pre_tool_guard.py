@@ -967,6 +967,48 @@ class TestPreToolGuard(unittest.TestCase):
                     f"Safe launcher command '{cmd}' should be allowed, got {decision} ({reason})",
                 )
 
+    def test_gnu_env_signal_options_adversarial(self) -> None:
+        """Tests: GNU env signal options (--default-signal, --ignore-signal, etc.)."""
+        denied_signal_cmds = [
+            "env --list-signal-handling gh pr merge 14",
+            "env --default-signal gh pr merge 14",
+            "env --ignore-signal gh pr merge 14",
+            "env --block-signal gh pr merge 14",
+            "env --list-signal-handling git push origin main",
+            "env --default-signal git push origin main",
+            "env --ignore-signal cat .env",
+            "env --block-signal cat .env",
+            "env --default-signal=PIPE gh pr merge 14",
+            "env --ignore-signal=INT git push origin main",
+            "env --block-signal=TERM cat .env",
+            # Invalid attached argument for zero-arg option fails closed
+            "env --list-signal-handling=SIG gh pr merge 14",
+        ]
+        for cmd in denied_signal_cmds:
+            with self.subTest(cmd=cmd):
+                decision, reason = evaluate_command(cmd, current_branch="feat/test")
+                self.assertEqual(
+                    decision,
+                    "deny",
+                    f"Signal command '{cmd}' must be denied, got {decision} ({reason})",
+                )
+
+        allowed_signal_cmds = [
+            "env --list-signal-handling git status",
+            "env --default-signal git status",
+            "env --default-signal=PIPE git status",
+            "env --ignore-signal=INT git status",
+            "env --block-signal=TERM git status",
+        ]
+        for cmd in allowed_signal_cmds:
+            with self.subTest(cmd=cmd):
+                decision, reason = evaluate_command(cmd, current_branch="feat/test")
+                self.assertEqual(
+                    decision,
+                    "allow",
+                    f"Safe signal command '{cmd}' should be allowed, got {decision} ({reason})",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

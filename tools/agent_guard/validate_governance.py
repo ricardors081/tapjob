@@ -35,6 +35,7 @@ REQUIRED_FILES = [
     "tools/agent_guard/test_validate_governance.py",
     "tools/agent_guard/install_local_guards.ps1",
     "tools/agent_guard/test_pre_push_hook.py",
+    "tools/agent_guard/test_runtime_smoke.py",
     ".githooks/pre-push",
     "docs/agent-factory/PERMISSION_MATRIX.md",
     "docs/agent-factory/AUTONOMY_MODEL.md",
@@ -148,8 +149,11 @@ def validate_rule_frontmatter(rule_path: Path) -> list[str]:
     return errors
 
 
+VALID_HOOK_EVENTS = {"PreToolUse", "PostToolUse", "PreInvocation", "PostInvocation", "Stop"}
+
+
 def validate_hooks_json(hooks_path: Path, repo_root: Path) -> list[str]:
-    """Validate hooks.json structure and check that referenced command scripts exist."""
+    """Validate hooks.json structure and fail closed if the required guard is missing or invalid."""
     errors: list[str] = []
     try:
         content = hooks_path.read_text(encoding="utf-8")
@@ -160,61 +164,151 @@ def validate_hooks_json(hooks_path: Path, repo_root: Path) -> list[str]:
     if not isinstance(data, dict):
         return [f"{hooks_path}: Top-level structure must be a JSON object."]
 
-    # Inspect each hook handler
+    if not data:
+        return [f"{hooks_path}: hooks.json must contain at least one hook configuration."]
+
+    has_valid_run_command_guard = False
+
     for hook_name, hook_spec in data.items():
         if not isinstance(hook_spec, dict):
             errors.append(f"{hooks_path}: Hook '{hook_name}' must be an object.")
             continue
 
-        # Look for PreToolUse, PostToolUse, etc.
-        for event in ("PreToolUse", "PostToolUse", "PreInvocation", "PostInvocation", "Stop"):
-            event_handlers = hook_spec.get(event)
-            if not event_handlers:
-                continue
+        # Check enabled property (must be true, cannot be disabled)
+        is_enabled = hook_spec.get("enabled", True)
+        if is_enabled is False:
+            errors.append(f"{hooks_path}: Hook '{hook_name}' is disabled; guard must be enabled.")
+            continue
+        if not isinstance(is_enabled, bool):
+            errors.append(f"{hooks_path}: Hook '{hook_name}' 'enabled' field must be a boolean.")
+            continue
 
-            if not isinstance(event_handlers, list):
+        # Detect unknown or typo events in hook spec
+        for key in hook_spec:
+            if key != "enabled" and key not in VALID_HOOK_EVENTS:
+                errors.append(f"{hooks_path}: Unknown or typo event '{key}' in hook '{hook_name}'.")
+
+        pre_tool_use = hook_spec.get("PreToolUse")
+        if pre_tool_use is not None:
+            if not isinstance(pre_tool_use, list) or not pre_tool_use:
                 errors.append(
-                    f"{hooks_path}: Event '{event}' in hook '{hook_name}' must be a list."
+                    f"{hooks_path}: Event 'PreToolUse' in hook '{hook_name}' must be a "
+                    "non-empty list."
                 )
                 continue
 
-            for group in event_handlers:
-                # Grouped events (PreToolUse, PostToolUse) contain 'hooks' list
-                handlers = (
-                    group.get("hooks") if isinstance(group, dict) and "hooks" in group else [group]
-                )
-                for handler in handlers:
+            for group_idx, group in enumerate(pre_tool_use):
+                if not isinstance(group, dict):
+                    errors.append(
+                        f"{hooks_path}: PreToolUse group [{group_idx}] in '{hook_name}' "
+                        "must be an object."
+                    )
+                    continue
+
+                matcher = group.get("matcher")
+                if not isinstance(matcher, str) or not matcher.strip():
+                    errors.append(
+                        f"{hooks_path}: PreToolUse group [{group_idx}] in '{hook_name}' "
+                        "missing string 'matcher'."
+                    )
+                    continue
+
+                # Matcher must match run_command
+                if matcher != "run_command" and not re.search(r"\brun_command\b", matcher):
+                    errors.append(
+                        f"{hooks_path}: PreToolUse matcher '{matcher}' in '{hook_name}' "
+                        "does not match 'run_command'."
+                    )
+                    continue
+
+                hooks_list = group.get("hooks")
+                if not isinstance(hooks_list, list) or not hooks_list:
+                    errors.append(
+                        f"{hooks_path}: PreToolUse group [{group_idx}] in '{hook_name}' "
+                        "must contain a non-empty 'hooks' list."
+                    )
+                    continue
+
+                for handler_idx, handler in enumerate(hooks_list):
                     if not isinstance(handler, dict):
-                        continue
-                    cmd = handler.get("command")
-                    if not cmd:
                         errors.append(
-                            f"{hooks_path}: Handler in '{hook_name}' is missing 'command'."
+                            f"{hooks_path}: Handler [{handler_idx}] in '{hook_name}' "
+                            "must be an object."
                         )
                         continue
 
-                    # Check if command refers to local scripts (e.g. pre_tool_guard.py)
+                    handler_type = handler.get("type", "command")
+                    if handler_type != "command":
+                        errors.append(
+                            f"{hooks_path}: Handler [{handler_idx}] in '{hook_name}' "
+                            f"has unsupported type '{handler_type}' (must be 'command')."
+                        )
+                        continue
+
+                    timeout = handler.get("timeout")
+                    if (
+                        timeout is None
+                        or isinstance(timeout, bool)
+                        or not isinstance(timeout, int)
+                        or timeout <= 0
+                    ):
+                        errors.append(
+                            f"{hooks_path}: Handler [{handler_idx}] in '{hook_name}' "
+                            "timeout must be a positive integer."
+                        )
+
+                    cmd = handler.get("command")
+                    if not cmd or not isinstance(cmd, str):
+                        errors.append(
+                            f"{hooks_path}: Handler [{handler_idx}] in '{hook_name}' "
+                            "missing 'command' string."
+                        )
+                        continue
+
+                    if "pre_tool_guard.py" not in cmd:
+                        errors.append(
+                            f"{hooks_path}: Handler [{handler_idx}] in '{hook_name}' "
+                            "command must reference 'pre_tool_guard.py'."
+                        )
+
+                    # Check script references
                     script_matches = re.findall(
                         r"['\"]?([a-zA-Z0-9_\-./\\]+\.(?:py|sh|mjs|js|ps1))['\"]?",
                         cmd,
                     )
                     if script_matches:
+                        script_missing = False
                         for script_rel in script_matches:
                             script_clean = script_rel.strip("'\"").replace("\\", "/")
                             script_full = (hooks_path.parent / script_clean).resolve()
                             if not script_full.exists():
                                 script_full = (repo_root / script_clean).resolve()
                             if not script_full.exists():
+                                script_missing = True
                                 err_msg = (
                                     f"Hook '{hook_name}' references non-existent "
                                     f"script '{script_rel}'."
                                 )
                                 errors.append(f"{hooks_path}: {err_msg}")
+                        if (
+                            not script_missing
+                            and "pre_tool_guard.py" in cmd
+                            and isinstance(timeout, int)
+                            and not isinstance(timeout, bool)
+                            and timeout > 0
+                        ):
+                            has_valid_run_command_guard = True
                     else:
                         errors.append(
                             f"{hooks_path}: Hook '{hook_name}' command does not "
                             "reference a valid script."
                         )
+
+    if not has_valid_run_command_guard and not any("is disabled" in e for e in errors):
+        errors.append(
+            f"{hooks_path}: No valid, enabled PreToolUse hook configuration found "
+            "protecting 'run_command' with pre_tool_guard.py."
+        )
 
     return errors
 

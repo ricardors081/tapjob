@@ -117,6 +117,170 @@ trigger: glob
             errors = validate_hooks_json(hooks_path, Path(tmpdir))
             self.assertTrue(any("references non-existent script" in e for e in errors))
 
+    def test_hooks_json_validation_disabled_guard(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            hooks_path = Path(tmpdir) / "hooks.json"
+            hooks_data = {
+                "agent-guard": {
+                    "enabled": False,
+                    "PreToolUse": [
+                        {
+                            "matcher": "run_command",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "python ../tools/agent_guard/pre_tool_guard.py",
+                                    "timeout": 30,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            }
+            hooks_path.write_text(json.dumps(hooks_data), encoding="utf-8")
+            errors = validate_hooks_json(hooks_path, Path(tmpdir))
+            self.assertTrue(any("is disabled; guard must be enabled" in e for e in errors))
+
+    def test_hooks_json_validation_bad_event_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            hooks_path = Path(tmpdir) / "hooks.json"
+            hooks_data = {
+                "agent-guard": {
+                    "enabled": True,
+                    "PreTool": [
+                        {
+                            "matcher": "run_command",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "python ../tools/agent_guard/pre_tool_guard.py",
+                                    "timeout": 30,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            }
+            hooks_path.write_text(json.dumps(hooks_data), encoding="utf-8")
+            errors = validate_hooks_json(hooks_path, Path(tmpdir))
+            self.assertTrue(any("Unknown or typo event 'PreTool'" in e for e in errors))
+
+    def test_hooks_json_validation_bad_matcher(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            hooks_path = Path(tmpdir) / "hooks.json"
+            hooks_data = {
+                "agent-guard": {
+                    "enabled": True,
+                    "PreToolUse": [
+                        {
+                            "matcher": "bash",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "python ../tools/agent_guard/pre_tool_guard.py",
+                                    "timeout": 30,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            }
+            hooks_path.write_text(json.dumps(hooks_data), encoding="utf-8")
+            errors = validate_hooks_json(hooks_path, Path(tmpdir))
+            self.assertTrue(any("does not match 'run_command'" in e for e in errors))
+
+    def test_hooks_json_validation_missing_or_empty_handlers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            hooks_path = Path(tmpdir) / "hooks.json"
+            hooks_data = {
+                "agent-guard": {
+                    "enabled": True,
+                    "PreToolUse": [
+                        {
+                            "matcher": "run_command",
+                            "hooks": [],
+                        }
+                    ],
+                }
+            }
+            hooks_path.write_text(json.dumps(hooks_data), encoding="utf-8")
+            errors = validate_hooks_json(hooks_path, Path(tmpdir))
+            self.assertTrue(any("must contain a non-empty 'hooks' list" in e for e in errors))
+
+    def test_hooks_json_validation_bad_handler_type(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            hooks_path = Path(tmpdir) / "hooks.json"
+            hooks_data = {
+                "agent-guard": {
+                    "enabled": True,
+                    "PreToolUse": [
+                        {
+                            "matcher": "run_command",
+                            "hooks": [
+                                {
+                                    "type": "http",
+                                    "command": "python ../tools/agent_guard/pre_tool_guard.py",
+                                    "timeout": 30,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            }
+            hooks_path.write_text(json.dumps(hooks_data), encoding="utf-8")
+            errors = validate_hooks_json(hooks_path, Path(tmpdir))
+            self.assertTrue(any("unsupported type 'http'" in e for e in errors))
+
+    def test_hooks_json_validation_invalid_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            hooks_path = Path(tmpdir) / "hooks.json"
+            hooks_data = {
+                "agent-guard": {
+                    "enabled": True,
+                    "PreToolUse": [
+                        {
+                            "matcher": "run_command",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "python ../tools/agent_guard/pre_tool_guard.py",
+                                    "timeout": -5,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            }
+            hooks_path.write_text(json.dumps(hooks_data), encoding="utf-8")
+            errors = validate_hooks_json(hooks_path, Path(tmpdir))
+            self.assertTrue(any("timeout must be a positive integer" in e for e in errors))
+
+    def test_hooks_json_validation_wrong_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            hooks_path = Path(tmpdir) / "hooks.json"
+            script = Path(tmpdir) / "other_script.py"
+            script.write_text("# other script", encoding="utf-8")
+            hooks_data = {
+                "agent-guard": {
+                    "enabled": True,
+                    "PreToolUse": [
+                        {
+                            "matcher": "run_command",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": f"python {script.name}",
+                                    "timeout": 30,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            }
+            hooks_path.write_text(json.dumps(hooks_data), encoding="utf-8")
+            errors = validate_hooks_json(hooks_path, Path(tmpdir))
+            self.assertTrue(any("must reference 'pre_tool_guard.py'" in e for e in errors))
+
     def test_validate_agents_md_invariants(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             agents_md = Path(tmpdir) / "AGENTS.md"

@@ -351,20 +351,22 @@ def extract_effective_tokens(tokens: list[str]) -> list[str]:
                         continue
                     return ["__GUARD_FAIL_CLOSED__"]
 
-                if opt_lower.startswith(
-                    (
-                        "--default-signal",
-                        "--ignore-signal",
-                        "--block-signal",
-                        "--list-signal-handling",
-                    )
+                if opt_lower == "--list-signal-handling":
+                    idx += 1
+                    continue
+
+                if opt_lower.startswith("--list-signal-handling="):
+                    return ["__GUARD_FAIL_CLOSED__"]
+
+                if opt_lower in ("--default-signal", "--ignore-signal", "--block-signal"):
+                    idx += 1
+                    continue
+
+                if (
+                    opt_lower.startswith("--default-signal=")
+                    or opt_lower.startswith("--ignore-signal=")
+                    or opt_lower.startswith("--block-signal=")
                 ):
-                    if "=" in opt_raw:
-                        idx += 1
-                        continue
-                    if idx + 1 < n and not tokens[idx + 1].strip("\"'").startswith("-"):
-                        idx += 2
-                        continue
                     idx += 1
                     continue
 
