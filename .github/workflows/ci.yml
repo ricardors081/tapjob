@@ -179,6 +179,8 @@ jobs:
         run: python3 tools/agent_guard/validate_governance.py
       - name: Agent guard and pre-push hook self-tests (deterministic synthetic suites)
         run: python3 -m unittest discover -s tools/agent_guard -p "test_*.py"
+      - name: Agent factory team dispatch and worktree self-tests (deterministic synthetic suites)
+        run: python3 -m unittest discover -s tools/agent_factory -p "test_*.py"
       - name: A dummy mutable tag is rejected as a digest (proves the gate, not just the unit tests)
         run: |
           if node tools/deploy/validate_image_ref.mjs --digest "latest"; then
