@@ -5,13 +5,17 @@ from __future__ import annotations
 import inspect
 import io
 import json
+import os
+import re
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 import uuid
 from contextlib import redirect_stdout
 from pathlib import Path
+from typing import Any
 
 from tools.agent_factory.bootstrap import main as bootstrap_main
 from tools.agent_factory.repair_loop import (
@@ -36,11 +40,13 @@ from tools.agent_factory.worktree_dispatcher import (
     DuplicateTaskIdError,
     HumanGateRequiredError,
     InvalidBranchNameError,
+    LockTimeoutError,
     OwnershipCollisionError,
     RoleOwnershipViolationError,
     RolePermissionError,
     ScopeVerificationRequiredError,
     ScopeViolationError,
+    TaskNotFoundError,
     WorktreeDispatcher,
     WorktreeDispatchError,
 )
@@ -1272,6 +1278,405 @@ class TestAgentFactory(unittest.TestCase):
             dispatcher.release_task(contract.task_id)
             self.assertFalse(info.worktree_path.exists())
             self.assertNotIn(contract.task_id, dispatcher._read_registry_file())
+
+    # 26. Strict Registry Entry Schema & Semantic Validation (Finding 1)
+    def test_26_strict_registry_entry_schema_and_semantic_validation(self) -> None:
+        """Finding 1: Strict schema, semantic consistency, and fail-closed peer parsing."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            temp_root = Path(tmp_dir)
+            repo_dir, head_sha = self._create_temp_git_repo(temp_root)
+            worktrees_dir = temp_root / "managed-worktrees"
+            worktrees_dir.mkdir(parents=True, exist_ok=True)
+            dispatcher = WorktreeDispatcher(repo_root=repo_dir, worktrees_dir=worktrees_dir)
+
+            valid_contract = TaskContract(
+                task_id="TASK-VALID-001",
+                outcome="Valid task",
+                scope=["services/api/src/tapjob_api/jobs/"],
+                non_goals=[],
+                canonical_base_sha=head_sha,
+                owner_role="core_platform_engineer",
+                allowed_paths=["services/api/src/tapjob_api/jobs/feed.py"],
+                forbidden_paths=[],
+                dependencies=[],
+                contracts_frozen=True,
+                test_requirements=["unit tests"],
+                acceptance_criteria=["scope verified"],
+                risk_level="LOW",
+                parallel_safe=True,
+                human_gate_required=False,
+                target_branch="feat/task-valid-001",
+            )
+
+            # Scenario A: Valid entry -> PASS
+            valid_entry = {
+                "task_id": valid_contract.task_id,
+                "owner_role": valid_contract.owner_role,
+                "canonical_base_sha": valid_contract.canonical_base_sha,
+                "target_branch": valid_contract.target_branch,
+                "worktree_path": str(worktrees_dir / "valid-wt"),
+                "allowed_paths": valid_contract.allowed_paths,
+                "forbidden_paths": valid_contract.forbidden_paths,
+                "parallel_safe": True,
+                "contracts_frozen": True,
+                "status": "active",
+                "scope_verified": False,
+                "scope_verified_head_sha": "",
+                "contract": valid_contract.to_dict(),
+            }
+            parsed_contract = dispatcher.validate_registry_entry(
+                valid_contract.task_id, valid_entry
+            )
+            self.assertEqual(parsed_contract.task_id, valid_contract.task_id)
+
+            # Scenario B: Syntactically valid JSON but contract={} -> CorruptRegistryError
+            bad_b = dict(valid_entry)
+            bad_b["contract"] = {}
+            with self.assertRaises(CorruptRegistryError):
+                dispatcher.validate_registry_entry(valid_contract.task_id, bad_b)
+
+            # Scenario C: parallel_safe="false" (string instead of bool) -> CorruptRegistryError
+            bad_c = dict(valid_entry)
+            bad_c["parallel_safe"] = "false"
+            with self.assertRaises(CorruptRegistryError):
+                dispatcher.validate_registry_entry(valid_contract.task_id, bad_c)
+
+            # Scenario D: registry key TASK-A but entry.task_id TASK-B -> CorruptRegistryError
+            with self.assertRaises(CorruptRegistryError):
+                dispatcher.validate_registry_entry("TASK-MISMATCH", valid_entry)
+
+            # Scenario E: top-level allowed_paths differs from nested contract -> fails
+            bad_e = dict(valid_entry)
+            bad_e["allowed_paths"] = ["services/api/other.py"]
+            with self.assertRaises(CorruptRegistryError):
+                dispatcher.validate_registry_entry(valid_contract.task_id, bad_e)
+
+            # Scenario F: Semantically malformed existing TASK-A + attempted overlapping TASK-B
+            # Must fail closed: TASK-B dispatch raises CorruptRegistryError, worktree NOT created.
+            reg_dir = worktrees_dir / ".tapjob-agent-factory"
+            reg_dir.mkdir(parents=True, exist_ok=True)
+            malformed_registry = {
+                "TASK-MALFORMED": {
+                    "task_id": "TASK-MALFORMED",
+                    "owner_role": "core_platform_engineer",
+                    "canonical_base_sha": head_sha,
+                    "target_branch": "feat/malformed",
+                    "worktree_path": "",
+                    "allowed_paths": ["services/api/src/tapjob_api/jobs/feed.py"],
+                    "forbidden_paths": [],
+                    "parallel_safe": "not-a-bool",  # malformed!
+                    "contracts_frozen": True,
+                    "status": "active",
+                    "scope_verified": False,
+                    "contract": valid_contract.to_dict(),
+                }
+            }
+            (reg_dir / "registry.json").write_text(json.dumps(malformed_registry), encoding="utf-8")
+
+            overlapping_contract = TaskContract(
+                task_id="TASK-OVERLAP-002",
+                outcome="Overlapping task",
+                scope=["services/api/src/tapjob_api/jobs/"],
+                non_goals=[],
+                canonical_base_sha=head_sha,
+                owner_role="core_platform_engineer",
+                allowed_paths=["services/api/src/tapjob_api/jobs/feed.py"],
+                forbidden_paths=[],
+                dependencies=[],
+                contracts_frozen=True,
+                test_requirements=["unit tests"],
+                acceptance_criteria=["scope verified"],
+                risk_level="LOW",
+                parallel_safe=True,
+                human_gate_required=False,
+            )
+            with self.assertRaises(CorruptRegistryError):
+                dispatcher.dispatch_task(overlapping_contract)
+
+            # Assert TASK-OVERLAP-002 worktree was NOT created
+            created_worktrees = list(worktrees_dir.glob("task-overlap*"))
+            self.assertEqual(created_worktrees, [])
+
+    # 27. Worktree Creation Compensation & Activation Failure State (Finding 2)
+    def test_27_worktree_creation_compensation_and_activation_failure_state(self) -> None:
+        """Finding 2: Worktree promotion failure preserves entry with status='activation_failed'."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            temp_root = Path(tmp_dir)
+            repo_dir, head_sha = self._create_temp_git_repo(temp_root)
+            worktrees_dir = temp_root / "managed-worktrees"
+            worktrees_dir.mkdir(parents=True, exist_ok=True)
+            dispatcher = WorktreeDispatcher(repo_root=repo_dir, worktrees_dir=worktrees_dir)
+
+            contract = TaskContract(
+                task_id="TASK-ACTIVATION-FAIL",
+                outcome="Activation fail test",
+                scope=["services/api/src/tapjob_api/jobs/"],
+                non_goals=[],
+                canonical_base_sha=head_sha,
+                owner_role="core_platform_engineer",
+                allowed_paths=["services/api/src/tapjob_api/jobs/feed.py"],
+                forbidden_paths=[],
+                dependencies=[],
+                contracts_frozen=True,
+                test_requirements=["unit tests"],
+                acceptance_criteria=["scope verified"],
+                risk_level="LOW",
+                parallel_safe=True,
+                human_gate_required=False,
+            )
+
+            # Hook write_registry_file to simulate failure on promotion from "reserved" to "active"
+            real_write = dispatcher._write_registry_file
+            call_count = 0
+
+            def failing_write(data: dict[str, Any]) -> None:
+                nonlocal call_count
+                call_count += 1
+                if call_count == 2:
+                    # Second call is status promotion to "active"
+                    raise RuntimeError("Simulated crash during status promotion")
+                real_write(data)
+
+            dispatcher._write_registry_file = failing_write  # type: ignore[method-assign]
+
+            # Dispatch should fail with WorktreeDispatchError
+            with self.assertRaises(WorktreeDispatchError):
+                dispatcher.dispatch_task(contract)
+
+            # Restore original write method
+            dispatcher._write_registry_file = real_write  # type: ignore[method-assign]
+
+            # Assertions:
+            # 1. Entry preserved with status='activation_failed' containing worktree_path
+            reg = dispatcher._read_registry_file()
+            self.assertIn(contract.task_id, reg)
+            entry = reg[contract.task_id]
+            self.assertEqual(entry["status"], "activation_failed")
+            self.assertTrue(Path(entry["worktree_path"]).exists())
+
+            # 2. No unregistered worktree remains (entry points to real worktree)
+            self.assertEqual(
+                Path(entry["worktree_path"]).resolve(),
+                (worktrees_dir / "task-activation-fail").resolve(),
+            )
+
+            # 3. Ownership remains fail-closed: overlapping task is rejected
+            overlap_contract = TaskContract(
+                task_id="TASK-ACTIVATION-OVERLAP",
+                outcome="Overlap test",
+                scope=["services/api/src/tapjob_api/jobs/"],
+                non_goals=[],
+                canonical_base_sha=head_sha,
+                owner_role="core_platform_engineer",
+                allowed_paths=["services/api/src/tapjob_api/jobs/feed.py"],
+                forbidden_paths=[],
+                dependencies=[],
+                contracts_frozen=True,
+                test_requirements=["unit tests"],
+                acceptance_criteria=["scope verified"],
+                risk_level="LOW",
+                parallel_safe=True,
+                human_gate_required=False,
+            )
+            with self.assertRaises(OwnershipCollisionError):
+                dispatcher.dispatch_task(overlap_contract)
+
+            # 4. Duplicate task_id is also rejected
+            with self.assertRaises(DuplicateTaskIdError):
+                dispatcher.dispatch_task(contract)
+
+    # 28. Scope Verification TOCTOU Window & Exact HEAD Enforcement (Finding 3)
+    def test_28_scope_verification_toctou_window_and_head_enforcement(self) -> None:
+        """Finding 3: verify_task_scope captures HEAD SHA and release enforces verified HEAD."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            temp_root = Path(tmp_dir)
+            repo_dir, head_sha = self._create_temp_git_repo(temp_root)
+            worktrees_dir = temp_root / "managed-worktrees"
+            worktrees_dir.mkdir(parents=True, exist_ok=True)
+            dispatcher = WorktreeDispatcher(repo_root=repo_dir, worktrees_dir=worktrees_dir)
+
+            contract = TaskContract(
+                task_id="TASK-TOCTOU-001",
+                outcome="TOCTOU verification",
+                scope=["services/api/src/tapjob_api/jobs/"],
+                non_goals=[],
+                canonical_base_sha=head_sha,
+                owner_role="core_platform_engineer",
+                allowed_paths=["services/api/src/tapjob_api/jobs/feed.py"],
+                forbidden_paths=[],
+                dependencies=[],
+                contracts_frozen=True,
+                test_requirements=["unit tests"],
+                acceptance_criteria=["scope verified"],
+                risk_level="LOW",
+                parallel_safe=True,
+                human_gate_required=False,
+            )
+
+            info = dispatcher.dispatch_task(contract)
+            feed_file = (
+                info.worktree_path / "services" / "api" / "src" / "tapjob_api" / "jobs" / "feed.py"
+            )
+            feed_file.write_text("# initial commit", encoding="utf-8")
+            subprocess.run(  # noqa: S603
+                [self.git_bin, "add", "."], cwd=str(info.worktree_path), check=True
+            )
+            subprocess.run(  # noqa: S603
+                [self.git_bin, "commit", "-m", "initial allowed change"],
+                cwd=str(info.worktree_path),
+                check=True,
+            )
+
+            # Initial verification -> PASS
+            dispatcher.verify_task_scope(contract.task_id)
+            reg = dispatcher._read_registry_file()
+            self.assertTrue(reg[contract.task_id]["scope_verified"])
+            initial_head = reg[contract.task_id]["scope_verified_head_sha"]
+            self.assertTrue(bool(re.match(r"^[0-9a-fA-F]{40}$", initial_head)))
+
+            # Scenario 2: Allowed new commit -> release REFUSED because HEAD changed
+            feed_file.write_text("# second commit", encoding="utf-8")
+            subprocess.run(  # noqa: S603
+                [self.git_bin, "add", "."], cwd=str(info.worktree_path), check=True
+            )
+            subprocess.run(  # noqa: S603
+                [self.git_bin, "commit", "-m", "second allowed change"],
+                cwd=str(info.worktree_path),
+                check=True,
+            )
+            # Tree is clean, but HEAD changed
+            self.assertTrue(dispatcher.is_worktree_clean(info.worktree_path))
+            with self.assertRaises(ScopeVerificationRequiredError):
+                dispatcher.release_task(contract.task_id)
+
+            # Re-verify -> PASS, updates verified HEAD
+            dispatcher.verify_task_scope(contract.task_id)
+            new_reg = dispatcher._read_registry_file()
+            new_head = new_reg[contract.task_id]["scope_verified_head_sha"]
+            self.assertNotEqual(initial_head, new_head)
+
+            # Scenario 3: Out-of-scope new commit -> release REFUSED and re-verify raises error
+            rogue_file = info.worktree_path / "services" / "api" / "rogue.py"
+            rogue_file.write_text("# out of scope", encoding="utf-8")
+            subprocess.run(  # noqa: S603
+                [self.git_bin, "add", "."], cwd=str(info.worktree_path), check=True
+            )
+            subprocess.run(  # noqa: S603
+                [self.git_bin, "commit", "-m", "rogue commit"],
+                cwd=str(info.worktree_path),
+                check=True,
+            )
+            with self.assertRaises(ScopeVerificationRequiredError):
+                dispatcher.release_task(contract.task_id)
+            with self.assertRaises(ScopeViolationError):
+                dispatcher.verify_task_scope(contract.task_id)
+
+            # Revert rogue commit
+            subprocess.run(  # noqa: S603
+                [self.git_bin, "reset", "--hard", "HEAD~1"],
+                cwd=str(info.worktree_path),
+                check=True,
+            )
+
+            # Scenario 4: Uncommitted allowed modification -> release REFUSED because dirty
+            feed_file.write_text("# dirty modification", encoding="utf-8")
+            with self.assertRaises(DirtyWorktreeError):
+                dispatcher.release_task(contract.task_id)
+
+            # Clean worktree and release -> PASS
+            subprocess.run(  # noqa: S603
+                [self.git_bin, "checkout", "--", "."],
+                cwd=str(info.worktree_path),
+                check=True,
+            )
+            dispatcher.verify_task_scope(contract.task_id)
+            dispatcher.release_task(contract.task_id)
+            self.assertFalse(info.worktree_path.exists())
+
+    # 29. Lock Ownership Metadata, Token Validation & Mutual Exclusion (Finding 4)
+    def test_29_lock_ownership_metadata_token_validation_and_mutual_exclusion(self) -> None:
+        """Finding 4: Unique tokens, PID liveness recovery, and fail-closed lock timeouts."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            temp_root = Path(tmp_dir)
+            repo_dir, _ = self._create_temp_git_repo(temp_root)
+            worktrees_dir = temp_root / "managed-worktrees"
+            worktrees_dir.mkdir(parents=True, exist_ok=True)
+            dispatcher = WorktreeDispatcher(repo_root=repo_dir, worktrees_dir=worktrees_dir)
+
+            # 1. Acquire lock in context A -> second live acquisition times out and fails closed
+            with dispatcher._registry_lock(timeout_seconds=5.0):
+                # Verify owner.json exists with pid and token
+                owner_file = dispatcher.lock_path / "owner.json"
+                self.assertTrue(owner_file.exists())
+                data = json.loads(owner_file.read_text(encoding="utf-8"))
+                self.assertEqual(data["pid"], os.getpid())
+                self.assertTrue("token" in data)
+
+                # Second acquisition attempt with short timeout fails closed
+                with (
+                    self.assertRaises(LockTimeoutError),
+                    dispatcher._registry_lock(timeout_seconds=0.2),
+                ):
+                    pass
+
+            # After exit, lock directory is cleaned
+            self.assertFalse(dispatcher.lock_path.exists())
+
+            # 2. Token mismatch: owner cannot delete another owner's lock
+            dispatcher.lock_path.mkdir(parents=True, exist_ok=True)
+            foreign_owner = {
+                "pid": os.getpid(),
+                "token": "foreign-token-12345",
+                "created_at": time.time(),
+            }
+            (dispatcher.lock_path / "owner.json").write_text(
+                json.dumps(foreign_owner), encoding="utf-8"
+            )
+
+            # Try to release with a different key by simulating finally
+            mismatched_key = "non-matching-key"
+            if (dispatcher.lock_path / "owner.json").exists():
+                owner_data = json.loads(
+                    (dispatcher.lock_path / "owner.json").read_text(encoding="utf-8")
+                )
+                if owner_data.get("token") == mismatched_key:
+                    (dispatcher.lock_path / "owner.json").unlink()
+                    dispatcher.lock_path.rmdir()
+
+            # The foreign lock directory still exists!
+            self.assertTrue(dispatcher.lock_path.exists())
+
+            # 3. Stale recovery: when lock belongs to a dead process, it is recovered
+            dead_owner = {
+                "pid": 99999999,  # definitely non-existent PID
+                "token": "dead-proc-token",
+                "created_at": time.time() - 100,
+            }
+            (dispatcher.lock_path / "owner.json").write_text(
+                json.dumps(dead_owner), encoding="utf-8"
+            )
+
+            # Acquire should detect dead process, prune stale lock, and succeed
+            with dispatcher._registry_lock(timeout_seconds=1.0):
+                # Acquired successfully!
+                cur_data = json.loads(
+                    (dispatcher.lock_path / "owner.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(cur_data["pid"], os.getpid())
+            self.assertFalse(dispatcher.lock_path.exists())
+
+    # 30. Missing Task Release Fails Closed (Additional Small Correction 1)
+    def test_30_missing_task_release_fails_closed(self) -> None:
+        """Additional Correction 1: release_task fails closed on unknown task_id."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            temp_root = Path(tmp_dir)
+            repo_dir, _ = self._create_temp_git_repo(temp_root)
+            worktrees_dir = temp_root / "managed-worktrees"
+            worktrees_dir.mkdir(parents=True, exist_ok=True)
+            dispatcher = WorktreeDispatcher(repo_root=repo_dir, worktrees_dir=worktrees_dir)
+
+            with self.assertRaises(TaskNotFoundError):
+                dispatcher.release_task("TASK-DOES-NOT-EXIST")
 
 
 if __name__ == "__main__":

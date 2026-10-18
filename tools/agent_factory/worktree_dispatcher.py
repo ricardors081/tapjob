@@ -8,15 +8,18 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
+import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from tools.agent_factory.task_contract import TaskContract
-from tools.agent_factory.team import load_profile
+from tools.agent_factory.team import ALL_ROLES, load_profile
 
 BRANCH_NAME_REGEX = re.compile(r"^(chore|feat|fix|docs|test|security|ops)/[a-zA-Z0-9_\-]+$")
 BLOCKED_BRANCHES = {"main", "master", "origin/main", "origin/master"}
@@ -68,6 +71,14 @@ class ScopeVerificationRequiredError(WorktreeDispatchError):
     """Raised when release_task is invoked before verify_task_scope has succeeded."""
 
 
+class LockTimeoutError(WorktreeDispatchError):
+    """Raised when acquiring the persistent registry lock times out."""
+
+
+class TaskNotFoundError(WorktreeDispatchError):
+    """Raised when attempting an operation on a task_id that does not exist in the registry."""
+
+
 @dataclass(frozen=True)
 class WorktreeInfo:
     """Descriptor for an active Git worktree."""
@@ -77,6 +88,195 @@ class WorktreeInfo:
     base_sha: str
     head_sha: str
     is_clean: bool
+
+
+def _is_pid_alive(pid: int) -> bool:
+    """Check if process with given PID is alive across Windows and POSIX."""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            process_query = 0x1000  # PROCESS_QUERY_LIMITED_INFORMATION
+            synchronize = 0x00100000  # SYNCHRONIZE
+            handle = ctypes.windll.kernel32.OpenProcess(process_query | synchronize, False, pid)
+            if handle == 0:
+                return False
+            try:
+                exit_code = ctypes.c_ulong()
+                if ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                    still_active = 259
+                    return exit_code.value == still_active
+                return False
+            finally:
+                ctypes.windll.kernel32.CloseHandle(handle)
+        except Exception:
+            return True  # Fail-closed: assume alive if inspection fails
+    else:
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError as err:
+            import errno
+
+            return err.errno != errno.ESRCH
+
+
+def validate_registry_entry(tid: str, entry: Any) -> TaskContract:
+    """Strictly validate a registry entry structurally and semantically.
+
+    Fails closed with CorruptRegistryError on any discrepancy.
+    """
+    if not isinstance(tid, str) or not tid.strip():
+        raise CorruptRegistryError(f"Registry key must be a non-empty string, got {tid!r}")
+    if not isinstance(entry, dict):
+        raise CorruptRegistryError(
+            f"Registry entry '{tid}' must be a dict, got {type(entry).__name__}"
+        )
+
+    task_id = entry.get("task_id")
+    if not isinstance(task_id, str) or not task_id.strip():
+        raise CorruptRegistryError(
+            f"Registry entry '{tid}' has invalid or missing 'task_id': {task_id!r}"
+        )
+    if tid != task_id:
+        raise CorruptRegistryError(
+            f"Registry key mismatch: key '{tid}' != entry.task_id '{task_id}'"
+        )
+
+    owner_role = entry.get("owner_role")
+    if not isinstance(owner_role, str) or owner_role not in ALL_ROLES:
+        raise CorruptRegistryError(f"Registry entry '{tid}' has invalid owner_role: {owner_role!r}")
+
+    base_sha = entry.get("canonical_base_sha")
+    if not isinstance(base_sha, str) or not bool(re.match(r"^[0-9a-fA-F]{40}$", base_sha)):
+        raise CorruptRegistryError(
+            f"Registry entry '{tid}' has invalid canonical_base_sha: {base_sha!r}"
+        )
+
+    target_branch = entry.get("target_branch")
+    if (
+        not isinstance(target_branch, str)
+        or not target_branch.strip()
+        or target_branch in ("main", "master")
+    ):
+        raise CorruptRegistryError(
+            f"Registry entry '{tid}' has invalid target_branch: {target_branch!r}"
+        )
+
+    worktree_path = entry.get("worktree_path")
+    if not isinstance(worktree_path, str):
+        raise CorruptRegistryError(
+            f"Registry entry '{tid}' has invalid worktree_path: {worktree_path!r}"
+        )
+
+    allowed_paths = entry.get("allowed_paths")
+    if not isinstance(allowed_paths, list) or not all(isinstance(p, str) for p in allowed_paths):
+        raise CorruptRegistryError(
+            f"Registry entry '{tid}' has invalid allowed_paths: {allowed_paths!r}"
+        )
+
+    forbidden_paths = entry.get("forbidden_paths")
+    if not isinstance(forbidden_paths, list) or not all(
+        isinstance(p, str) for p in forbidden_paths
+    ):
+        raise CorruptRegistryError(
+            f"Registry entry '{tid}' has invalid forbidden_paths: {forbidden_paths!r}"
+        )
+
+    parallel_safe = entry.get("parallel_safe")
+    if type(parallel_safe) is not bool:
+        tname = type(parallel_safe).__name__
+        raise CorruptRegistryError(
+            f"Registry entry '{tid}' parallel_safe must be strict bool, got {tname}"
+        )
+
+    contracts_frozen = entry.get("contracts_frozen")
+    if type(contracts_frozen) is not bool:
+        tname = type(contracts_frozen).__name__
+        raise CorruptRegistryError(
+            f"Registry entry '{tid}' contracts_frozen must be strict bool, got {tname}"
+        )
+
+    scope_verified = entry.get("scope_verified")
+    if type(scope_verified) is not bool:
+        tname = type(scope_verified).__name__
+        raise CorruptRegistryError(
+            f"Registry entry '{tid}' scope_verified must be strict bool, got {tname}"
+        )
+
+    status = entry.get("status")
+    valid_statuses = {"reserved", "active", "scope_verified", "activation_failed"}
+    if status not in valid_statuses:
+        raise CorruptRegistryError(
+            f"Registry entry '{tid}' has invalid status: {status!r}. "
+            f"Expected one of {sorted(valid_statuses)}"
+        )
+
+    if scope_verified:
+        verified_head = entry.get("scope_verified_head_sha")
+        if not isinstance(verified_head, str) or not bool(
+            re.match(r"^[0-9a-fA-F]{40}$", verified_head)
+        ):
+            raise CorruptRegistryError(
+                f"Registry entry '{tid}' is scope_verified but has invalid "
+                f"scope_verified_head_sha: {verified_head!r}"
+            )
+
+    nested_contract_dict = entry.get("contract")
+    if not isinstance(nested_contract_dict, dict) or not nested_contract_dict:
+        raise CorruptRegistryError(
+            f"Registry entry '{tid}' missing or empty nested 'contract' dict"
+        )
+
+    try:
+        contract = TaskContract.from_dict(nested_contract_dict)
+        contract.validate()
+    except Exception as exc:
+        raise CorruptRegistryError(
+            f"Registry entry '{tid}' has invalid nested TaskContract: {exc}"
+        ) from exc
+
+    # Cross-field consistency checks
+    if contract.task_id != task_id:
+        raise CorruptRegistryError(
+            f"Registry entry '{tid}' task_id '{task_id}' does not match "
+            f"nested contract.task_id '{contract.task_id}'"
+        )
+    if contract.owner_role != owner_role:
+        raise CorruptRegistryError(
+            f"Registry entry '{tid}' owner_role '{owner_role}' does not match "
+            f"nested contract.owner_role '{contract.owner_role}'"
+        )
+    if contract.canonical_base_sha != base_sha:
+        raise CorruptRegistryError(
+            f"Registry entry '{tid}' canonical_base_sha does not match nested contract"
+        )
+    if contract.allowed_paths != allowed_paths:
+        raise CorruptRegistryError(
+            f"Registry entry '{tid}' allowed_paths does not match nested contract.allowed_paths"
+        )
+    if contract.forbidden_paths != forbidden_paths:
+        raise CorruptRegistryError(
+            f"Registry entry '{tid}' forbidden_paths does not match nested contract.forbidden_paths"
+        )
+    if contract.parallel_safe is not parallel_safe:
+        raise CorruptRegistryError(
+            f"Registry entry '{tid}' parallel_safe does not match nested contract.parallel_safe"
+        )
+    if contract.contracts_frozen is not contracts_frozen:
+        raise CorruptRegistryError(
+            f"Registry entry '{tid}' contracts_frozen does not match nested "
+            "contract.contracts_frozen"
+        )
+    if contract.target_branch and contract.target_branch != target_branch:
+        raise CorruptRegistryError(
+            f"Registry entry '{tid}' target_branch '{target_branch}' does not match "
+            f"nested contract.target_branch '{contract.target_branch}'"
+        )
+
+    return contract
 
 
 class WorktreeDispatcher:
@@ -95,31 +295,57 @@ class WorktreeDispatcher:
         self._active_contracts: dict[str, tuple[TaskContract, WorktreeInfo]] = {}
         self._reserved_tasks: dict[str, TaskContract] = {}
 
+    validate_registry_entry = staticmethod(validate_registry_entry)
+
     @contextmanager
     def _registry_lock(self, timeout_seconds: float = 10.0) -> Iterator[None]:
         """Cross-platform directory-based file lock ensuring single-writer registry mutations."""
         self.registry_dir.mkdir(parents=True, exist_ok=True)
+        token = uuid.uuid4().hex
+        owner_file = self.lock_path / "owner.json"
         start_time = time.time()
         acquired = False
         while time.time() - start_time < timeout_seconds:
             try:
                 self.lock_path.mkdir(parents=False, exist_ok=False)
+                # Acquired directory lock. Write owner metadata.
+                owner_data = {
+                    "pid": os.getpid(),
+                    "token": token,
+                    "created_at": time.time(),
+                }
+                owner_file.write_text(json.dumps(owner_data), encoding="utf-8")
                 acquired = True
                 break
             except FileExistsError:
-                with contextlib.suppress(Exception):
-                    mtime = self.lock_path.stat().st_mtime
-                    if time.time() - mtime > 60:
-                        self.lock_path.rmdir()
-                        continue
+                # Lock directory exists. Check if owner process is dead.
+                if owner_file.exists():
+                    with contextlib.suppress(Exception):
+                        owner_data = json.loads(owner_file.read_text(encoding="utf-8"))
+                        owner_pid = owner_data.get("pid")
+                        if isinstance(owner_pid, int) and not _is_pid_alive(owner_pid):
+                            # Deterministically recover stale lock from dead process
+                            owner_file.unlink(missing_ok=True)
+                            with contextlib.suppress(Exception):
+                                self.lock_path.rmdir()
+                            continue
                 time.sleep(0.05)
+
         if not acquired:
-            raise WorktreeDispatchError(f"Timed out acquiring registry lock at '{self.lock_path}'.")
+            raise LockTimeoutError(
+                f"Timed out acquiring registry lock at '{self.lock_path}' after {timeout_seconds}s."
+            )
+
         try:
             yield
         finally:
-            with contextlib.suppress(Exception):
-                self.lock_path.rmdir()
+            if acquired:
+                with contextlib.suppress(Exception):
+                    if owner_file.exists():
+                        cur_data = json.loads(owner_file.read_text(encoding="utf-8"))
+                        if cur_data.get("token") == token:
+                            owner_file.unlink(missing_ok=True)
+                            self.lock_path.rmdir()
 
     def _read_registry_file(self) -> dict[str, Any]:
         """Read and validate the persistent registry file. Fails closed on corruption."""
@@ -139,28 +365,9 @@ class WorktreeDispatcher:
                 f"got {type(data).__name__}"
             )
 
-        required_keys = (
-            "task_id",
-            "owner_role",
-            "canonical_base_sha",
-            "target_branch",
-            "worktree_path",
-            "allowed_paths",
-            "forbidden_paths",
-            "parallel_safe",
-            "contracts_frozen",
-            "status",
-        )
         for tid, entry in data.items():
-            if not isinstance(entry, dict):
-                raise CorruptRegistryError(
-                    f"Registry entry '{tid}' must be a dict, got {type(entry).__name__}"
-                )
-            for rk in required_keys:
-                if rk not in entry:
-                    raise CorruptRegistryError(
-                        f"Registry entry '{tid}' missing required field '{rk}'"
-                    )
+            validate_registry_entry(tid, entry)
+
         return data
 
     def _write_registry_file(self, data: dict[str, Any]) -> None:
@@ -555,33 +762,7 @@ class WorktreeDispatcher:
             # Reconstruct peer tasks from persistent registry
             peer_tasks: list[TaskContract] = []
             for _tid, entry in registry_data.items():
-                if "contract" in entry and isinstance(entry["contract"], dict):
-                    with contextlib.suppress(Exception):
-                        peer_tasks.append(TaskContract.from_dict(entry["contract"]))
-                else:
-                    with contextlib.suppress(Exception):
-                        peer_tasks.append(
-                            TaskContract(
-                                task_id=entry["task_id"],
-                                outcome="persistent_task",
-                                scope=entry.get("allowed_paths", []),
-                                non_goals=entry.get("non_goals", []),
-                                canonical_base_sha=entry["canonical_base_sha"],
-                                owner_role=entry["owner_role"],
-                                allowed_paths=entry.get("allowed_paths", []),
-                                forbidden_paths=entry.get("forbidden_paths", []),
-                                dependencies=entry.get("dependencies", []),
-                                contracts_frozen=entry.get("contracts_frozen", True),
-                                test_requirements=entry.get("test_requirements", ["unit tests"]),
-                                acceptance_criteria=entry.get(
-                                    "acceptance_criteria", ["scope verified"]
-                                ),
-                                risk_level=entry.get("risk_level", "LOW"),
-                                parallel_safe=entry.get("parallel_safe", True),
-                                human_gate_required=entry.get("human_gate_required", False),
-                                target_branch=entry.get("target_branch", ""),
-                            )
-                        )
+                peer_tasks.append(TaskContract.from_dict(entry["contract"]))
 
             if active_contracts:
                 known_ids = {t.task_id for t in peer_tasks}
@@ -636,12 +817,15 @@ class WorktreeDispatcher:
                 "contracts_frozen": contract.contracts_frozen,
                 "status": "reserved",
                 "scope_verified": False,
+                "scope_verified_head_sha": "",
                 "contract": contract.to_dict(),
             }
             self._write_registry_file(registry_data)
             reservation_created = True
 
         # 8. Create worktree and promote status to active
+        worktree_created = False
+        worktree_info: WorktreeInfo | None = None
         try:
             folder_id = contract.task_id.lower().replace("_", "-")
             info = self.create_worktree(
@@ -649,24 +833,60 @@ class WorktreeDispatcher:
                 base_sha=resolved_base,
                 worktree_id=folder_id,
             )
+            worktree_created = True
+            worktree_info = info
+
             with self._registry_lock():
                 registry_data = self._read_registry_file()
-                if contract.task_id in registry_data:
-                    registry_data[contract.task_id]["worktree_path"] = str(
-                        info.worktree_path.resolve()
+                if contract.task_id not in registry_data:
+                    raise WorktreeDispatchError(
+                        f"Task '{contract.task_id}' reservation disappeared before activation."
                     )
-                    registry_data[contract.task_id]["status"] = "active"
-                    self._write_registry_file(registry_data)
+                registry_data[contract.task_id]["worktree_path"] = str(info.worktree_path.resolve())
+                registry_data[contract.task_id]["status"] = "active"
+                self._write_registry_file(registry_data)
+
             self._active_contracts[contract.task_id] = (contract, info)
             self._reserved_tasks[contract.task_id] = contract
             return info
-        except Exception:
-            if reservation_created:
-                with contextlib.suppress(Exception), self._registry_lock():
-                    registry_data = self._read_registry_file()
-                    registry_data.pop(contract.task_id, None)
-                    self._write_registry_file(registry_data)
-            raise
+        except Exception as exc:
+            if worktree_created and worktree_info is not None:
+                # Worktree created, but status promotion failed.
+                # Preserve reservation in fail-closed state ("activation_failed")
+                # with real worktree_path so future dispatches see ownership.
+                try:
+                    with self._registry_lock():
+                        rdata = self._read_registry_file()
+                        if contract.task_id in rdata:
+                            rdata[contract.task_id]["worktree_path"] = str(
+                                worktree_info.worktree_path.resolve()
+                            )
+                            rdata[contract.task_id]["status"] = "activation_failed"
+                            self._write_registry_file(rdata)
+                except Exception as recovery_exc:
+                    raise WorktreeDispatchError(
+                        f"Task '{contract.task_id}' activation failed ({exc}), and updating "
+                        f"registry to 'activation_failed' failed ({recovery_exc}). "
+                        f"Worktree remains at '{worktree_info.worktree_path}'."
+                    ) from exc
+                raise WorktreeDispatchError(
+                    f"Task '{contract.task_id}' worktree was created at "
+                    f"'{worktree_info.worktree_path}', but status promotion failed ({exc}). "
+                    "Entry preserved with status='activation_failed'."
+                ) from exc
+            else:
+                if reservation_created:
+                    try:
+                        with self._registry_lock():
+                            rdata = self._read_registry_file()
+                            rdata.pop(contract.task_id, None)
+                            self._write_registry_file(rdata)
+                    except Exception as cleanup_exc:
+                        raise WorktreeDispatchError(
+                            f"Failed to create worktree for '{contract.task_id}' ({exc}) "
+                            f"and failed to clean up reservation: {cleanup_exc}"
+                        ) from exc
+                raise
 
     def verify_task_scope(self, task_id: str) -> None:
         """Canonical verification: validate contract, worktree binding, branch, and scope."""
@@ -674,7 +894,7 @@ class WorktreeDispatcher:
             registry_data = self._read_registry_file()
 
         if task_id not in registry_data:
-            raise WorktreeDispatchError(f"Task '{task_id}' not found in persistent registry.")
+            raise TaskNotFoundError(f"Task '{task_id}' not found in persistent registry.")
 
         entry = registry_data[task_id]
         wpath_str = entry.get("worktree_path", "")
@@ -716,28 +936,7 @@ class WorktreeDispatcher:
             )
 
         # Reconstruct contract
-        contract: TaskContract
-        if "contract" in entry and isinstance(entry["contract"], dict):
-            contract = TaskContract.from_dict(entry["contract"])
-        else:
-            contract = TaskContract(
-                task_id=entry["task_id"],
-                outcome="persistent_task",
-                scope=entry.get("allowed_paths", []),
-                non_goals=entry.get("non_goals", []),
-                canonical_base_sha=entry["canonical_base_sha"],
-                owner_role=entry["owner_role"],
-                allowed_paths=entry.get("allowed_paths", []),
-                forbidden_paths=entry.get("forbidden_paths", []),
-                dependencies=entry.get("dependencies", []),
-                contracts_frozen=entry.get("contracts_frozen", True),
-                test_requirements=entry.get("test_requirements", ["unit tests"]),
-                acceptance_criteria=entry.get("acceptance_criteria", ["scope verified"]),
-                risk_level=entry.get("risk_level", "LOW"),
-                parallel_safe=entry.get("parallel_safe", True),
-                human_gate_required=entry.get("human_gate_required", False),
-                target_branch=entry.get("target_branch", ""),
-            )
+        contract = TaskContract.from_dict(entry["contract"])
         contract.validate()
 
         # Verify base SHA exists in worktree git repo
@@ -756,12 +955,32 @@ class WorktreeDispatcher:
         # Enforce scope
         self.enforce_worktree_scope(contract, wpath)
 
+        # Capture exact current worktree HEAD
+        head_proc = subprocess.run(  # noqa: S603
+            [GIT_EXE, "rev-parse", "HEAD"],
+            cwd=str(wpath),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if head_proc.returncode != 0:
+            raise ScopeViolationError(
+                f"Failed to resolve HEAD for worktree '{wpath}': {head_proc.stderr.strip()}"
+            )
+        verified_head_sha = head_proc.stdout.strip()
+        if not bool(re.match(r"^[0-9a-fA-F]{40}$", verified_head_sha)):
+            raise ScopeViolationError(
+                f"Invalid HEAD SHA '{verified_head_sha}' resolved for worktree '{wpath}'."
+            )
+
         # Mark scope_verified in persistent registry
         with self._registry_lock():
             registry_data = self._read_registry_file()
             if task_id in registry_data:
                 registry_data[task_id]["status"] = "scope_verified"
                 registry_data[task_id]["scope_verified"] = True
+                registry_data[task_id]["scope_verified_head_sha"] = verified_head_sha
+                registry_data[task_id]["scope_verified_at"] = datetime.now(UTC).isoformat()
                 self._write_registry_file(registry_data)
 
     def release_task(self, task_id: str) -> None:
@@ -769,11 +988,12 @@ class WorktreeDispatcher:
         with self._registry_lock():
             registry_data = self._read_registry_file()
             if task_id not in registry_data:
-                return
+                raise TaskNotFoundError(f"Task '{task_id}' not found in persistent registry.")
 
             entry = registry_data[task_id]
             is_verified = (
-                entry.get("scope_verified", False) or entry.get("status") == "scope_verified"
+                entry.get("scope_verified", False) is True
+                and entry.get("status") == "scope_verified"
             )
             if not is_verified:
                 raise ScopeVerificationRequiredError(
@@ -781,10 +1001,76 @@ class WorktreeDispatcher:
                     f"Call verify_task_scope('{task_id}') first."
                 )
 
+            verified_head = entry.get("scope_verified_head_sha", "")
+            if not isinstance(verified_head, str) or not bool(
+                re.match(r"^[0-9a-fA-F]{40}$", verified_head)
+            ):
+                raise ScopeVerificationRequiredError(
+                    f"Task '{task_id}' has invalid scope_verified_head_sha: '{verified_head}'."
+                )
+
             wpath_str = entry.get("worktree_path")
-            if wpath_str:
-                wpath = Path(wpath_str).resolve()
-                self.remove_worktree(wpath)
+            if not wpath_str:
+                raise WorktreeDispatchError(
+                    f"Task '{task_id}' has no associated worktree_path in registry."
+                )
+
+            wpath = Path(wpath_str).resolve()
+            if not wpath.exists():
+                raise ScopeViolationError(
+                    f"Worktree path '{wpath}' for task '{task_id}' does not exist on disk."
+                )
+
+            registered_worktrees = {w.worktree_path.resolve() for w in self.list_worktrees()}
+            if wpath not in registered_worktrees:
+                raise ScopeViolationError(
+                    f"Path '{wpath}' is not a registered git worktree of this repository."
+                )
+
+            # Check branch matches target_branch
+            br_proc = subprocess.run(  # noqa: S603
+                [GIT_EXE, "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=str(wpath),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if br_proc.returncode != 0:
+                raise ScopeViolationError(
+                    f"Failed to query branch in worktree '{wpath}': {br_proc.stderr.strip()}"
+                )
+            current_branch = br_proc.stdout.strip()
+            if current_branch != entry.get("target_branch"):
+                raise ScopeViolationError(
+                    f"Branch mismatch during release of task '{task_id}': "
+                    f"expected '{entry.get('target_branch')}', got '{current_branch}'."
+                )
+
+            # Verify worktree HEAD matches verified_head
+            head_proc = subprocess.run(  # noqa: S603
+                [GIT_EXE, "rev-parse", "HEAD"],
+                cwd=str(wpath),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if head_proc.returncode != 0:
+                err_msg = head_proc.stderr.strip()
+                raise ScopeViolationError(
+                    f"Failed to resolve HEAD during release of task '{task_id}': {err_msg}"
+                )
+            current_head = head_proc.stdout.strip()
+            if current_head != verified_head:
+                raise ScopeVerificationRequiredError(
+                    f"Worktree HEAD for task '{task_id}' has changed since scope verification "
+                    f"({current_head} != {verified_head}). Re-run verify_task_scope."
+                )
+
+            # Re-enforce scope and clean worktree before removal
+            contract = TaskContract.from_dict(entry["contract"])
+            self.enforce_worktree_scope(contract, wpath)
+
+            self.remove_worktree(wpath)
 
             del registry_data[task_id]
             self._write_registry_file(registry_data)

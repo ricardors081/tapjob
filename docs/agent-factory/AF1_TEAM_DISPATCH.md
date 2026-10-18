@@ -200,7 +200,7 @@ python -m tools.agent_factory.bootstrap --export-manifests custom/path
 
 ## 9. Test Suite & Verification
 
-The Agent Factory is verified by an extensive 25-test unit suite in `tools/agent_factory/test_agent_factory.py`, executed both locally and during GitHub CI:
+The Agent Factory is verified by an extensive 30-test unit suite in `tools/agent_factory/test_agent_factory.py`, executed both locally and during GitHub CI:
 
 ```bash
 uv run python -m unittest discover -s tools/agent_factory -p "test_*.py"
@@ -210,7 +210,9 @@ The test suite exercises:
 - 14 agent profiles, fail-closed boolean validation, and Antigravity payload serialization.
 - TaskContract schema validation, 40-char base SHA pinning, critical serial path locks, and pairwise disjoint ownership collision checks.
 - WorktreeDispatcher lifecycle: creation, dirty worktree protection, scope containment, and traversal defenses.
-- Persistent task registry: cross-instance discovery, corrupted registry fail-closed behavior, atomic persistence, and stale reconciliation.
+- Persistent task registry: strict structural and semantic schema validation (`validate_registry_entry`), cross-instance discovery, corrupted registry fail-closed behavior, atomic persistence, and stale reconciliation.
 - Role permission and scope containment: write rejection for read-only roles, out-of-boundary path rejection.
-- Mandatory lifecycle gates: git diff failure handling and `verify_task_scope` gating before task release.
+- Worktree promotion compensation: failure during activation preserves the registry entry with `status="activation_failed"` and disk binding, preventing orphan worktrees and preserving ownership reservations.
+- Mandatory lifecycle gates: git diff failure handling, TOCTOU exact HEAD SHA pinning (`scope_verified_head_sha`), and fail-closed release gates before task release.
+- Mutex lock ownership: unique token per acquisition, process liveness checking for dead PID recovery, and fail-closed timeout (`LockTimeoutError`).
 - RepairLoopController: budget cap (5 loops), reviewer separation of duties, and unconditional `can_merge() == False`.
