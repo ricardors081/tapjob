@@ -251,22 +251,22 @@ def validate_pre_push_hook(pre_push_path: Path) -> list[str]:
 
 
 def validate_canonical_ownership(repo_root: Path) -> list[str]:
-    """Validate canonical owner ricardos081 and lack of obsolete operational references."""
+    """Validate canonical owner ricardors081 and lack of obsolete operational references."""
     errors: list[str] = []
 
     # Check AGENTS.md and governance.md declare canonical repo
     agents_file = repo_root / "AGENTS.md"
     if agents_file.exists():
         content = agents_file.read_text(encoding="utf-8")
-        if "ricardos081/tapjob" not in content:
-            errors.append("AGENTS.md must declare 'ricardos081/tapjob' as canonical repository.")
+        if "ricardors081/tapjob" not in content:
+            errors.append("AGENTS.md must declare 'ricardors081/tapjob' as canonical repository.")
 
     gov_rule = repo_root / ".agents" / "rules" / "governance.md"
     if gov_rule.exists():
         content = gov_rule.read_text(encoding="utf-8")
-        if "ricardos081/tapjob" not in content:
+        if "ricardors081/tapjob" not in content:
             errors.append(
-                ".agents/rules/governance.md must declare 'ricardos081/tapjob' as canonical."
+                ".agents/rules/governance.md must declare 'ricardors081/tapjob' as canonical."
             )
 
     # Check that no obsolete operational references to old owner exist in active directories

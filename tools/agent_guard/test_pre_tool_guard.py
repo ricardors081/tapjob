@@ -712,7 +712,7 @@ class TestPreToolGuard(unittest.TestCase):
             "env FOO=1 BAR=2 gh pr merge 52",
             "exec gh pr merge 52",
             "nohup gh pr merge 52",
-            "& curl -X PUT https://api.github.com/repos/ricardos081/tapjob/pulls/52/merge",
+            "& curl -X PUT https://api.github.com/repos/ricardors081/tapjob/pulls/52/merge",
             "& cat .env",
             "command cat .env",
             "env cat .env",
@@ -799,24 +799,24 @@ class TestPreToolGuard(unittest.TestCase):
         """Tests: PR merge endpoints and plural refs are unconditionally blocked."""
         denied_api_cmds = [
             # Unconditional block on /pulls/<n>/merge regardless of claimed GET method
-            "gh api repos/ricardos081/tapjob/pulls/52/merge -X GET",
-            "gh api repos/ricardos081/tapjob/pulls/52/merge --method GET",
-            "gh api repos/ricardos081/tapjob/pulls/52/merge",
-            'gh api repos/ricardos081/tapjob/pulls/52/merge -f commit_title="-X GET bypass"',
-            "curl -X GET https://api.github.com/repos/ricardos081/tapjob/pulls/52/merge",
-            "curl -X PUT https://api.github.com/repos/ricardos081/tapjob/pulls/52/merge",
+            "gh api repos/ricardors081/tapjob/pulls/52/merge -X GET",
+            "gh api repos/ricardors081/tapjob/pulls/52/merge --method GET",
+            "gh api repos/ricardors081/tapjob/pulls/52/merge",
+            'gh api repos/ricardors081/tapjob/pulls/52/merge -f commit_title="-X GET bypass"',
+            "curl -X GET https://api.github.com/repos/ricardors081/tapjob/pulls/52/merge",
+            "curl -X PUT https://api.github.com/repos/ricardors081/tapjob/pulls/52/merge",
             (
-                "curl -X PUT https://api.github.com/repos/ricardos081/tapjob/pulls/52/merge "
+                "curl -X PUT https://api.github.com/repos/ricardors081/tapjob/pulls/52/merge "
                 '-d \'{"title": "-X GET"}\''
             ),
             # Plural refs endpoint unconditionally blocked
-            "gh api repos/ricardos081/tapjob/git/refs/heads/main",
-            "gh api repos/ricardos081/tapjob/git/refs/heads/master",
-            "curl https://api.github.com/repos/ricardos081/tapjob/git/refs/heads/main",
+            "gh api repos/ricardors081/tapjob/git/refs/heads/main",
+            "gh api repos/ricardors081/tapjob/git/refs/heads/master",
+            "curl https://api.github.com/repos/ricardors081/tapjob/git/refs/heads/main",
             # Singular ref mutation blocked
-            "gh api repos/ricardos081/tapjob/git/ref/heads/main -X PATCH -f sha=123",
-            "curl -X DELETE https://api.github.com/repos/ricardos081/tapjob/git/ref/heads/main",
-            "curl -X PATCH https://api.github.com/repos/ricardos081/tapjob/git/ref/heads/main",
+            "gh api repos/ricardors081/tapjob/git/ref/heads/main -X PATCH -f sha=123",
+            "curl -X DELETE https://api.github.com/repos/ricardors081/tapjob/git/ref/heads/main",
+            "curl -X PATCH https://api.github.com/repos/ricardors081/tapjob/git/ref/heads/main",
         ]
         for cmd in denied_api_cmds:
             with self.subTest(cmd=cmd):
@@ -829,8 +829,8 @@ class TestPreToolGuard(unittest.TestCase):
 
         allowed_api_cmds = [
             # Singular ref read-only inspection allowed
-            "gh api repos/ricardos081/tapjob/git/ref/heads/main",
-            "curl https://api.github.com/repos/ricardos081/tapjob/git/ref/heads/main",
+            "gh api repos/ricardors081/tapjob/git/ref/heads/main",
+            "curl https://api.github.com/repos/ricardors081/tapjob/git/ref/heads/main",
             "gh pr view 52",
             "gh pr list",
         ]

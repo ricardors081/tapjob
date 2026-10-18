@@ -56,7 +56,7 @@ Antes de propor ou alterar código:
 
 ## 3. Fonte de verdade
 
-- GitHub (`ricardos081/tapjob`), branch `main`, é a fonte canônica.
+- GitHub (`ricardors081/tapjob`), branch `main`, é a fonte canônica.
 - Google Antigravity 2.0 é o orquestrador multiagente oficial do TapJob. Maestri NÃO faz parte do TapJob e é explicitamente excluído.
 - Decisões devem ser registradas em documentação ou ADR antes de se tornarem dependência estrutural.
 - `docs/PROJECT_STATE.md` deve refletir o estado real, não o estado desejado.

@@ -211,7 +211,7 @@ via `infra/compose.yaml`, unchanged.
 `infra/compose.deploy.yaml` (new) is the versioned, reproducible representation of the runtime
 deployment — distinct from `infra/compose.yaml` (local development, still builds the image
 locally; unchanged). `api`, `worker` and `migrate` all reference one YAML anchor (`x-backend`)
-whose image is `ghcr.io/ricardoo081/tapjob-backend@${BACKEND_IMAGE_DIGEST}` — the canonical
+whose image is `ghcr.io/ricardors081/tapjob-backend@${BACKEND_IMAGE_DIGEST}` — the canonical
 repository is a **fixed literal in the file**, not interpolated from an environment variable, and
 `BACKEND_IMAGE_DIGEST` supplies only a bare `sha256:<digest>` with no repository or tag slot at all
 (2026 review, Finding 1 of that round: the originally-designed `${BACKEND_IMAGE}` free-form

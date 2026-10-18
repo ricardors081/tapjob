@@ -213,7 +213,7 @@ describe("validateWorkflowRunShape", () => {
 });
 
 describe("buildWorkflowRunsApiArgs", () => {
-  const REPO = "ricardos081/tapjob";
+  const REPO = "ricardors081/tapjob";
 
   test("uses an explicit --method GET (gh api would otherwise silently switch to POST with -f fields)", () => {
     const args = buildWorkflowRunsApiArgs(SHA, REPO);

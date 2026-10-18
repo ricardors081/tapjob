@@ -13,7 +13,7 @@ description: Core governance rules, authority hierarchy, external review require
 
 ## 2. Canonical Source of Truth
 
-- **GitHub Repository (`ricardos081/tapjob`)**: The `main` branch on GitHub is the canonical source of truth.
+- **GitHub Repository (`ricardors081/tapjob`)**: The `main` branch on GitHub is the canonical source of truth.
 - **Documentation Precedence**:
   1. Accepted Architecture Decision Records (`docs/adr/`);
   2. Product Requirements Document (`docs/PRD.md`) and Feature Specs;
