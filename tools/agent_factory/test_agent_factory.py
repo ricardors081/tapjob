@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 from tools.agent_factory.repair_loop import (
@@ -150,7 +153,7 @@ class TestAgentFactory(unittest.TestCase):
                 repo_root=self.repo_root,
                 worktrees_dir=Path(tmp_worktrees_dir),
             )
-            branch = "feat/af1-smoke-test-branch-01"
+            branch = f"feat/af1-smoke-{uuid.uuid4().hex[:8]}"
             info = dispatcher.create_worktree(
                 branch_name=branch,
                 base_sha=DUMMY_SHA,
@@ -169,6 +172,12 @@ class TestAgentFactory(unittest.TestCase):
             finally:
                 dispatcher.remove_worktree(info.worktree_path)
                 self.assertFalse(info.worktree_path.exists())
+                subprocess.run(  # noqa: S603, S607
+                    ["git", "branch", "-D", branch],
+                    cwd=self.repo_root,
+                    capture_output=True,
+                    check=False,
+                )
 
     # 7. Duas tarefas parallel-safe conseguindo coexistir
     def test_07_parallel_safe_coexistence(self) -> None:
@@ -289,7 +298,7 @@ class TestAgentFactory(unittest.TestCase):
                 repo_root=self.repo_root,
                 worktrees_dir=Path(tmp_worktrees_dir),
             )
-            branch = "fix/af1-dirty-test"
+            branch = f"fix/af1-dirty-{uuid.uuid4().hex[:8]}"
             info = dispatcher.create_worktree(
                 branch_name=branch,
                 base_sha=DUMMY_SHA,
@@ -312,6 +321,12 @@ class TestAgentFactory(unittest.TestCase):
                 dirty_file.unlink()
             finally:
                 dispatcher.remove_worktree(info.worktree_path, force=True)
+                subprocess.run(  # noqa: S603, S607
+                    ["git", "branch", "-D", branch],
+                    cwd=self.repo_root,
+                    capture_output=True,
+                    check=False,
+                )
 
     # 12. Reviewer separado do implementer
     def test_12_reviewer_separated_from_implementer(self) -> None:

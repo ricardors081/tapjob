@@ -54,13 +54,13 @@ class TaskContract:
     title: str
     description: str
     assigned_role: str
-    base_commit_sha: str      # Exact 40-char SHA verified in Git
-    target_branch: str        # Feature/chore branch, never main/master
+    base_commit_sha: str  # Exact 40-char SHA verified in Git
+    target_branch: str  # Feature/chore branch, never main/master
     allowed_paths: list[str]  # Disjoint file tree ownership
     forbidden_paths: list[str]
     prohibited_actions: list[str]
     acceptance_criteria: list[str]
-    reviewer_role: str        # Must differ from assigned_role
+    reviewer_role: str  # Must differ from assigned_role
 ```
 
 ### Critical Serial Paths
