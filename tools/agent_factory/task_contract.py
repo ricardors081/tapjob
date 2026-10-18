@@ -15,12 +15,13 @@ VALID_RISK_LEVELS = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
 
 # Critical paths that can NEVER be modified concurrently by multiple parallel agents
 CRITICAL_SERIAL_PATHS = (
-    "services/api/alembic/versions/",
+    "services/api/alembic/",
     "services/api/src/tapjob_api/models/",
     "packages/product-config/",
     "packages/design-tokens/",
     ".agents/",
     "tools/agent_guard/",
+    "infra/",
 )
 
 
@@ -43,21 +44,32 @@ class TaskContract:
     risk_level: str
     parallel_safe: bool
     human_gate_required: bool
+    target_branch: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def validate(self) -> None:
         """Validate all required fields, SHA format, paths, and constraints."""
-        if not self.task_id or not isinstance(self.task_id, str) or not self.task_id.strip():
+        if not isinstance(self.task_id, str) or not self.task_id.strip():
             raise ValueError("TaskContract requires a non-empty string 'task_id'.")
 
-        if not self.outcome or not isinstance(self.outcome, str) or not self.outcome.strip():
+        if not isinstance(self.outcome, str) or not self.outcome.strip():
             raise ValueError(f"TaskContract '{self.task_id}' requires a non-empty 'outcome'.")
 
         if not isinstance(self.scope, list) or not self.scope:
             raise ValueError(f"TaskContract '{self.task_id}' requires a non-empty 'scope' list.")
+        for idx, item in enumerate(self.scope):
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError(
+                    f"TaskContract '{self.task_id}' 'scope' [{idx}] must be a non-empty string."
+                )
 
         if not isinstance(self.non_goals, list):
             raise ValueError(f"TaskContract '{self.task_id}' 'non_goals' must be a list.")
+        for idx, item in enumerate(self.non_goals):
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError(
+                    f"TaskContract '{self.task_id}' 'non_goals' [{idx}] must be a non-empty string."
+                )
 
         if not isinstance(self.canonical_base_sha, str) or not SHA_REGEX.match(
             self.canonical_base_sha.strip()
@@ -67,7 +79,7 @@ class TaskContract:
                 f"'{self.canonical_base_sha}'. Must be a 40-character git commit SHA."
             )
 
-        if self.owner_role not in ALL_ROLES:
+        if not isinstance(self.owner_role, str) or self.owner_role not in ALL_ROLES:
             raise ValueError(
                 f"TaskContract '{self.task_id}' has unknown 'owner_role' '{self.owner_role}'."
             )
@@ -76,9 +88,27 @@ class TaskContract:
             raise ValueError(
                 f"TaskContract '{self.task_id}' requires a non-empty list of 'allowed_paths'."
             )
+        for idx, p in enumerate(self.allowed_paths):
+            if not isinstance(p, str) or not p.strip():
+                raise ValueError(
+                    f"TaskContract '{self.task_id}' 'allowed_paths' [{idx}] must be a string."
+                )
+            if ".." in p or p.startswith("/") or p.startswith("\\"):
+                raise ValueError(
+                    f"TaskContract '{self.task_id}' allowed_path '{p}' has traversal/leading slash."
+                )
 
         if not isinstance(self.forbidden_paths, list):
             raise ValueError(f"TaskContract '{self.task_id}' 'forbidden_paths' must be a list.")
+        for idx, p in enumerate(self.forbidden_paths):
+            if not isinstance(p, str) or not p.strip():
+                raise ValueError(
+                    f"TaskContract '{self.task_id}' 'forbidden_paths' [{idx}] must be a string."
+                )
+            if ".." in p or p.startswith("/") or p.startswith("\\"):
+                raise ValueError(
+                    f"TaskContract '{self.task_id}' forbidden_path '{p}' has traversal or slash."
+                )
 
         # Check for direct contradiction between allowed and forbidden
         norm_allowed = [self._normalize_path(p) for p in self.allowed_paths]
@@ -94,33 +124,59 @@ class TaskContract:
 
         if not isinstance(self.dependencies, list):
             raise ValueError(f"TaskContract '{self.task_id}' 'dependencies' must be a list.")
+        for idx, dep in enumerate(self.dependencies):
+            if not isinstance(dep, str) or not dep.strip():
+                raise ValueError(
+                    f"TaskContract '{self.task_id}' 'dependencies' [{idx}] must be a string."
+                )
 
-        if not isinstance(self.contracts_frozen, bool):
+        if not isinstance(self.contracts_frozen, bool) or type(self.contracts_frozen) is not bool:
             raise ValueError(f"TaskContract '{self.task_id}' 'contracts_frozen' must be a boolean.")
 
         if not isinstance(self.test_requirements, list) or not self.test_requirements:
             raise ValueError(
                 f"TaskContract '{self.task_id}' requires non-empty 'test_requirements'."
             )
+        for idx, t in enumerate(self.test_requirements):
+            if not isinstance(t, str) or not t.strip():
+                raise ValueError(
+                    f"TaskContract '{self.task_id}' 'test_requirements' [{idx}] must be a string."
+                )
 
         if not isinstance(self.acceptance_criteria, list) or not self.acceptance_criteria:
             raise ValueError(
                 f"TaskContract '{self.task_id}' requires non-empty 'acceptance_criteria'."
             )
+        for idx, c in enumerate(self.acceptance_criteria):
+            if not isinstance(c, str) or not c.strip():
+                raise ValueError(
+                    f"TaskContract '{self.task_id}' 'acceptance_criteria' [{idx}] must be a string."
+                )
 
-        if self.risk_level.upper() not in VALID_RISK_LEVELS:
+        if not isinstance(self.risk_level, str) or self.risk_level.upper() not in VALID_RISK_LEVELS:
             raise ValueError(
                 f"TaskContract '{self.task_id}' has invalid risk_level '{self.risk_level}'. "
                 f"Must be one of {sorted(VALID_RISK_LEVELS)}."
             )
 
-        if not isinstance(self.parallel_safe, bool):
+        if not isinstance(self.parallel_safe, bool) or type(self.parallel_safe) is not bool:
             raise ValueError(f"TaskContract '{self.task_id}' 'parallel_safe' must be a boolean.")
 
-        if not isinstance(self.human_gate_required, bool):
+        if (
+            not isinstance(self.human_gate_required, bool)
+            or type(self.human_gate_required) is not bool
+        ):
             raise ValueError(
                 f"TaskContract '{self.task_id}' 'human_gate_required' must be a boolean."
             )
+
+        if not isinstance(self.target_branch, str):
+            raise ValueError(f"TaskContract '{self.task_id}' 'target_branch' must be a string.")
+        if not self.target_branch:
+            self.target_branch = f"feat/{self.task_id.lower().replace('_', '-')}"
+
+        if not isinstance(self.metadata, dict):
+            raise ValueError(f"TaskContract '{self.task_id}' 'metadata' must be a dict.")
 
     @staticmethod
     def _normalize_path(path_str: str) -> str:
@@ -189,24 +245,83 @@ class TaskContract:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TaskContract:
-        """Instantiate and validate TaskContract from dictionary."""
+        """Instantiate and validate TaskContract from dictionary with strict fail-closed types."""
+        if not isinstance(data, dict):
+            raise ValueError(f"TaskContract data must be a dict, got {type(data).__name__}")
+
+        # Required fields check
+        required_fields = [
+            "task_id",
+            "outcome",
+            "scope",
+            "canonical_base_sha",
+            "owner_role",
+            "allowed_paths",
+            "contracts_frozen",
+            "test_requirements",
+            "acceptance_criteria",
+            "risk_level",
+            "parallel_safe",
+            "human_gate_required",
+        ]
+        for field_name in required_fields:
+            if field_name not in data:
+                raise ValueError(f"TaskContract missing required field: '{field_name}'.")
+
+        # Strict boolean validation
+        for bool_field in ("contracts_frozen", "parallel_safe", "human_gate_required"):
+            val = data[bool_field]
+            if not isinstance(val, bool) or type(val) is not bool:
+                raise ValueError(
+                    f"Field '{bool_field}' must be a strict boolean, "
+                    f"got {type(val).__name__} ({val!r})"
+                )
+
+        # Strict list validation
+        for list_field in (
+            "scope",
+            "allowed_paths",
+            "test_requirements",
+            "acceptance_criteria",
+        ):
+            val = data[list_field]
+            if not isinstance(val, list):
+                raise ValueError(
+                    f"Field '{list_field}' must be a list, got {type(val).__name__} ({val!r})"
+                )
+
+        for opt_list_field in ("non_goals", "forbidden_paths", "dependencies"):
+            val = data.get(opt_list_field, [])
+            if not isinstance(val, list):
+                raise ValueError(
+                    f"Field '{opt_list_field}' must be a list, got {type(val).__name__} ({val!r})"
+                )
+
+        metadata_val = data.get("metadata", {})
+        if not isinstance(metadata_val, dict):
+            raise ValueError(
+                f"Field 'metadata' must be a dict, got {type(metadata_val).__name__} "
+                f"({metadata_val!r})"
+            )
+
         contract = cls(
             task_id=data["task_id"],
             outcome=data["outcome"],
-            scope=list(data["scope"]),
-            non_goals=list(data.get("non_goals", [])),
+            scope=data["scope"],
+            non_goals=data.get("non_goals", []),
             canonical_base_sha=data["canonical_base_sha"],
             owner_role=data["owner_role"],
-            allowed_paths=list(data["allowed_paths"]),
-            forbidden_paths=list(data.get("forbidden_paths", [])),
-            dependencies=list(data.get("dependencies", [])),
-            contracts_frozen=bool(data["contracts_frozen"]),
-            test_requirements=list(data["test_requirements"]),
-            acceptance_criteria=list(data["acceptance_criteria"]),
+            allowed_paths=data["allowed_paths"],
+            forbidden_paths=data.get("forbidden_paths", []),
+            dependencies=data.get("dependencies", []),
+            contracts_frozen=data["contracts_frozen"],
+            test_requirements=data["test_requirements"],
+            acceptance_criteria=data["acceptance_criteria"],
             risk_level=data["risk_level"],
-            parallel_safe=bool(data["parallel_safe"]),
-            human_gate_required=bool(data["human_gate_required"]),
-            metadata=dict(data.get("metadata", {})),
+            parallel_safe=data["parallel_safe"],
+            human_gate_required=data["human_gate_required"],
+            target_branch=data.get("target_branch", ""),
+            metadata=metadata_val,
         )
         contract.validate()
         return contract

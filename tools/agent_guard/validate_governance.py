@@ -463,21 +463,25 @@ def validate_canonical_ownership(repo_root: Path) -> list[str]:
 
 
 def validate_agent_factory_status(repo_root: Path) -> list[str]:
-    """Validate that AF-0 and AF-1 status is properly declared in PROJECT_STATE.md."""
+    """Validate that AF-0 is CLOSED_AND_VERIFIED and AF-1 is IN PROGRESS in PROJECT_STATE.md."""
     errors: list[str] = []
     proj_state = repo_root / "docs" / "PROJECT_STATE.md"
     if not proj_state.exists():
         return ["docs/PROJECT_STATE.md is missing."]
 
     content = proj_state.read_text(encoding="utf-8")
-    valid_states = (
-        "AF-1 = NOT STARTED",
-        "AF-1: NOT STARTED",
-        "AF-1 = IN PROGRESS",
-        "AF-1: IN PROGRESS",
+    af0_verified = any(
+        s in content for s in ("AF-0 = CLOSED_AND_VERIFIED", "AF-0: CLOSED_AND_VERIFIED")
     )
-    if not any(state in content for state in valid_states):
-        errors.append("docs/PROJECT_STATE.md must state that AF-1 is IN PROGRESS or NOT STARTED.")
+    if not af0_verified:
+        errors.append("docs/PROJECT_STATE.md must state that AF-0 is CLOSED_AND_VERIFIED.")
+
+    # At current HEAD, AF-1 is authorized and IN PROGRESS; reject regression to NOT STARTED
+    af1_in_progress = any(s in content for s in ("AF-1 = IN PROGRESS", "AF-1: IN PROGRESS"))
+    if not af1_in_progress:
+        errors.append(
+            "docs/PROJECT_STATE.md must state that AF-1 is IN PROGRESS (current branch HEAD)."
+        )
 
     return errors
 

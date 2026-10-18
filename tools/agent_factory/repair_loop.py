@@ -65,6 +65,17 @@ class RepairLoopController:
         reviewer_role: str,
         max_loops: int = MAX_INTERNAL_REPAIR_LOOPS,
     ) -> None:
+        if (
+            not isinstance(max_loops, int)
+            or type(max_loops) is not int
+            or max_loops < 1
+            or max_loops > MAX_INTERNAL_REPAIR_LOOPS
+        ):
+            raise ValueError(
+                f"max_loops must be an integer between 1 and {MAX_INTERNAL_REPAIR_LOOPS}, "
+                f"got {max_loops!r}"
+            )
+
         if implementer_role == reviewer_role:
             raise ReviewerSeparationError(
                 f"Role '{implementer_role}' cannot review its own code. "

@@ -48,18 +48,80 @@ class AgentProfile:
 
     def validate(self) -> None:
         """Validate profile invariants and schema constraints."""
-        if not self.role_id or not self.role_id.strip():
+        if not self.role_id or not isinstance(self.role_id, str) or not self.role_id.strip():
             raise ValueError("Agent profile must have a non-empty role_id")
         if self.role_id not in ALL_ROLES:
             raise ValueError(f"Unrecognized role_id '{self.role_id}'")
-        if not self.name or not self.name.strip():
+        if not self.name or not isinstance(self.name, str) or not self.name.strip():
             raise ValueError(f"Agent profile '{self.role_id}' must have a non-empty name")
         if self.category not in {"base_team", "dynamic_specialist"}:
             raise ValueError(f"Invalid category '{self.category}' for role '{self.role_id}'")
-        if not self.description or not self.description.strip():
+        if (
+            not self.description
+            or not isinstance(self.description, str)
+            or not self.description.strip()
+        ):
             raise ValueError(f"Agent profile '{self.role_id}' must have a non-empty description")
-        if not self.system_prompt or not self.system_prompt.strip():
+        if (
+            not self.system_prompt
+            or not isinstance(self.system_prompt, str)
+            or not self.system_prompt.strip()
+        ):
             raise ValueError(f"Agent profile '{self.role_id}' must have a non-empty system_prompt")
+
+        for flag in ("enable_write_tools", "enable_subagent_tools", "enable_mcp_tools"):
+            val = getattr(self, flag)
+            if not isinstance(val, bool) or type(val) is not bool:
+                raise ValueError(
+                    f"Agent profile '{self.role_id}' flag '{flag}' must be a strict boolean, "
+                    f"got {type(val).__name__} ({val!r})"
+                )
+
+        if not isinstance(self.ownership_paths, list) or not all(
+            isinstance(p, str) for p in self.ownership_paths
+        ):
+            raise ValueError(
+                f"Agent profile '{self.role_id}' 'ownership_paths' must be a list of strings."
+            )
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> AgentProfile:
+        """Instantiate and validate AgentProfile from dictionary with strict fail-closed types."""
+        if not isinstance(data, dict):
+            raise ValueError(f"Agent profile data must be a dict, got {type(data).__name__}")
+
+        role_id = data.get("role_id")
+        for flag in ("enable_write_tools", "enable_subagent_tools", "enable_mcp_tools"):
+            if flag not in data:
+                raise ValueError(f"Agent profile '{role_id}' missing required flag '{flag}'.")
+            val = data[flag]
+            if not isinstance(val, bool) or type(val) is not bool:
+                raise ValueError(
+                    f"Agent profile '{role_id}' flag '{flag}' must be a strict boolean, "
+                    f"got {type(val).__name__} ({val!r})"
+                )
+
+        ownership_paths = data.get("ownership_paths", [])
+        if not isinstance(ownership_paths, list) or not all(
+            isinstance(p, str) for p in ownership_paths
+        ):
+            raise ValueError(
+                f"Agent profile '{role_id}' 'ownership_paths' must be a list of strings."
+            )
+
+        profile = cls(
+            role_id=data["role_id"],
+            name=data["name"],
+            category=data["category"],
+            description=data["description"],
+            enable_write_tools=data["enable_write_tools"],
+            enable_subagent_tools=data["enable_subagent_tools"],
+            enable_mcp_tools=data["enable_mcp_tools"],
+            ownership_paths=ownership_paths,
+            system_prompt=data["system_prompt"],
+        )
+        profile.validate()
+        return profile
 
     def to_define_subagent_payload(self) -> dict[str, Any]:
         """Generate the exact arguments dictionary for Antigravity's define_subagent tool."""
@@ -120,19 +182,7 @@ def load_profile(role_id: str, profiles_dir: Path | None = None) -> AgentProfile
         raise FileNotFoundError(f"Agent profile file not found: {profile_file}")
 
     data = json.loads(profile_file.read_text(encoding="utf-8"))
-    profile = AgentProfile(
-        role_id=data["role_id"],
-        name=data["name"],
-        category=data["category"],
-        description=data["description"],
-        enable_write_tools=bool(data.get("enable_write_tools", False)),
-        enable_subagent_tools=bool(data.get("enable_subagent_tools", False)),
-        enable_mcp_tools=bool(data.get("enable_mcp_tools", False)),
-        ownership_paths=list(data.get("ownership_paths", [])),
-        system_prompt=data["system_prompt"],
-    )
-    profile.validate()
-    return profile
+    return AgentProfile.from_dict(data)
 
 
 def load_all_profiles(profiles_dir: Path | None = None) -> dict[str, AgentProfile]:
