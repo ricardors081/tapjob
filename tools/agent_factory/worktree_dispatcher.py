@@ -888,6 +888,59 @@ class WorktreeDispatcher:
                         ) from exc
                 raise
 
+    def get_active_task(self, task_id: str) -> tuple[TaskContract, WorktreeInfo] | None:
+        """Inspect and return active TaskContract and live WorktreeInfo for given task_id."""
+        with self._registry_lock():
+            registry_data = self._read_registry_file()
+
+        if task_id not in registry_data:
+            return None
+
+        entry = registry_data[task_id]
+        status = entry.get("status")
+        if status not in ("active", "scope_verified"):
+            return None
+
+        wpath_str = entry.get("worktree_path", "")
+        if not wpath_str:
+            return None
+
+        wpath = Path(wpath_str).resolve()
+        if not wpath.exists():
+            return None
+
+        head_proc = subprocess.run(  # noqa: S603
+            [GIT_EXE, "rev-parse", "HEAD"],
+            cwd=str(wpath),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if head_proc.returncode != 0:
+            return None
+        head_sha = head_proc.stdout.strip()
+
+        br_proc = subprocess.run(  # noqa: S603
+            [GIT_EXE, "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(wpath),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        branch = (
+            br_proc.stdout.strip() if br_proc.returncode == 0 else entry.get("target_branch", "")
+        )
+
+        contract = TaskContract.from_dict(entry["contract"])
+        winfo = WorktreeInfo(
+            worktree_path=wpath,
+            branch_name=branch,
+            base_sha=contract.canonical_base_sha,
+            head_sha=head_sha,
+            is_clean=self.is_worktree_clean(wpath),
+        )
+        return (contract, winfo)
+
     def verify_task_scope(self, task_id: str) -> None:
         """Canonical verification: validate contract, worktree binding, branch, and scope."""
         with self._registry_lock():
