@@ -42,7 +42,7 @@ commit reviewed
 ```
 
 Never: `git pull` + `docker build` on the server. Never `:latest` as a release identity. Never a
-different build per environment. The canonical repository (`ghcr.io/ricardo081683/tapjob-backend`)
+different build per environment. The canonical repository (`ghcr.io/ricardors081/tapjob-backend`)
 is fixed directly in `infra/compose.deploy.yaml`'s image template, not read from an environment
 variable (2026 review, Finding 2) — the only variable part an operator ever supplies is
 `BACKEND_IMAGE_DIGEST`, a bare `sha256:<64 lowercase hex characters>` with no repository or tag
@@ -76,7 +76,7 @@ BACKEND_IMAGE_DIGEST=sha256:<digest> \
 ```
 
 This is the one canonical deploy command — `infra/compose.deploy.yaml`'s image template already
-names the fixed canonical repository (`ghcr.io/ricardo081683/tapjob-backend`); `BACKEND_IMAGE_DIGEST`
+names the fixed canonical repository (`ghcr.io/ricardors081/tapjob-backend`); `BACKEND_IMAGE_DIGEST`
 supplies only the digest, never a repository or a tag (§3 above).
 
 `<environment>.env` holds that environment's `APP_ENV`, `DATABASE_URL` (must use `postgresql+psycopg://`),

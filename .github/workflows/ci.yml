@@ -175,6 +175,10 @@ jobs:
         run: node --test tools/deploy/validate_image_ref.test.mjs
       - name: Release CI-success-gate self-test (deterministic, no live GitHub API access)
         run: node --test tools/deploy/require_ci_success.test.mjs
+      - name: Validate governance foundation (rules, hooks, guards, invariants)
+        run: python3 tools/agent_guard/validate_governance.py
+      - name: Agent guard and pre-push hook self-tests (deterministic synthetic suites)
+        run: python3 -m unittest discover -s tools/agent_guard -p "test_*.py"
       - name: A dummy mutable tag is rejected as a digest (proves the gate, not just the unit tests)
         run: |
           if node tools/deploy/validate_image_ref.mjs --digest "latest"; then
@@ -222,7 +226,7 @@ jobs:
             echo "$images" >&2
             exit 1
           fi
-          expected="ghcr.io/ricardo081683/tapjob-backend@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+          expected="ghcr.io/ricardors081/tapjob-backend@sha256:0000000000000000000000000000000000000000000000000000000000000000"
           resolved=$(echo "$images" | head -n 1)
           if [ "$resolved" != "$expected" ]; then
             echo "resolved image did not match the fixed canonical repository + digest" >&2

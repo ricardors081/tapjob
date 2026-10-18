@@ -35,7 +35,7 @@ To achieve live staging validation for the WhatsApp Live Gate without operationa
 ### Decision B: Immutable Artifact & GHCR Pipeline
 - Application runtime services run **ONLY** pre-built, immutable image digests from GitHub Container Registry:
   ```text
-  ghcr.io/ricardo081683/tapjob-backend@sha256:<digest>
+  ghcr.io/ricardors081/tapjob-backend@sha256:<digest>
   ```
 - **Strict Anti-Patterns Prohibited:**
   - ZERO mutable `:latest` or branch tags in runtime deployments.
@@ -139,7 +139,7 @@ Upstream Evolution API has a reported webhook-configuration persistence issue ac
 ---
 
 ## 4. Absolute Stop Conditions & Prerequisites
-1. **GHCR Pull Gate:** An authorized credential with package-read scope must exist in EasyPanel to pull private images from `ghcr.io/ricardo081683/tapjob-backend`. Visibility of GHCR packages must NEVER be made public as a shortcut.
+1. **GHCR Pull Gate:** An authorized credential with package-read scope must exist in EasyPanel to pull private images from `ghcr.io/ricardors081/tapjob-backend`. Visibility of GHCR packages must NEVER be made public as a shortcut.
 2. **R2 Storage Gate:** Private Cloudflare R2 object storage credentials (`R2_ENDPOINT_URL`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`) must be configured for TapJob staging. If unavailable, deployment must stop at PostgreSQL/Redis/definitions creation without starting application containers.
 3. **Migration Gate:** Database migrations must complete with exit code 0 before starting API or worker workloads.
 4. **Live Traffic Freeze:** Webhook is NOT activated, and zero real WhatsApp messages are dispatched (`WHATSAPP_REAL_SENDS = 0`).

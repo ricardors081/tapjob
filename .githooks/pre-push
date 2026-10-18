@@ -1,0 +1,36 @@
+#!/bin/sh
+# TapJob Local Git Pre-Push Hook (Defense-in-Depth)
+# Rejects direct push attempts targeting main or master branches.
+
+z40="0000000000000000000000000000000000000000"
+
+remote="$1"
+url="$2"
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    # Check if remote target is main or master
+    case "$remote_ref" in
+        refs/heads/main|refs/heads/master|*/main|*/master)
+            echo "================================================================================" >&2
+            echo "ERROR: Direct push to protected branch ($remote_ref) is strictly prohibited!" >&2
+            echo "TapJob governance requires all changes to be pushed to feature branches" >&2
+            echo "and reviewed via Pull Request. Direct push to main/master is not permitted." >&2
+            echo "================================================================================" >&2
+            exit 1
+            ;;
+    esac
+
+    # Also check if local ref is main or master (accidental push of local main)
+    case "$local_ref" in
+        refs/heads/main|refs/heads/master)
+            if [ "$remote_ref" = "$z40" ] || [ -z "$remote_ref" ]; then
+                echo "================================================================================" >&2
+                echo "ERROR: Direct push from local main/master branch is prohibited!" >&2
+                echo "================================================================================" >&2
+                exit 1
+            fi
+            ;;
+    esac
+done
+
+exit 0
