@@ -12,12 +12,25 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import sys
 from pathlib import Path
 from typing import Any
 
 # Allowed official trigger values for Antigravity rules
 VALID_TRIGGERS = {"always_on", "model_decision", "glob", "manual"}
+
+# Hook command parser constants for fail-closed structural validation
+PERMITTED_PYTHON_EXECUTABLES = {
+    "python",
+    "python.exe",
+    "python3",
+    "python3.exe",
+    "py",
+    "py.exe",
+}
+PERMITTED_PYTHON_FLAGS = {"-u", "-b", "-e", "-s", "-v", "-o", "-oo"}
+FORBIDDEN_HOOK_COMMAND_CHARS = set(";&|><$`\n\r")
 
 # Required files across repository
 REQUIRED_FILES = [
@@ -265,44 +278,97 @@ def validate_hooks_json(hooks_path: Path, repo_root: Path) -> list[str]:
                         )
                         continue
 
-                    if "pre_tool_guard.py" not in cmd:
+                    # 1. Reject forbidden shell characters / operators
+                    if any(c in FORBIDDEN_HOOK_COMMAND_CHARS for c in cmd):
                         errors.append(
                             f"{hooks_path}: Handler [{handler_idx}] in '{hook_name}' "
-                            "command must reference 'pre_tool_guard.py'."
+                            "command contains forbidden shell characters or operators."
                         )
+                        continue
 
-                    # Check script references
-                    script_matches = re.findall(
-                        r"['\"]?([a-zA-Z0-9_\-./\\]+\.(?:py|sh|mjs|js|ps1))['\"]?",
-                        cmd,
-                    )
-                    if script_matches:
-                        script_missing = False
-                        for script_rel in script_matches:
-                            script_clean = script_rel.strip("'\"").replace("\\", "/")
-                            script_full = (hooks_path.parent / script_clean).resolve()
-                            if not script_full.exists():
-                                script_full = (repo_root / script_clean).resolve()
-                            if not script_full.exists():
-                                script_missing = True
-                                err_msg = (
-                                    f"Hook '{hook_name}' references non-existent "
-                                    f"script '{script_rel}'."
-                                )
-                                errors.append(f"{hooks_path}: {err_msg}")
-                        if (
-                            not script_missing
-                            and "pre_tool_guard.py" in cmd
-                            and isinstance(timeout, int)
-                            and not isinstance(timeout, bool)
-                            and timeout > 0
-                        ):
-                            has_valid_run_command_guard = True
-                    else:
+                    # 2. Parse tokens structurally
+                    try:
+                        tokens = [t.strip("\"'") for t in shlex.split(cmd, posix=False)]
+                    except ValueError as exc:
                         errors.append(
-                            f"{hooks_path}: Hook '{hook_name}' command does not "
-                            "reference a valid script."
+                            f"{hooks_path}: Handler [{handler_idx}] in '{hook_name}' "
+                            f"command syntax error: {exc}."
                         )
+                        continue
+
+                    if not tokens:
+                        errors.append(
+                            f"{hooks_path}: Handler [{handler_idx}] in '{hook_name}' empty command."
+                        )
+                        continue
+
+                    # 3. Invoked executable must be a permitted python interpreter
+                    exe_name = Path(tokens[0]).name.lower()
+                    if exe_name not in PERMITTED_PYTHON_EXECUTABLES:
+                        errors.append(
+                            f"{hooks_path}: Handler [{handler_idx}] in '{hook_name}' "
+                            f"command must invoke a python interpreter, got '{tokens[0]}'."
+                        )
+                        continue
+
+                    # 4. Parse optional python flags before target script
+                    arg_idx = 1
+                    flag_error = False
+                    while arg_idx < len(tokens) and tokens[arg_idx].startswith("-"):
+                        flag = tokens[arg_idx].lower()
+                        if flag not in PERMITTED_PYTHON_FLAGS:
+                            errors.append(
+                                f"{hooks_path}: Handler [{handler_idx}] in '{hook_name}' "
+                                f"contains unexpected python flag '{tokens[arg_idx]}'."
+                            )
+                            flag_error = True
+                            break
+                        arg_idx += 1
+
+                    if flag_error:
+                        continue
+
+                    if arg_idx >= len(tokens):
+                        errors.append(
+                            f"{hooks_path}: Handler [{handler_idx}] in '{hook_name}' "
+                            "command missing target script."
+                        )
+                        continue
+
+                    script_token = tokens[arg_idx]
+
+                    # 5. Reject unexpected trailing arguments after the target script
+                    if arg_idx + 1 < len(tokens):
+                        extra_args = tokens[arg_idx + 1 :]
+                        errors.append(
+                            f"{hooks_path}: Handler [{handler_idx}] in '{hook_name}' "
+                            f"contains unexpected arguments after script: {extra_args}."
+                        )
+                        continue
+
+                    # 6. Resolve target script relative to hooks_path.parent
+                    resolved_script = (hooks_path.parent / script_token).resolve()
+                    canonical_guard_path = (
+                        repo_root / "tools" / "agent_guard" / "pre_tool_guard.py"
+                    ).resolve()
+
+                    if not resolved_script.exists():
+                        errors.append(
+                            f"{hooks_path}: Handler [{handler_idx}] in '{hook_name}' "
+                            f"references non-existent script '{script_token}'."
+                        )
+                        continue
+
+                    if resolved_script != canonical_guard_path:
+                        errors.append(
+                            f"{hooks_path}: Handler [{handler_idx}] in '{hook_name}' "
+                            f"command must reference 'pre_tool_guard.py' (target script "
+                            f"'{script_token}' does not resolve to canonical pre_tool_guard.py)."
+                        )
+                        continue
+
+                    if isinstance(timeout, int) and not isinstance(timeout, bool) and timeout > 0:
+                        has_valid_run_command_guard = True
 
     if not has_valid_run_command_guard and not any("is disabled" in e for e in errors):
         errors.append(

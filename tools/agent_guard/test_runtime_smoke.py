@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import sys
 import unittest
@@ -16,12 +17,39 @@ class TestRuntimeSmoke(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.repo_root = Path(__file__).resolve().parent.parent.parent
         cls.agents_dir = cls.repo_root / ".agents"
+        cls.hooks_json_path = cls.agents_dir / "hooks.json"
         cls.build_dir = cls.repo_root / "build"
         cls.build_dir.mkdir(exist_ok=True)
         cls.sentinel_allowed = cls.build_dir / "SENTINEL_ALLOWED_SUCCESS.txt"
         cls.sentinel_forbidden = cls.build_dir / "SENTINEL_FAIL.txt"
         cls.python_bin = sys.executable
-        cls.hook_script = cls.agents_dir / "../tools/agent_guard/pre_tool_guard.py"
+
+        # 1. Load .agents/hooks.json
+        if not cls.hooks_json_path.exists():
+            raise FileNotFoundError(f"Missing hooks configuration: {cls.hooks_json_path}")
+        hooks_data = json.loads(cls.hooks_json_path.read_text(encoding="utf-8"))
+
+        # 2. Locate PreToolUse hook for matcher == 'run_command' and extract configured command
+        cls.configured_hook_command: str | None = None
+        for _hook_name, hook_spec in hooks_data.items():
+            if not isinstance(hook_spec, dict) or not hook_spec.get("enabled", True):
+                continue
+            pre_tool_use = hook_spec.get("PreToolUse", [])
+            for group in pre_tool_use:
+                if group.get("matcher") == "run_command":
+                    for handler in group.get("hooks", []):
+                        if handler.get("type") == "command" and handler.get("command"):
+                            cls.configured_hook_command = handler["command"]
+                            break
+                if cls.configured_hook_command:
+                    break
+            if cls.configured_hook_command:
+                break
+
+        if not cls.configured_hook_command:
+            raise ValueError(
+                f"No enabled PreToolUse hook for 'run_command' found in {cls.hooks_json_path}"
+            )
 
     def setUp(self) -> None:
         if self.sentinel_allowed.exists():
@@ -46,8 +74,22 @@ class TestRuntimeSmoke(unittest.TestCase):
             },
             "workspacePaths": [str(self.repo_root)],
         }
+        tokens = [t.strip("\"'") for t in shlex.split(self.configured_hook_command, posix=False)]
+        exe = tokens[0]
+        if Path(exe).name.lower() in {
+            "python",
+            "python.exe",
+            "python3",
+            "python3.exe",
+            "py",
+            "py.exe",
+        }:
+            cmd = [self.python_bin, *tokens[1:]]
+        else:
+            cmd = tokens
+
         proc = subprocess.run(  # noqa: S603
-            [self.python_bin, str(self.hook_script.resolve())],
+            cmd,
             cwd=str(self.agents_dir),
             input=json.dumps(payload),
             text=True,

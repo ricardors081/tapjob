@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
 from tools.agent_guard.validate_governance import (
     parse_simple_yaml_frontmatter,
@@ -280,6 +281,105 @@ trigger: glob
             hooks_path.write_text(json.dumps(hooks_data), encoding="utf-8")
             errors = validate_hooks_json(hooks_path, Path(tmpdir))
             self.assertTrue(any("must reference 'pre_tool_guard.py'" in e for e in errors))
+
+    def test_hooks_json_guard_command_decoy_and_canonical_validation(self) -> None:
+        """Verify structural parsing of hook command rejects decoys and accepts canonical."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            agents_dir = repo_root / ".agents"
+            agents_dir.mkdir(parents=True, exist_ok=True)
+            hooks_path = agents_dir / "hooks.json"
+
+            # Create canonical guard script at tools/agent_guard/pre_tool_guard.py
+            canonical_guard = repo_root / "tools" / "agent_guard" / "pre_tool_guard.py"
+            canonical_guard.parent.mkdir(parents=True, exist_ok=True)
+            canonical_guard.write_text("# canonical pre_tool_guard\n", encoding="utf-8")
+
+            # Create decoy files
+            fake_guard = repo_root / "fake" / "pre_tool_guard.py"
+            fake_guard.parent.mkdir(parents=True, exist_ok=True)
+            fake_guard.write_text("# fake guard\n", encoding="utf-8")
+
+            other_script = agents_dir / "other_script.py"
+            other_script.write_text("# other script\n", encoding="utf-8")
+
+            def make_hooks_config(command_str: str) -> dict[str, Any]:
+                return {
+                    "agent-guard": {
+                        "enabled": True,
+                        "PreToolUse": [
+                            {
+                                "matcher": "run_command",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": command_str,
+                                        "timeout": 30,
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                }
+
+            # Negative Case 1: non-python executable (echo)
+            hooks_path.write_text(
+                json.dumps(make_hooks_config("echo ../tools/agent_guard/pre_tool_guard.py")),
+                encoding="utf-8",
+            )
+            errs1 = validate_hooks_json(hooks_path, repo_root)
+            self.assertTrue(any("must invoke a python interpreter" in e for e in errs1))
+
+            # Negative Case 2: decoy argument behind another script
+            cmd2 = "python other_script.py ../tools/agent_guard/pre_tool_guard.py"
+            hooks_path.write_text(json.dumps(make_hooks_config(cmd2)), encoding="utf-8")
+            errs2 = validate_hooks_json(hooks_path, repo_root)
+            self.assertTrue(
+                any(
+                    "does not resolve to canonical" in e or "unexpected arguments after script" in e
+                    for e in errs2
+                )
+            )
+
+            # Negative Case 3: decoy argument with flag
+            cmd3 = "python other_script.py --reference ../tools/agent_guard/pre_tool_guard.py"
+            hooks_path.write_text(json.dumps(make_hooks_config(cmd3)), encoding="utf-8")
+            errs3 = validate_hooks_json(hooks_path, repo_root)
+            self.assertTrue(
+                any(
+                    "does not resolve to canonical" in e or "unexpected arguments after script" in e
+                    for e in errs3
+                )
+            )
+
+            # Negative Case 4: decoy path fake/pre_tool_guard.py
+            cmd4 = "python ../fake/pre_tool_guard.py"
+            hooks_path.write_text(json.dumps(make_hooks_config(cmd4)), encoding="utf-8")
+            errs4 = validate_hooks_json(hooks_path, repo_root)
+            self.assertTrue(any("does not resolve to canonical" in e for e in errs4))
+
+            # Negative Case 5: wrong location pre_tool_guard.py (not in tools/agent_guard)
+            cmd5 = "python pre_tool_guard.py"
+            hooks_path.write_text(json.dumps(make_hooks_config(cmd5)), encoding="utf-8")
+            errs5 = validate_hooks_json(hooks_path, repo_root)
+            self.assertTrue(
+                any(
+                    "references non-existent script" in e or "does not resolve to canonical" in e
+                    for e in errs5
+                )
+            )
+
+            # Negative Case 6: forbidden shell operator
+            cmd6 = "python ../tools/agent_guard/pre_tool_guard.py && echo pwned"
+            hooks_path.write_text(json.dumps(make_hooks_config(cmd6)), encoding="utf-8")
+            errs6 = validate_hooks_json(hooks_path, repo_root)
+            self.assertTrue(any("forbidden shell characters" in e for e in errs6))
+
+            # Positive Case: canonical command
+            cmd_pos = "python ../tools/agent_guard/pre_tool_guard.py"
+            hooks_path.write_text(json.dumps(make_hooks_config(cmd_pos)), encoding="utf-8")
+            errs_pos = validate_hooks_json(hooks_path, repo_root)
+            self.assertEqual(errs_pos, [])
 
     def test_validate_agents_md_invariants(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
