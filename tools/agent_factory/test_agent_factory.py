@@ -40,6 +40,7 @@ class TestAgentFactory(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.repo_root = Path(__file__).resolve().parent.parent.parent
+        cls.git_bin = shutil.which("git") or "git"
 
     # 1. Manager definition carregável pelo runtime
     def test_01_manager_definition_loadable(self) -> None:
@@ -172,8 +173,8 @@ class TestAgentFactory(unittest.TestCase):
             finally:
                 dispatcher.remove_worktree(info.worktree_path)
                 self.assertFalse(info.worktree_path.exists())
-                subprocess.run(  # noqa: S603, S607
-                    ["git", "branch", "-D", branch],
+                subprocess.run(  # noqa: S603
+                    [self.git_bin, "branch", "-D", branch],
                     cwd=self.repo_root,
                     capture_output=True,
                     check=False,
@@ -321,8 +322,8 @@ class TestAgentFactory(unittest.TestCase):
                 dirty_file.unlink()
             finally:
                 dispatcher.remove_worktree(info.worktree_path, force=True)
-                subprocess.run(  # noqa: S603, S607
-                    ["git", "branch", "-D", branch],
+                subprocess.run(  # noqa: S603
+                    [self.git_bin, "branch", "-D", branch],
                     cwd=self.repo_root,
                     capture_output=True,
                     check=False,
