@@ -843,6 +843,130 @@ class TestPreToolGuard(unittest.TestCase):
                     f"Read-only API command '{cmd}' should be allowed, got {decision} ({reason})",
                 )
 
+    def test_antigravity_pre_tool_contract_camelcase_and_snakecase(self) -> None:
+        """Tests: Antigravity PreToolUse hook contract normalizes camelCase and snake_case."""
+        # 1. Standard camelCase (protojson) allowed
+        res1 = handle_pre_tool_use(
+            {
+                "toolCall": {
+                    "name": "run_command",
+                    "args": {
+                        "CommandLine": "git status",
+                    },
+                },
+                "workspacePaths": ["/path/to/repo"],
+            }
+        )
+        self.assertEqual(res1.get("decision"), "allow")
+
+        # 2. Standard camelCase denied
+        res2 = handle_pre_tool_use(
+            {
+                "toolCall": {
+                    "name": "run_command",
+                    "args": {
+                        "CommandLine": "gh pr merge 14",
+                    },
+                },
+                "workspacePaths": ["/path/to/repo"],
+            }
+        )
+        self.assertEqual(res2.get("decision"), "deny")
+
+        # 3. Alternate snake_case allowed
+        res3 = handle_pre_tool_use(
+            {
+                "tool_name": "run_command",
+                "tool_args": {
+                    "command_line": "git status",
+                },
+                "workspace_paths": ["/path/to/repo"],
+            }
+        )
+        self.assertEqual(res3.get("decision"), "allow")
+
+        # 4. Alternate snake_case denied
+        res4 = handle_pre_tool_use(
+            {
+                "tool_name": "run_command",
+                "tool_args": {
+                    "command_line": "gh pr merge 14",
+                },
+                "workspace_paths": ["/path/to/repo"],
+            }
+        )
+        self.assertEqual(res4.get("decision"), "deny")
+
+        # 5. Non-run_command tool permitted by default
+        res5 = handle_pre_tool_use(
+            {
+                "toolCall": {
+                    "name": "view_file",
+                    "args": {"AbsolutePath": "README.md"},
+                },
+            }
+        )
+        self.assertEqual(res5.get("decision"), "allow")
+
+    def test_launcher_structural_options_parsing_and_fail_closed(self) -> None:
+        """Tests: structural options parsing for env, command, nohup, exec with args and '--'."""
+        denied_launcher_cmds = [
+            "command -- gh pr merge 14",
+            "command -p gh pr merge 14",
+            "command -pv gh pr merge 14",
+            "env -i gh pr merge 14",
+            "env -u HOME gh pr merge 14",
+            "env -uHOME gh pr merge 14",
+            "env --unset=HOME gh pr merge 14",
+            "env -C . gh pr merge 14",
+            "env -C. gh pr merge 14",
+            "env --chdir=. gh pr merge 14",
+            "nohup -- gh pr merge 14",
+            "exec -- gh pr merge 14",
+            "exec -c gh pr merge 14",
+            "exec -a custom_proc gh pr merge 14",
+            "env -u HOME git push origin main",
+            "env -u HOME cat .env",
+            "env -C . cat .env",
+            "command -- cat .env",
+            "env -i nohup -- gh pr merge 14",
+            # Fail-closed cases (unrecognized or malformed launcher options)
+            "env --unrecognized-flag-xyz git status",
+            "env -u",
+            "env -C",
+            "command -x git status",
+            "nohup -x git status",
+            "exec -x git status",
+            "exec -a",
+        ]
+        for cmd in denied_launcher_cmds:
+            with self.subTest(cmd=cmd):
+                decision, reason = evaluate_command(cmd, current_branch="feat/test")
+                self.assertEqual(
+                    decision,
+                    "deny",
+                    f"Launcher command '{cmd}' must be denied, got {decision} ({reason})",
+                )
+
+        allowed_launcher_cmds = [
+            "command -- git status",
+            "command -p git status",
+            "env -i git status",
+            "env -u HOME git status",
+            "env -C . git status",
+            "nohup -- npm test",
+            "exec -c npm test",
+            "exec -a mytest npm test",
+        ]
+        for cmd in allowed_launcher_cmds:
+            with self.subTest(cmd=cmd):
+                decision, reason = evaluate_command(cmd, current_branch="feat/test")
+                self.assertEqual(
+                    decision,
+                    "allow",
+                    f"Safe launcher command '{cmd}' should be allowed, got {decision} ({reason})",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

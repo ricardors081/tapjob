@@ -10,6 +10,7 @@ from pathlib import Path
 from tools.agent_guard.validate_governance import (
     parse_simple_yaml_frontmatter,
     validate_agents_md,
+    validate_canonical_ownership,
     validate_hooks_json,
     validate_pre_push_hook,
     validate_repository,
@@ -130,6 +131,59 @@ trigger: glob
             hook_file.write_text("#!/bin/sh\necho 'allow all'\nexit 0\n", encoding="utf-8")
             errors = validate_pre_push_hook(hook_file)
             self.assertTrue(any("must explicitly block main and master" in e for e in errors))
+
+    def test_validate_canonical_ownership_detects_all_old_owners(self) -> None:
+        """Tests: validate_canonical_ownership detects ricardos081, ricardo081683, ricardoo081."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_path = Path(tmpdir)
+            # Create valid canonical declarations
+            (repo_path / "AGENTS.md").write_text(
+                "Repository: ricardors081/tapjob", encoding="utf-8"
+            )
+            rules_dir = repo_path / ".agents" / "rules"
+            rules_dir.mkdir(parents=True)
+            (rules_dir / "governance.md").write_text(
+                "Repository: ricardors081/tapjob", encoding="utf-8"
+            )
+
+            # Initially clean
+            errs_clean = validate_canonical_ownership(repo_path)
+            self.assertEqual(errs_clean, [])
+
+            # Check detection of ricardos081 in .agents
+            bad_file_1 = repo_path / ".agents" / "sample.txt"
+            bad_file_1.write_text("owner: ricardos" + "081", encoding="utf-8")
+            errs_1 = validate_canonical_ownership(repo_path)
+            self.assertTrue(any("ricardos081" in e for e in errs_1))
+            bad_file_1.unlink()
+
+            # Check detection of ricardo081683 in .github
+            gh_dir = repo_path / ".github"
+            gh_dir.mkdir(parents=True)
+            bad_file_2 = gh_dir / "workflow.yml"
+            bad_file_2.write_text("repo: ricardo" + "081683/tapjob", encoding="utf-8")
+            errs_2 = validate_canonical_ownership(repo_path)
+            self.assertTrue(any("ricardo081683" in e for e in errs_2))
+            bad_file_2.unlink()
+
+            # Check detection of ricardoo081 in tools
+            tools_dir = repo_path / "tools"
+            tools_dir.mkdir(parents=True)
+            bad_file_3 = tools_dir / "deploy.py"
+            bad_file_3.write_text("repo: ricardoo" + "081/tapjob", encoding="utf-8")
+            errs_3 = validate_canonical_ownership(repo_path)
+            self.assertTrue(any("ricardoo081" in e for e in errs_3))
+            bad_file_3.unlink()
+
+            # Historical doc in docs/ must NOT be flagged by operational check
+            docs_dir = repo_path / "docs" / "adr"
+            docs_dir.mkdir(parents=True)
+            hist_file = docs_dir / "0016-hist.md"
+            hist_file.write_text(
+                "historical ghcr.io/ricardo" + "081683/tapjob:canary", encoding="utf-8"
+            )
+            errs_hist = validate_canonical_ownership(repo_path)
+            self.assertEqual(errs_hist, [])
 
     def test_current_repo_governance_passes(self) -> None:
         repo_root = Path(__file__).resolve().parent.parent.parent

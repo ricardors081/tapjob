@@ -193,21 +193,28 @@ def validate_hooks_json(hooks_path: Path, repo_root: Path) -> list[str]:
                         )
                         continue
 
-                    # Check if command refers to a local script (e.g. pre_tool_guard.py)
-                    match = re.search(
-                        r"(?:python3?|sh|bash|node)?\s*([a-zA-Z0-9_\-./\\]+\.(?:py|sh|mjs|js|ps1))",
+                    # Check if command refers to local scripts (e.g. pre_tool_guard.py)
+                    script_matches = re.findall(
+                        r"['\"]?([a-zA-Z0-9_\-./\\]+\.(?:py|sh|mjs|js|ps1))['\"]?",
                         cmd,
                     )
-                    if match:
-                        script_rel = match.group(1).replace("\\", "/")
-                        script_full = (hooks_path.parent / script_rel).resolve()
-                        if not script_full.exists():
-                            script_full = (repo_root / script_rel).resolve()
-                        if not script_full.exists():
-                            err_msg = (
-                                f"Hook '{hook_name}' references non-existent script '{script_rel}'."
-                            )
-                            errors.append(f"{hooks_path}: {err_msg}")
+                    if script_matches:
+                        for script_rel in script_matches:
+                            script_clean = script_rel.strip("'\"").replace("\\", "/")
+                            script_full = (hooks_path.parent / script_clean).resolve()
+                            if not script_full.exists():
+                                script_full = (repo_root / script_clean).resolve()
+                            if not script_full.exists():
+                                err_msg = (
+                                    f"Hook '{hook_name}' references non-existent "
+                                    f"script '{script_rel}'."
+                                )
+                                errors.append(f"{hooks_path}: {err_msg}")
+                    else:
+                        errors.append(
+                            f"{hooks_path}: Hook '{hook_name}' command does not "
+                            "reference a valid script."
+                        )
 
     return errors
 
@@ -269,8 +276,8 @@ def validate_canonical_ownership(repo_root: Path) -> list[str]:
                 ".agents/rules/governance.md must declare 'ricardors081/tapjob' as canonical."
             )
 
-    # Check that no obsolete operational references to old owner exist in active directories
-    target_needle = "ricardo" + "081683"
+    # Check that no obsolete operational references to old owners exist in active directories
+    old_owners = ["ricardo" + "081683", "ricardos" + "081", "ricardoo" + "081"]
     operational_dirs = [".agents", ".github", "infra", "tools"]
     for dir_name in operational_dirs:
         target_dir = repo_root / dir_name
@@ -279,15 +286,16 @@ def validate_canonical_ownership(repo_root: Path) -> list[str]:
         for p in target_dir.rglob("*"):
             if not p.is_file() or "__pycache__" in p.parts or p.suffix in (".pyc", ".pyo"):
                 continue
-            if p.name == "validate_governance.py":
+            if p.name in ("validate_governance.py", "test_validate_governance.py"):
                 continue
             try:
                 text = p.read_text(encoding="utf-8", errors="ignore")
-                if target_needle in text:
-                    errors.append(
-                        f"Obsolete operational reference '{target_needle}' found in "
-                        f"{p.relative_to(repo_root)}."
-                    )
+                for old_owner in old_owners:
+                    if old_owner in text:
+                        errors.append(
+                            f"Obsolete operational reference '{old_owner}' found in "
+                            f"{p.relative_to(repo_root)}."
+                        )
             except (OSError, UnicodeDecodeError):
                 continue
 

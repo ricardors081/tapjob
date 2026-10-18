@@ -213,25 +213,173 @@ def tokenize_command(cmd_str: str) -> list[str]:
 
 
 def extract_effective_tokens(tokens: list[str]) -> list[str]:
-    """Strip launcher prefixes (&, command, env, exec, nohup) and env assignments."""
+    """Strip launcher prefixes (&, command, env, exec, nohup) and env assignments.
+
+    Performs structural option parsing for launchers:
+    - '&': PowerShell call operator (no options)
+    - 'command': POSIX command built-in, supports -p, -v, -V, combined short flags, and '--'
+    - 'nohup': POSIX/GNU nohup, supports '--'
+    - 'exec': POSIX/Bash exec, supports -c, -l, -cl, -lc, -a <name>, and '--'
+    - 'env': POSIX/GNU env, supports options without args (-i, -, -0, -v),
+      options with args (-u <name>, -C <dir>, -S <str>, --unset=<name>, --chdir=<dir>,
+      --split-string=<str>), KEY=VALUE assignments, and '--'
+
+    Any unrecognized or ambiguous launcher syntax returns ['__GUARD_FAIL_CLOSED__'].
+    """
     if not tokens:
         return []
+
     idx = 0
     n = len(tokens)
+
     while idx < n:
         raw = tokens[idx].strip("\"'")
         lower = raw.lower()
-        if lower in LAUNCHER_PREFIXES:
+
+        if lower not in LAUNCHER_PREFIXES:
+            break
+
+        if lower == "&":
             idx += 1
-            if lower == "env":
-                while idx < n:
-                    t_clean = tokens[idx].strip("\"'")
-                    if t_clean.startswith("-") or "=" in t_clean:
-                        idx += 1
-                    else:
-                        break
             continue
+
+        if lower == "command":
+            idx += 1
+            while idx < n:
+                opt_raw = tokens[idx].strip("\"'")
+                if opt_raw == "--":
+                    idx += 1
+                    break
+                if opt_raw.startswith("-") and not opt_raw.startswith("--") and len(opt_raw) > 1:
+                    flags = opt_raw[1:]
+                    if all(c in "pvV" for c in flags):
+                        idx += 1
+                        continue
+                    return ["__GUARD_FAIL_CLOSED__"]
+                if opt_raw.startswith("-"):
+                    return ["__GUARD_FAIL_CLOSED__"]
+                break
+            continue
+
+        if lower == "nohup":
+            idx += 1
+            while idx < n:
+                opt_raw = tokens[idx].strip("\"'")
+                if opt_raw == "--":
+                    idx += 1
+                    break
+                if opt_raw.startswith("-"):
+                    return ["__GUARD_FAIL_CLOSED__"]
+                break
+            continue
+
+        if lower == "exec":
+            idx += 1
+            while idx < n:
+                opt_raw = tokens[idx].strip("\"'")
+                if opt_raw == "--":
+                    idx += 1
+                    break
+                if opt_raw in ("-c", "-l", "-cl", "-lc"):
+                    idx += 1
+                    continue
+                if opt_raw == "-a":
+                    if idx + 1 < n:
+                        idx += 2
+                        continue
+                    return ["__GUARD_FAIL_CLOSED__"]
+                if opt_raw.startswith("-a=") or (opt_raw.startswith("-a") and len(opt_raw) > 2):
+                    idx += 1
+                    continue
+                if opt_raw.startswith("-"):
+                    return ["__GUARD_FAIL_CLOSED__"]
+                break
+            continue
+
+        if lower == "env":
+            idx += 1
+            while idx < n:
+                opt_raw = tokens[idx].strip("\"'")
+                opt_lower = opt_raw.lower()
+
+                if opt_raw == "--":
+                    idx += 1
+                    while idx < n:
+                        t = tokens[idx].strip("\"'")
+                        if not t.startswith("-") and "=" in t:
+                            idx += 1
+                        else:
+                            break
+                    break
+
+                if opt_raw == "-":
+                    idx += 1
+                    continue
+
+                if opt_lower in ("-i", "--ignore-environment", "-0", "--null", "-v", "--verbose"):
+                    idx += 1
+                    continue
+
+                if (
+                    opt_raw.startswith("-")
+                    and not opt_raw.startswith("--")
+                    and len(opt_raw) > 1
+                    and all(c in "iv0" for c in opt_raw[1:])
+                ):
+                    idx += 1
+                    continue
+
+                if (
+                    opt_lower.startswith("--unset=")
+                    or opt_lower.startswith("--chdir=")
+                    or opt_lower.startswith("--split-string=")
+                ):
+                    idx += 1
+                    continue
+
+                if (
+                    opt_raw.startswith(("-u", "-C", "-S"))
+                    and len(opt_raw) > 2
+                    and not opt_raw.startswith("--")
+                ):
+                    idx += 1
+                    continue
+
+                if opt_lower in ("-u", "--unset", "-c", "--chdir", "-s", "--split-string"):
+                    if idx + 1 < n:
+                        idx += 2
+                        continue
+                    return ["__GUARD_FAIL_CLOSED__"]
+
+                if opt_lower.startswith(
+                    (
+                        "--default-signal",
+                        "--ignore-signal",
+                        "--block-signal",
+                        "--list-signal-handling",
+                    )
+                ):
+                    if "=" in opt_raw:
+                        idx += 1
+                        continue
+                    if idx + 1 < n and not tokens[idx + 1].strip("\"'").startswith("-"):
+                        idx += 2
+                        continue
+                    idx += 1
+                    continue
+
+                if not opt_raw.startswith("-") and "=" in opt_raw:
+                    idx += 1
+                    continue
+
+                if opt_raw.startswith("-"):
+                    return ["__GUARD_FAIL_CLOSED__"]
+
+                break
+            continue
+
         break
+
     return tokens[idx:]
 
 
@@ -596,6 +744,8 @@ def is_gh_or_curl_merge_or_mutation(tokens: list[str], cmd_str: str) -> tuple[bo
     eff_tokens = extract_effective_tokens(tokens)
     if not eff_tokens:
         return False, ""
+    if eff_tokens[0] == "__GUARD_FAIL_CLOSED__":
+        return True, "Unsupported, malformed, or ambiguous launcher options blocked to fail closed."
 
     cmd_lower = cmd_str.lower()
     binary = Path(eff_tokens[0].strip("\"'")).name.lower()
@@ -690,6 +840,8 @@ def is_secret_dump_command(tokens: list[str]) -> bool:
     eff_tokens = extract_effective_tokens(tokens)
     if not eff_tokens:
         return False
+    if eff_tokens[0] == "__GUARD_FAIL_CLOSED__":
+        return True
 
     for i, token in enumerate(eff_tokens):
         base = Path(token.strip("\"'")).name.lower()
@@ -918,6 +1070,13 @@ def evaluate_command(
         if not tokens:
             continue
 
+        eff_tokens = extract_effective_tokens(tokens)
+        if eff_tokens and eff_tokens[0] == "__GUARD_FAIL_CLOSED__":
+            return (
+                "deny",
+                "Unsupported, malformed, or ambiguous launcher options blocked to fail closed.",
+            )
+
         # HARD DENY: Encoded PowerShell commands (-EncodedCommand/-enc/-e)
         if is_powershell_encoded_command(tokens):
             return (
@@ -1052,15 +1211,26 @@ def evaluate_command(
 
 
 def handle_pre_tool_use(payload: dict[str, Any]) -> dict[str, Any]:
-    """Handle Antigravity PreToolUse hook payload with Cwd and workspace awareness."""
-    tool_call = payload.get("toolCall", {})
-    tool_name = tool_call.get("name", "")
+    """Handle Antigravity PreToolUse hook payload with Cwd and workspace awareness.
 
-    if tool_name == "run_command":
-        args = tool_call.get("args", {})
-        command_line = args.get("CommandLine", "")
-        cwd_arg = args.get("Cwd")
-        workspace_paths = payload.get("workspacePaths", [])
+    Normalizes payload supporting both standard Antigravity protojson camelCase
+    (toolCall.name, args.CommandLine, args.Cwd, workspacePaths) and alternate snake_case
+    (tool_call.name, tool_name, args.command_line, args.cwd, workspace_paths).
+    """
+    tool_call = payload.get("toolCall") or payload.get("tool_call") or {}
+    tool_name = tool_call.get("name") or payload.get("tool_name") or payload.get("name") or ""
+    args = tool_call.get("args") or payload.get("tool_args") or payload.get("args") or {}
+    command_line = (
+        args.get("CommandLine")
+        or args.get("command_line")
+        or args.get("command")
+        or payload.get("command")
+        or ""
+    )
+
+    if tool_name == "run_command" or (not tool_name and command_line):
+        cwd_arg = args.get("Cwd") or args.get("cwd") or payload.get("cwd")
+        workspace_paths = payload.get("workspacePaths") or payload.get("workspace_paths") or []
 
         resolved_cwd: Path | None = None
         if cwd_arg and str(cwd_arg).strip():
