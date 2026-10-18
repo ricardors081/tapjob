@@ -15,7 +15,7 @@ dependencies = [
   "python-docx>=1.2.0",
   "python-multipart>=0.0.32",
   "redis>=6.4.0",
-  "sentry-sdk[fastapi]>=2.71.0",
+  "sentry-sdk[fastapi]>=2.72.0",
   "sqlalchemy>=2.1.1",
   "tapjob-product-config",
   "uvicorn[standard]>=0.54.0",
