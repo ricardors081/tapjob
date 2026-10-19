@@ -58,6 +58,57 @@ def calculate_backoff_delay(
     return float(min(delay, max_seconds))
 
 
+def trigger_immediate_outbox_dispatch() -> bool:
+    """Non-blocking trigger to dispatch pending outbox messages immediately after commit.
+
+    If Celery broker is unavailable or fails, catches the exception and logs a warning so
+    the primary business transaction is unaffected; the periodic Celery Beat worker (every 5s)
+    will pick up the messages as a guaranteed fallback.
+
+    Returns True if the task was successfully dispatched to Celery, False otherwise.
+    """
+    try:
+        from tapjob_api.messaging.tasks import dispatch_outbox_task
+
+        dispatch_outbox_task.delay()
+        return True
+    except Exception as exc:
+        logger.warning(
+            "outbox.immediate_dispatch_trigger_failed",
+            extra={"error": str(exc)},
+        )
+        return False
+
+
+def _on_session_after_commit(sess: Session) -> None:
+    """Trigger immediate outbox dispatch when outer transaction commits with pending outbox."""
+    if sess.in_nested_transaction():
+        return
+    info = getattr(sess, "info", None)
+    if isinstance(info, dict) and info.pop("has_pending_outbox_dispatch", False):
+        trigger_immediate_outbox_dispatch()
+
+
+def _on_session_after_rollback(sess: Session) -> None:
+    """Clear pending outbox dispatch flag on transaction rollback."""
+    if sess.in_nested_transaction():
+        return
+    info = getattr(sess, "info", None)
+    if isinstance(info, dict):
+        info.pop("has_pending_outbox_dispatch", None)
+
+
+sa.event.listen(Session, "after_commit", _on_session_after_commit)
+sa.event.listen(Session, "after_rollback", _on_session_after_rollback)
+
+
+def _mark_session_outbox_pending(session: Session) -> None:
+    """Marks the session as having pending outbox messages to dispatch post-commit."""
+    info = getattr(session, "info", None)
+    if isinstance(info, dict):
+        info["has_pending_outbox_dispatch"] = True
+
+
 def queue_outbound_message(
     session: Session,
     *,
@@ -68,11 +119,13 @@ def queue_outbound_message(
     """Enqueues an outbound message intent within the caller's transaction.
 
     Idempotent on idempotency_key: if already enqueued, returns the existing record.
+    Registers an after_commit hook to trigger immediate Celery outbox dispatch.
     """
     existing = session.execute(
         select(OutboundMessageQueue).where(OutboundMessageQueue.idempotency_key == idempotency_key)
     ).scalar_one_or_none()
     if existing is not None:
+        _mark_session_outbox_pending(session)
         return existing
 
     try:
@@ -85,9 +138,12 @@ def queue_outbound_message(
                 status=OutboundMessageStatus.PENDING,
                 retry_count=0,
                 next_attempt_at=now,
+                created_at=now,
+                updated_at=now,
             )
             session.add(record)
             session.flush()
+            _mark_session_outbox_pending(session)
             logger.info(
                 "outbox.message.enqueued",
                 extra={
@@ -104,6 +160,7 @@ def queue_outbound_message(
         ).scalar_one_or_none()
         if found is None:
             raise OutboxError(f"Failed to queue outbound message: {idempotency_key}") from None
+        _mark_session_outbox_pending(session)
         return found
 
 

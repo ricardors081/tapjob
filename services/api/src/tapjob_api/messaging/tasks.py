@@ -35,7 +35,9 @@ from tapjob_api.messaging.inbound_service import (
 )
 from tapjob_api.messaging.models import ChannelType
 from tapjob_api.messaging.orchestration import dispatch_inbound_message
-from tapjob_api.messaging.outbox_service import claim_and_dispatch_outbox_batch
+from tapjob_api.messaging.outbox_service import (
+    claim_and_dispatch_outbox_batch,
+)
 from tapjob_api.messaging.reminders_service import dispatch_due_reminders
 from tapjob_api.messaging.service import get_or_create_channel_provider
 from tapjob_api.ports.messaging_channel import (

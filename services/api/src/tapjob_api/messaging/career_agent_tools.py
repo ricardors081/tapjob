@@ -289,6 +289,7 @@ def tool_build_application_kit(
         "created_at": (
             kit.created_at.isoformat() if kit.created_at else datetime.now(UTC).isoformat()
         ),
+        "tailored_draft": draft.to_dict(),
     }
 
 
