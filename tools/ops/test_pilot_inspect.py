@@ -19,6 +19,7 @@ from tools.ops.pilot_inspect import (
     mask_email,
     mask_name,
     mask_phone,
+    mask_provider_message_id,
     parse_args,
     sanitize_text,
 )
@@ -68,6 +69,38 @@ class TestPilotInspectMasking(unittest.TestCase):
         self.assertTrue(sanitized.endswith("..."))
         self.assertLessEqual(len(sanitized), 28)
         self.assertEqual(sanitize_text(None), "[NO_CONTENT]")
+
+    def test_sanitize_text_masks_embedded_phone_jid_and_email(self) -> None:
+        """Proves that raw phone, JID, email, and secrets NEVER appear in sanitized error output."""
+        raw_error = (
+            "Failed delivery to 5511999991234@s.whatsapp.net: "
+            "user 5511999991234 (candidate@example.com) disconnected with token=sec123abc"
+        )
+        sanitized = sanitize_text(raw_error, max_length=200)
+
+        # Invariants: raw PII must NEVER appear in output
+        self.assertNotIn("5511999991234@s.whatsapp.net", sanitized)
+        self.assertNotIn("5511999991234", sanitized)
+        self.assertNotIn("candidate@example.com", sanitized)
+        self.assertNotIn("sec123abc", sanitized)
+
+        # Masked values must be present
+        self.assertIn("55119****1234@s.whatsapp.net", sanitized)
+        self.assertIn("55119****1234", sanitized)
+        self.assertIn("c***e@example.com", sanitized)
+        self.assertIn("[REDACTED_CREDENTIAL]", sanitized)
+
+    def test_mask_provider_message_id_redacts_embedded_pii(self) -> None:
+        """Proves provider_message_id does not leak participant JID or phone."""
+        self.assertIsNone(mask_provider_message_id(None))
+        self.assertIsNone(mask_provider_message_id(""))
+
+        # If provider encodes JID into message ID
+        msg_id_with_jid = "wamid.5511999991234@s.whatsapp.net.abc999"
+        masked = mask_provider_message_id(msg_id_with_jid)
+        self.assertIsNotNone(masked)
+        self.assertNotIn("5511999991234@s.whatsapp.net", masked)
+        self.assertNotIn("5511999991234", masked)
 
 
 class TestPilotInspectCliArgs(unittest.TestCase):

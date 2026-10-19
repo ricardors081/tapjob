@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import re
 import sys
@@ -27,9 +28,66 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-# Regex patterns for sanitization
+logger = logging.getLogger("tapjob.ops.pilot_inspect")
+
+# Inline PII regex patterns for free-text error/event sanitization
+EMAIL_INLINE_RE = re.compile(r"\b[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+\b")
+JID_INLINE_RE = re.compile(r"\b(?:\+?\d{8,15})@(s\.whatsapp\.net|g\.us|c\.us)\b")
+PHONE_INLINE_RE = re.compile(
+    r"(?:\+?55\s?)?(?:\(?\d{2}\)?\s?)?(?:9\d{4}|\d{4})[-\s]?\d{4}\b|\b\d{10,13}\b"
+)
+SECRET_INLINE_RE = re.compile(
+    r"(?i)\b(bearer\s+[a-zA-Z0-9_\-\.]+)|((?:token|api[-_]?key|secret|password|senha)\s*[:=]\s*['\"]?[a-zA-Z0-9_\-\.]+['\"]?)"
+)
 PHONE_CLEAN_RE = re.compile(r"[^\d]")
 JID_SUFFIX_RE = re.compile(r"(@[a-zA-Z0-9_\.\-]+)$")
+
+
+def mask_inline_pii(text: str) -> str:
+    """Masks all embedded PII (JIDs, emails, phone numbers, credentials) in free-text."""
+    if not text:
+        return text
+
+    # 1. Mask tokens / secrets / credentials
+    res = SECRET_INLINE_RE.sub("[REDACTED_CREDENTIAL]", text)
+
+    # 2. Mask WhatsApp JIDs
+    def _jid_sub(m: re.Match[str]) -> str:
+        return mask_phone(m.group(0))
+
+    res = JID_INLINE_RE.sub(_jid_sub, res)
+
+    # 3. Mask Email addresses (excluding WhatsApp JID domains)
+    def _email_sub(m: re.Match[str]) -> str:
+        matched = m.group(0)
+        jid_domains = ("@s.whatsapp.net", "@c.us", "@g.us", "@broadcast")
+        if any(matched.endswith(suffix) for suffix in jid_domains):
+            return matched
+        return mask_email(matched)
+
+    res = EMAIL_INLINE_RE.sub(_email_sub, res)
+
+    # 4. Mask Standalone phone numbers
+    def _phone_sub(m: re.Match[str]) -> str:
+        matched = m.group(0)
+        digits = PHONE_CLEAN_RE.sub("", matched)
+        if 8 <= len(digits) <= 15 and "*" not in matched:
+            return mask_phone(matched)
+        return matched
+
+    res = PHONE_INLINE_RE.sub(_phone_sub, res)
+    return res
+
+
+def mask_provider_message_id(msg_id: str | None) -> str | None:
+    """Masks provider message ID if present and ensures no embedded JID/phone leaks."""
+    if not msg_id or not str(msg_id).strip():
+        return None
+    raw = str(msg_id).strip()
+    masked = mask_inline_pii(raw)
+    if len(masked) > 36:
+        return f"{masked[:14]}...{masked[-6:]}"
+    return masked
 
 
 def mask_phone(phone: str | None) -> str:
@@ -83,11 +141,13 @@ def mask_name(name: str | None) -> str:
     return " ".join(masked_tokens)
 
 
-def sanitize_text(text: str | None, max_length: int = 80) -> str:
-    """Truncates text and strips potential inline PII."""
+def sanitize_text(text: str | None, max_length: int = 120) -> str:
+    """Masks embedded inline PII and truncates length for safe operator output."""
     if not text:
         return "[NO_CONTENT]"
-    cleaned = text.replace("\n", " ").strip()
+    cleaned = text.replace("\r", " ").replace("\n", " ").strip()
+    cleaned = mask_inline_pii(cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
     if len(cleaned) > max_length:
         return f"{cleaned[:max_length]}..."
     return cleaned
@@ -109,7 +169,13 @@ def create_db_session(db_url: str | None = None) -> Session:
 
     engine = sa.create_engine(url, pool_pre_ping=True)
     factory = sessionmaker(bind=engine)
-    return factory()
+    session = factory()
+    # Defense in depth: execute read-only transaction guard if supported
+    try:
+        session.execute(sa.text("SET TRANSACTION READ ONLY"))
+    except Exception as exc:
+        logger.debug("Read-only transaction declaration skipped: %s", exc)
+    return session
 
 
 def inspect_summary(session: Session) -> dict[str, Any]:
@@ -217,7 +283,7 @@ def inspect_recent_outbox(session: Session, limit: int = 10) -> list[dict[str, A
                 "created_at": str(row[5]),
                 "sent_at": str(row[6]) if row[6] else None,
                 "last_error": sanitize_text(row[7]) if row[7] else None,
-                "provider_message_id": row[8],
+                "provider_message_id": mask_provider_message_id(row[8]),
             }
         )
     return results
@@ -268,7 +334,7 @@ def inspect_participant(session: Session, phone_or_jid: str) -> dict[str, Any]:
                 "created_at": str(r[3]),
                 "sent_at": str(r[4]) if r[4] else None,
                 "error": sanitize_text(r[5]) if r[5] else None,
-                "provider_message_id": r[6],
+                "provider_message_id": mask_provider_message_id(r[6]),
             }
         )
 

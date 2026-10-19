@@ -42,7 +42,7 @@ def _make_inbound(
 
 
 def test_first_contact_greeting_includes_lgpd_disclosure(mock_session: MagicMock) -> None:
-    """First contact greeting to an unknown phone must include clear LGPD privacy disclosure."""
+    """First contact greeting to an unknown phone must be concise and product-focused."""
     inbound = _make_inbound("Olá")
     provider_id = uuid.uuid4()
     queued_messages: list[MagicMock] = []
@@ -85,13 +85,16 @@ def test_first_contact_greeting_includes_lgpd_disclosure(mock_session: MagicMock
     assert len(keys) == 1
     assert len(queued_messages) == 1
     text = queued_messages[0].message_text
-    assert "LGPD" in text
-    assert "privacidade" in text.lower()
     assert "assistente de carreira" in text.lower()
+    assert "privacidade" in text.lower()
+    assert "dados" in text.lower()
+    # Invariant: first contact does NOT dump legal articles or statutory disclaimers
+    assert "art. 7" not in text.lower()
+    assert "artigo" not in text.lower()
 
 
 def test_privacidade_command_returns_lgpd_information(mock_session: MagicMock) -> None:
-    """Typing 'privacidade' returns legal bases, purposes, retention and deletion rights."""
+    """Typing 'privacidade' explains categories, purposes, retention, and rights."""
     inbound = _make_inbound("privacidade")
     user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
     link = MagicMock(id=uuid.uuid4())
@@ -127,17 +130,21 @@ def test_privacidade_command_returns_lgpd_information(mock_session: MagicMock) -
 
     assert len(keys) == 1
     text = queued_messages[0].message_text
-    assert "Privacidade e Proteção de Dados (LGPD)" in text
-    assert "Bases Legais" in text
-    assert "Art. 7º, V" in text
-    assert "Art. 7º, IX" in text
+    assert "Privacidade e Proteção de Dados" in text
+    assert "Dados Coletados" in text
+    assert "Finalidade" in text
+    assert "Retenção" in text
+    assert "Seus Direitos" in text
     assert "excluir meus dados" in text
+    # Invariant: no dogmatic statutory claims dumped in user chat
+    assert "Art. 7º, V" not in text
+    assert "Art. 7º, IX" not in text
 
 
 def test_excluir_meus_dados_command_returns_deletion_instructions(
     mock_session: MagicMock,
 ) -> None:
-    """Typing 'excluir meus dados' returns explicit instructions for account/data deletion."""
+    """Typing 'excluir meus dados' returns truthful operator-assisted deletion guidance."""
     inbound = _make_inbound("quero excluir meus dados")
     user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
     link = MagicMock(id=uuid.uuid4())
@@ -173,9 +180,11 @@ def test_excluir_meus_dados_command_returns_deletion_instructions(
 
     assert len(keys) == 1
     text = queued_messages[0].message_text
-    assert "Exclusão de Dados Pessoais (LGPD)" in text
-    assert "eliminação dos dados" in text
-    assert "confirmar exclusao" in text
+    assert "Solicitação de Exclusão de Dados" in text
+    assert "operador do piloto" in text
+    assert "Nenhum dado é excluído automaticamente sem essa validação prévia" in text
+    # Invariant (Finding 1): no false execution promise "confirmar exclusao"
+    assert "confirmar exclusao" not in text.lower()
 
 
 def test_format_tailored_application_kit_messages_single_text() -> None:
@@ -231,21 +240,26 @@ def test_format_tailored_application_kit_messages_splits_when_long() -> None:
             }
         },
     }
+    max_chars = 500
     messages = format_tailored_application_kit_messages(
         job_title="Lead Architect",
         kit_info=kit_info,
         status_desc="Candidatura em preparação",
         cta_text="Envie 'já me candidatei' após submissão.",
-        max_single_message_chars=500,  # Force split threshold
+        max_single_message_chars=max_chars,
     )
 
-    assert len(messages) == 2
-    part1, part2 = messages[0], messages[1]
-    assert "ID do Kit: kit_long_789" in part1
-    assert "Resumo Profissional:" in part1
-    assert "Experiências em Destaque (Lead Architect):" in part2
-    assert "Competências-Chave:" in part2
-    assert "já me candidatei" in part2
+    assert len(messages) > 1
+    # Finding 2 invariant: strictly 0 < len(part) <= max_single_message_chars for EVERY part
+    for idx, part in enumerate(messages):
+        assert 0 < len(part) <= max_chars, f"Part {idx} length {len(part)} exceeds {max_chars}"
+
+    all_content = "\n".join(messages)
+    assert "ID do Kit: kit_long_789" in all_content
+    assert "Resumo Profissional:" in all_content
+    assert "Experiências em Destaque:" in all_content
+    assert "Competências-Chave:" in all_content
+    assert "já me candidatei" in all_content
 
 
 def test_dispatch_inbound_delivers_tailored_kit_in_text(mock_session: MagicMock) -> None:
@@ -321,3 +335,314 @@ def test_dispatch_inbound_delivers_tailored_kit_in_text(mock_session: MagicMock)
     assert "• Analista Pleno na Startup Alfa" in sent_text
     assert "Competências-Chave:" in sent_text
     assert "• Python" in sent_text
+
+
+def test_confirmar_exclusao_does_not_confirm_resume_facts(mock_session: MagicMock) -> None:
+    """Proves 'confirmar exclusao' routes to deletion guidance and NEVER confirms resume facts."""
+    inbound = _make_inbound("confirmar exclusao", msg_id="del_msg_1")
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock(id=uuid.uuid4())
+    queued_messages: list[MagicMock] = []
+
+    def fake_queue(session: Any, **kwargs: Any) -> MagicMock:
+        mock_msg = MagicMock()
+        mock_msg.message_text = kwargs["message_text"]
+        mock_msg.idempotency_key = kwargs["idempotency_key"]
+        queued_messages.append(mock_msg)
+        return mock_msg
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.confirm_candidates_and_finalize",
+        ) as mock_finalize,
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue,
+        ),
+    ):
+        keys = dispatch_inbound_message(
+            mock_session,
+            redis_client=None,
+            inbound=inbound,
+            provider_id=uuid.uuid4(),
+        )
+
+    assert len(keys) == 1
+    # Verify finalize was NEVER called
+    mock_finalize.assert_not_called()
+    text = queued_messages[0].message_text
+    # Finding 1 invariant: routes to deletion guidance and not resume confirmation
+    assert "Solicitação de Exclusão de Dados" in text
+    assert "perfil profissional foi atualizado" not in text
+
+
+def test_confirmar_todos_confirms_pending_resume_facts(mock_session: MagicMock) -> None:
+    """Proves 'confirmar todos' correctly triggers fact confirmation without deletion collision."""
+    inbound = _make_inbound("confirmar todos", msg_id="confirm_all_1")
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock(id=uuid.uuid4())
+    queued_messages: list[MagicMock] = []
+
+    mock_import = MagicMock()
+    mock_import.id = uuid.uuid4()
+    mock_candidate = MagicMock()
+    mock_candidate.id = uuid.uuid4()
+    mock_candidate.created_at = datetime.now(UTC)
+    mock_import.candidates = [mock_candidate]
+
+    mock_session.execute.return_value.scalar_one_or_none.return_value = mock_import
+    mock_session.scalars.return_value.all.return_value = []
+
+    mock_res = MagicMock()
+    mock_res.resume_version.profile_version = 2
+
+    def fake_queue(session: Any, **kwargs: Any) -> MagicMock:
+        mock_msg = MagicMock()
+        mock_msg.message_text = kwargs["message_text"]
+        mock_msg.idempotency_key = kwargs["idempotency_key"]
+        queued_messages.append(mock_msg)
+        return mock_msg
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.get_truth_snapshot",
+            return_value=MagicMock(profile_version=1),
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.confirm_candidates_and_finalize",
+            return_value=mock_res,
+        ) as mock_finalize,
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue,
+        ),
+    ):
+        keys = dispatch_inbound_message(
+            mock_session,
+            redis_client=None,
+            inbound=inbound,
+            provider_id=uuid.uuid4(),
+        )
+
+    assert len(keys) == 1
+    mock_finalize.assert_called_once()
+    text = queued_messages[0].message_text
+    assert "Informações confirmadas com sucesso" in text
+    assert "Versão 2" in text
+
+
+def test_job_description_with_politica_de_beneficios_routes_to_job_intake(
+    mock_session: MagicMock,
+) -> None:
+    """Proves job text containing 'política de benefícios' is NOT captured by privacy routing."""
+    job_text = (
+        "Vaga: Engenheiro de Software Sênior\n"
+        "Buscamos profissional com sólida experiência em microsserviços.\n"
+        "A empresa oferece remuneração compatível com o mercado, excelente política de benefícios "
+        "e política de trabalho remoto híbrido com flexibilidade total."
+    )
+    inbound = _make_inbound(job_text, msg_id="job_intake_1")
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock(id=uuid.uuid4())
+    queued_messages: list[MagicMock] = []
+
+    def fake_queue(session: Any, **kwargs: Any) -> MagicMock:
+        mock_msg = MagicMock()
+        mock_msg.message_text = kwargs["message_text"]
+        mock_msg.idempotency_key = kwargs["idempotency_key"]
+        queued_messages.append(mock_msg)
+        return mock_msg
+
+    fake_parsed_job = {
+        "job_id": str(uuid.uuid4()),
+        "title": "Engenheiro de Software Sênior",
+        "company": "Empresa XPTO",
+        "description": job_text,
+    }
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.tool_ingest_job_text",
+            return_value=fake_parsed_job,
+        ) as mock_ingest,
+        patch(
+            "tapjob_api.messaging.orchestration.tool_match_job",
+            return_value={"overall_score": 90, "eligibility": "HIGH"},
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue,
+        ),
+    ):
+        keys = dispatch_inbound_message(
+            mock_session,
+            redis_client=None,
+            inbound=inbound,
+            provider_id=uuid.uuid4(),
+        )
+
+    assert len(keys) == 1
+    mock_ingest.assert_called_once()
+    text = queued_messages[0].message_text
+    # Finding 6 invariant: must NOT route to privacy handler
+    assert "Privacidade e Proteção de Dados" not in text
+    assert "Solicitação de Exclusão de Dados" not in text
+    # Routed to job intake
+    assert "Descrição da vaga registrada com sucesso" in text
+
+
+def test_format_tailored_application_kit_extremely_long_summary_and_bullet() -> None:
+    """Deterministic segmentation bounds single huge paragraphs and oversized bullets."""
+    huge_summary = "X" * 3200
+    huge_bullet = "Empresa Y: " + ("Desenvolvimento de algoritmos de alta performance. " * 50)
+    kit_info = {
+        "kit_id": "kit_huge_999",
+        "tailored_draft": {
+            "sections": {
+                "summary": huge_summary,
+                "skills": "Python, Rust, C++",
+                "experience_highlights": huge_bullet,
+            }
+        },
+    }
+    max_chars = 400
+    messages = format_tailored_application_kit_messages(
+        job_title="Principal Scientist",
+        kit_info=kit_info,
+        status_desc="Status: preparing",
+        cta_text="Pronto para envio.",
+        max_single_message_chars=max_chars,
+    )
+
+    assert len(messages) >= 8
+    # Finding 2 invariant: strictly 0 < len(part) <= max_single_message_chars for EVERY part
+    for idx, part in enumerate(messages):
+        assert 0 < len(part) <= max_chars, f"Part {idx} length {len(part)} exceeds {max_chars}"
+
+
+def test_format_tailored_application_kit_ungrounded_fallback_when_empty() -> None:
+    """When draft sections are empty, output avoids fabricated claims of adaptation/grounding."""
+    kit_info = {
+        "kit_id": "kit_empty_000",
+        "tailored_draft": {
+            "sections": {
+                "summary": "",
+                "skills": "",
+                "experience_highlights": "",
+            }
+        },
+    }
+    messages = format_tailored_application_kit_messages(
+        job_title="Junior Developer",
+        kit_info=kit_info,
+        status_desc="Status: pending",
+        cta_text="Aguardando dados.",
+        max_single_message_chars=1500,
+    )
+
+    assert len(messages) == 1
+    content = messages[0]
+    # Truthful fallback: no false claim of verified grounding when no profile content adapted
+    assert "Nenhum conteúdo de perfil adaptado para esta vaga" in content
+    assert "Nenhum resumo específico selecionado" in content
+    assert "Nenhuma experiência específica selecionada" in content
+    assert "Nenhuma competência específica selecionada" in content
+    assert "Currículo adaptado com grounding 100% verificado" not in content
+
+
+def test_dispatch_inbound_kit_delivery_idempotency_and_multipart_keys(
+    mock_session: MagicMock,
+) -> None:
+    """Proves multipart kit delivery produces deterministic idempotency keys and bounds length."""
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock(id=uuid.uuid4())
+    job = Job(id=uuid.uuid4(), title="Staff Engineer", status=JobStatus.ACTIVE)
+    queued_messages: list[MagicMock] = []
+
+    def fake_queue(session: Any, **kwargs: Any) -> MagicMock:
+        mock_msg = MagicMock()
+        mock_msg.message_text = kwargs["message_text"]
+        mock_msg.idempotency_key = kwargs["idempotency_key"]
+        queued_messages.append(mock_msg)
+        return mock_msg
+
+    long_summary = "Engenheiro sênior com vasta experiência em sistemas de larga escala. " * 25
+    fake_tailored = {
+        "sections": {
+            "summary": long_summary,
+            "skills": "Python, Distributed Systems, Go",
+            "experience_highlights": "Tech Lead na Corp Alpha; Principal na Corp Beta",
+        }
+    }
+    fake_kit = {
+        "kit_id": "kit_multipart_123",
+        "status": ApplicationStatus.PREPARING.value,
+        "tailored_draft": fake_tailored,
+    }
+
+    inbound = _make_inbound("quero me candidatar", msg_id="apply_multipart_77")
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_target_job",
+            return_value=job,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.tool_tailor_resume",
+            return_value=fake_tailored,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.tool_build_application_kit",
+            return_value=fake_kit,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue,
+        ),
+    ):
+        keys = dispatch_inbound_message(
+            mock_session,
+            redis_client=None,
+            inbound=inbound,
+            provider_id=uuid.uuid4(),
+        )
+
+    assert len(keys) == len(queued_messages)
+    assert len(keys) >= 2
+    # Deterministic keys format: kit_<provider_message_id>_part<N>
+    for idx, key in enumerate(keys):
+        assert key == f"kit_apply_multipart_77_part{idx + 1}"
+        assert queued_messages[idx].idempotency_key == key
+        assert len(queued_messages[idx].message_text) <= 1500

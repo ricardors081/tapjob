@@ -147,3 +147,117 @@ def test_rollback_does_not_trigger_immediate_dispatch() -> None:
         mock_delay.assert_not_called()
 
     session.close()
+
+
+def test_nested_savepoint_does_not_trigger_dispatch_early() -> None:
+    """Proves that committing a nested transaction/savepoint does NOT trigger outbox dispatch early;
+    dispatch is triggered ONLY when the outer/root transaction commits.
+    """
+    factory = _create_in_memory_session_factory()
+    session = factory()
+
+    with patch("tapjob_api.messaging.tasks.dispatch_outbox_task.delay") as mock_delay:
+        # Outer transaction is open
+        with session.begin_nested():
+            queue_outbound_message(
+                session,
+                channel_identity_link_id="link-savepoint",
+                message_content={
+                    "recipient_external_id": "5511999990004",
+                    "text": "Savepoint test",
+                },
+                idempotency_key=f"idem-savepoint-{uuid.uuid4()}",
+            )
+        # Nested transaction committed, but outer root transaction is NOT committed yet
+        mock_delay.assert_not_called()
+
+        # Commit outer transaction
+        session.commit()
+        # Now immediate dispatch MUST be triggered exactly once
+        mock_delay.assert_called_once()
+
+    session.close()
+
+
+def test_multiple_queued_messages_emit_exactly_one_dispatch_signal() -> None:
+    """Proves that multiple messages queued within a single database transaction emit
+    exactly one dispatch_outbox_task.delay() signal on commit (Finding 5).
+    """
+    factory = _create_in_memory_session_factory()
+    session = factory()
+
+    with patch("tapjob_api.messaging.tasks.dispatch_outbox_task.delay") as mock_delay:
+        for i in range(3):
+            queue_outbound_message(
+                session,
+                channel_identity_link_id=f"link-multi-{i}",
+                message_content={
+                    "recipient_external_id": f"551199999000{i}",
+                    "text": f"Msg {i}",
+                },
+                idempotency_key=f"idem-multi-{i}-{uuid.uuid4()}",
+            )
+
+        mock_delay.assert_not_called()
+        session.commit()
+        # Exactly one acceleration signal for the entire transaction batch
+        mock_delay.assert_called_once()
+
+    session.close()
+
+
+def test_duplicate_dispatch_execution_cannot_duplicate_provider_send() -> None:
+    """Proves that duplicate execution of claim_and_dispatch_outbox_batch
+    does not duplicate sends.
+    """
+    factory = _create_in_memory_session_factory()
+    session = factory()
+
+    queue_outbound_message(
+        session,
+        channel_identity_link_id="link-dup-dispatch",
+        message_content={
+            "recipient_external_id": "5511999990005",
+            "text": "Idempotent dispatch",
+        },
+        idempotency_key=f"idem-dup-{uuid.uuid4()}",
+    )
+    session.commit()
+
+    adapter = MagicMock(spec=MessagingChannel)
+    now_utc = datetime.now(UTC)
+    adapter.send = AsyncMock(
+        return_value=SendReceipt(
+            accepted_at=now_utc,
+            provider_message_id="wamid.dup.123",
+        )
+    )
+
+    # First dispatch run: claims and sends
+    batch1 = claim_and_dispatch_outbox_batch(session, provider_adapter=adapter, limit=10)
+    session.commit()
+    assert len(batch1) == 1
+    assert batch1[0].status == OutboundMessageStatus.SENT
+    assert adapter.send.call_count == 1
+
+    # Second concurrent / duplicate dispatch run: no messages should be claimed or sent
+    batch2 = claim_and_dispatch_outbox_batch(session, provider_adapter=adapter, limit=10)
+    session.commit()
+    assert len(batch2) == 0
+    # Provider adapter send MUST NOT be called again
+    assert adapter.send.call_count == 1
+
+    session.close()
+
+
+def test_inbound_tasks_does_not_call_trigger_immediate_outbox_dispatch_directly() -> None:
+    """Finding 5 regression guard: verifies process_inbound_envelope_task does NOT call
+    trigger_immediate_outbox_dispatch directly, preserving the after_commit hook as the
+    single canonical acceleration signal.
+    """
+    import inspect
+
+    from tapjob_api.messaging import tasks
+
+    source = inspect.getsource(tasks.process_inbound_envelope_task)
+    assert "trigger_immediate_outbox_dispatch" not in source

@@ -264,6 +264,86 @@ def is_pasted_job_text(text: str) -> bool:
     )
 
 
+def is_privacy_intent(text: str) -> bool:
+    """Detects explicit privacy / LGPD / data-rights intent.
+
+    Must NOT match generic mentions of 'política' (such as 'política de benefícios',
+    'política de trabalho remoto', or 'política comercial') found in job descriptions.
+    """
+    clean_text = text.lower().strip()
+    norm = re.sub(r"[^\w\s]", " ", clean_text)
+    norm = " ".join(norm.split())
+
+    # Standalone or explicit privacy commands
+    explicit_commands = {
+        "privacidade",
+        "lgpd",
+        "meus dados",
+        "excluir dados",
+        "excluir meus dados",
+        "apagar dados",
+        "apagar meus dados",
+        "deletar dados",
+        "deletar meus dados",
+        "remover dados",
+        "remover meus dados",
+        "politica de privacidade",
+        "política de privacidade",
+        "termos de privacidade",
+        "termo de privacidade",
+        "protecao de dados",
+        "proteção de dados",
+        "confirmar exclusao",
+        "confirmar exclusão",
+    }
+    if norm in explicit_commands:
+        return True
+
+    # Check for specific multi-word privacy phrases
+    multi_word_phrases = (
+        "politica de privacidade",
+        "política de privacidade",
+        "excluir meus dados",
+        "excluir dados",
+        "deletar meus dados",
+        "apagar meus dados",
+        "remover meus dados",
+        "confirmar exclusao",
+        "confirmar exclusão",
+        "protecao de dados",
+        "proteção de dados",
+    )
+    if any(phrase in clean_text for phrase in multi_word_phrases):
+        # A pasted job description should not be hijacked if it mentions incidental phrases
+        is_job_posting = len(clean_text) > 120 and any(
+            w in clean_text
+            for w in (
+                "requisitos",
+                "responsabilidades",
+                "benefícios",
+                "beneficios",
+                "sobre a vaga",
+                "salário",
+                "salario",
+                "vaga:",
+                "oportunidade:",
+            )
+        )
+        return not is_job_posting
+
+    # Single-token commands in short conversational messages (<= 60 chars)
+    if len(clean_text) <= 60:
+        tokens = set(norm.split())
+        if "privacidade" in tokens or "lgpd" in tokens:
+            return True
+        if "dados" in tokens and any(
+            w in tokens for w in ("excluir", "apagar", "deletar", "remover", "meus")
+        ):
+            return True
+
+    return False
+
+
 def resolve_user_target_job(session: Session, *, user: User) -> Job | None:
     """Deterministically resolves latest target job scoped to user context (Finding 2).
 
@@ -369,6 +449,78 @@ def assemble_candidate_review_decisions(
     return decisions
 
 
+def _deterministic_split_text(text: str, max_chars: int) -> list[str]:
+    """Deterministically splits a text block into chunks of length <= max_chars.
+
+    Prefers paragraph (\\n\\n), line (\\n), and word boundaries. Only uses hard character
+    slicing when a single token cannot otherwise fit within max_chars.
+    Guarantees: for each returned chunk, 0 < len(chunk) <= max_chars.
+    """
+    if len(text) <= max_chars:
+        return [text] if text else []
+
+    chunks: list[str] = []
+    paragraphs = text.split("\n\n")
+    current_chunk = ""
+
+    for para in paragraphs:
+        if not para.strip():
+            continue
+        if len(para) <= max_chars:
+            if not current_chunk:
+                current_chunk = para
+            elif len(current_chunk) + 2 + len(para) <= max_chars:
+                current_chunk = f"{current_chunk}\n\n{para}"
+            else:
+                chunks.append(current_chunk)
+                current_chunk = para
+        else:
+            if current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = ""
+
+            lines = para.split("\n")
+            for line in lines:
+                if not line.strip():
+                    continue
+                if len(line) <= max_chars:
+                    if not current_chunk:
+                        current_chunk = line
+                    elif len(current_chunk) + 1 + len(line) <= max_chars:
+                        current_chunk = f"{current_chunk}\n{line}"
+                    else:
+                        chunks.append(current_chunk)
+                        current_chunk = line
+                else:
+                    if current_chunk:
+                        chunks.append(current_chunk)
+                        current_chunk = ""
+
+                    words = line.split(" ")
+                    for word in words:
+                        if not word:
+                            continue
+                        if len(word) <= max_chars:
+                            if not current_chunk:
+                                current_chunk = word
+                            elif len(current_chunk) + 1 + len(word) <= max_chars:
+                                current_chunk = f"{current_chunk} {word}"
+                            else:
+                                chunks.append(current_chunk)
+                                current_chunk = word
+                        else:
+                            if current_chunk:
+                                chunks.append(current_chunk)
+                                current_chunk = ""
+                            for i in range(0, len(word), max_chars):
+                                chunks.append(word[i : i + max_chars])
+
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    return [c for c in chunks if c.strip()]
+
+
 def format_tailored_application_kit_messages(
     job_title: str,
     kit_info: dict[str, Any],
@@ -379,20 +531,25 @@ def format_tailored_application_kit_messages(
     """Formats tailored application kit into sequential Portuguese-BR text messages.
 
     Includes tailored professional summary, key experience bullets, and matched skills.
-    If the combined text exceeds max_single_message_chars, breaks deterministically
-    into two sequential messages while preserving logical section boundaries.
+    Ensures strict Professional Truth Store grounding (zero fabricated alignment claims
+    when section content is absent).
+    Guarantees deterministic N-part segmentation where every part satisfies:
+    0 < len(part) <= max_single_message_chars.
     """
     draft = kit_info.get("tailored_draft") or {}
     sections = draft.get("sections") or {}
 
-    summary = (
-        sections.get("summary", "").strip()
-        or "Perfil profissional adaptado com base no seu histórico confirmado."
-    )
+    summary = sections.get("summary", "").strip()
     skills = sections.get("skills", "").strip()
     exp_highlights = sections.get("experience_highlights", "").strip()
 
-    # Format experiences as clean bullet points
+    summary_block = (
+        f"📄 Resumo Profissional:\n{summary}"
+        if summary
+        else "📄 Resumo Profissional:\nNenhum resumo específico selecionado para esta vaga."
+    )
+
+    # Format experiences as clean bullet points without ungrounded alignment claims
     exp_bullets: list[str] = []
     if exp_highlights and exp_highlights != "Nenhuma experiência registrada":
         for part in exp_highlights.split(";"):
@@ -400,12 +557,15 @@ def format_tailored_application_kit_messages(
             if cleaned:
                 exp_bullets.append(f"• {cleaned}")
     exp_block = (
-        "\n".join(exp_bullets)
+        "💼 Experiências em Destaque:\n" + "\n".join(exp_bullets)
         if exp_bullets
-        else "• Experiências alinhadas com os requisitos da oportunidade."
+        else (
+            "💼 Experiências em Destaque:\n"
+            "• Nenhuma experiência específica selecionada para esta vaga."
+        )
     )
 
-    # Format skills as clean bullet points
+    # Format skills as clean bullet points without ungrounded claims
     skills_bullets: list[str] = []
     if skills and skills != "Nenhuma competência registrada":
         for skill in skills.split(","):
@@ -413,39 +573,67 @@ def format_tailored_application_kit_messages(
             if cleaned:
                 skills_bullets.append(f"• {cleaned}")
     skills_block = (
-        "\n".join(skills_bullets)
+        "🎯 Competências-Chave:\n" + "\n".join(skills_bullets)
         if skills_bullets
-        else "• Competências verificadas no perfil profissional."
+        else "🎯 Competências-Chave:\n• Nenhuma competência específica selecionada para esta vaga."
     )
 
-    single_message = (
+    has_adapted_content = bool(summary or exp_bullets or skills_bullets)
+    grounding_line = (
+        "• Currículo adaptado com grounding 100% verificado no seu perfil."
+        if has_adapted_content
+        else "• Nenhum conteúdo de perfil adaptado para esta vaga."
+    )
+
+    header_block = (
         f"Application Kit preparado com sucesso para {job_title}!\n"
-        f"• ID do Kit: {kit_info['kit_id']}\n"
-        f"• Currículo adaptado com grounding 100% verificado no seu perfil.\n"
-        f"• {status_desc}.\n\n"
-        f"📄 Resumo Profissional:\n{summary}\n\n"
-        f"💼 Experiências em Destaque:\n{exp_block}\n\n"
-        f"🎯 Competências-Chave:\n{skills_block}\n\n"
-        f"{cta_text}"
+        f"• ID do Kit: {kit_info.get('kit_id', 'kit-desconhecido')}\n"
+        f"{grounding_line}\n"
+        f"• {status_desc}."
     )
 
-    if len(single_message) <= max_single_message_chars:
-        return [single_message]
+    cta_block = cta_text.strip() if cta_text else ""
 
-    # Deterministic split into two sequential messages
-    part1 = (
-        f"Application Kit preparado com sucesso para {job_title}!\n"
-        f"• ID do Kit: {kit_info['kit_id']}\n"
-        f"• Currículo adaptado com grounding 100% verificado no seu perfil.\n"
-        f"• {status_desc}.\n\n"
-        f"📄 Resumo Profissional:\n{summary}"
-    )
-    part2 = (
-        f"💼 Experiências em Destaque ({job_title}):\n{exp_block}\n\n"
-        f"🎯 Competências-Chave:\n{skills_block}\n\n"
-        f"{cta_text}"
-    )
-    return [part1, part2]
+    logical_blocks = [
+        b for b in [header_block, summary_block, exp_block, skills_block, cta_block] if b
+    ]
+    full_text = "\n\n".join(logical_blocks)
+
+    if len(full_text) <= max_single_message_chars:
+        return [full_text]
+
+    # Deterministic N-part segmentation preserving semantic order
+    chunks: list[str] = []
+    current_parts: list[str] = []
+    current_len = 0
+
+    for block in logical_blocks:
+        if len(block) <= max_single_message_chars:
+            added_len = len(block) if not current_parts else len(block) + 2
+            if current_len + added_len <= max_single_message_chars:
+                current_parts.append(block)
+                current_len += added_len
+            else:
+                if current_parts:
+                    chunks.append("\n\n".join(current_parts))
+                current_parts = [block]
+                current_len = len(block)
+        else:
+            if current_parts:
+                chunks.append("\n\n".join(current_parts))
+                current_parts = []
+                current_len = 0
+            sub_chunks = _deterministic_split_text(block, max_single_message_chars)
+            for sc in sub_chunks[:-1]:
+                chunks.append(sc)
+            if sub_chunks:
+                current_parts = [sub_chunks[-1]]
+                current_len = len(sub_chunks[-1])
+
+    if current_parts:
+        chunks.append("\n\n".join(current_parts))
+
+    return [c for c in chunks if c.strip()]
 
 
 def dispatch_inbound_message(
@@ -520,11 +708,10 @@ def dispatch_inbound_message(
                 "Sou seu assistente de carreira pessoal.\n\n"
                 "Para começar, envie seu currículo em PDF ou compartilhe "
                 "suas principais experiências e competências.\n\n"
-                "🔒 Privacidade & Seus Dados (LGPD):\n"
-                f"O {config.product_name} processa suas informações exclusivamente para encontrar "
-                "e adaptar oportunidades profissionais para o seu perfil. "
-                "Para saber como tratamos seus dados ou solicitar exclusão a qualquer momento, "
-                "envie o comando 'privacidade'."
+                "🔒 Privacidade:\n"
+                "Usamos seus dados profissionais para criar seu perfil, analisar vagas "
+                "e apoiar suas candidaturas. Digite 'privacidade' para saber como seus dados "
+                "são tratados e conhecer seus direitos."
             )
             msg = queue_response_message(
                 session,
@@ -539,8 +726,8 @@ def dispatch_inbound_message(
         # First contact has content: send greeting first and continue same inbound (Finding 9)
         greeting_text = (
             f"Olá! Bem-vindo ao {config.product_name}. Sou seu assistente de carreira pessoal. "
-            "(Tratamos seus dados de forma segura sob a LGPD. "
-            "Envie 'privacidade' a qualquer momento para detalhes)."
+            "Usamos seus dados profissionais para analisar vagas e apoiar suas candidaturas. "
+            "(Digite 'privacidade' a qualquer momento para conhecer seus direitos)."
         )
         msg = queue_response_message(
             session,
@@ -869,30 +1056,97 @@ def dispatch_inbound_message(
             queued_keys.append(msg.idempotency_key)
             return queued_keys
 
-    # 3. Fact confirmation / edit / reject routing (Finding 8)
-    is_confirm_all = any(
-        k in lower_text
-        for k in (
-            "confirmar fatos",
-            "confirmar todos",
-            "aceitar todos",
-            "confirmar fato",
-            "confirmar",
+    # 3. Privacy, LGPD & Data-Rights command handler (Finding 1, Finding 4, Finding 6)
+    if is_privacy_intent(text):
+        deletion_words = ("excluir", "apagar", "remover", "deletar", "exclusao", "exclusão")
+        if any(w in lower_text for w in deletion_words):
+            response_text = (
+                "Solicitação de Exclusão de Dados (LGPD):\n\n"
+                "Respeitamos integralmente seus direitos de privacidade e exclusão de dados.\n\n"
+                "Durante a fase piloto controlada, para garantir a autenticidade e segurança da "
+                "sua conta, a exclusão definitiva do seu cadastro, currículos e histórico não é "
+                "executada diretamente por comandos de chat.\n\n"
+                "O cancelamento e a eliminação dos seus dados podem ser solicitados formalmente ao "
+                "operador do piloto ou pelo canal de suporte. Sua solicitação será registrada e "
+                "processada pelo procedimento canônico autorizado.\n\n"
+                "Nenhum dado é excluído automaticamente sem essa validação prévia."
+            )
+        else:
+            response_text = (
+                "Privacidade e Proteção de Dados — TapJob:\n\n"
+                "• Dados Coletados: Coletamos e processamos informações profissionais "
+                "(experiências, competências, formação e histórico) fornecidas por você através "
+                "de currículos ou mensagens.\n"
+                "• Finalidade: Utilizamos esses dados exclusivamente para estruturar seu perfil "
+                "profissional, calcular compatibilidade (match) com vagas de interesse e gerar "
+                "kits adaptados de candidatura.\n"
+                "• Retenção: Seus dados permanecem armazenados com segurança enquanto sua conta "
+                "estiver ativa na plataforma ou até você solicitar sua remoção.\n"
+                "• Seus Direitos: Você pode consultar seus dados, solicitar correções ou pedir a "
+                "exclusão enviando 'excluir meus dados'.\n\n"
+                "Para continuar sua busca de carreira, envie seu currículo em PDF ou compartilhe "
+                "o link de uma vaga!"
+            )
+
+        msg = queue_response_message(
+            session,
+            channel_identity_link_id=link_id,
+            recipient_external_id=external_id,
+            message_text=response_text,
+            idempotency_key=f"privacy_{inbound.provider_message_id}",
         )
-    ) and not any(
-        k in lower_text for k in ("rejeitar", "ignorar", "descartar", "editar", "corrigir")
+        queued_keys.append(msg.idempotency_key)
+        return queued_keys
+
+    # 4. Fact confirmation / edit / reject routing (Finding 8)
+    # Finding 1 defense: privacy/deletion words must NEVER enter fact confirmation
+    has_privacy_or_deletion_terms = any(
+        w in lower_text
+        for w in (
+            "excluir",
+            "exclusao",
+            "exclusão",
+            "deletar",
+            "apagar",
+            "remover",
+            "privacidade",
+            "lgpd",
+        )
     )
 
-    is_reject_all = any(
+    is_confirm_all = (
+        not has_privacy_or_deletion_terms
+        and (
+            any(
+                k in lower_text
+                for k in (
+                    "confirmar fatos",
+                    "confirmar todos",
+                    "aceitar todos",
+                    "confirmar fato",
+                )
+            )
+            or lower_text.strip() in ("confirmar", "confirmar.")
+        )
+        and not any(
+            k in lower_text for k in ("rejeitar", "ignorar", "descartar", "editar", "corrigir")
+        )
+    )
+
+    is_reject_all = not has_privacy_or_deletion_terms and any(
         k in lower_text
         for k in ("rejeitar todos", "ignorar todos", "descartar todos", "rejeitar fatos")
     )
 
-    is_single_reject = any(
+    is_single_reject = not has_privacy_or_deletion_terms and any(
         k in lower_text for k in ("rejeitar fato", "ignorar fato", "descartar fato")
     )
-    is_single_accept = any(k in lower_text for k in ("aceitar fato",))
-    is_single_edit = any(k in lower_text for k in ("editar fato", "corrigir fato"))
+    is_single_accept = not has_privacy_or_deletion_terms and any(
+        k in lower_text for k in ("aceitar fato",)
+    )
+    is_single_edit = not has_privacy_or_deletion_terms and any(
+        k in lower_text for k in ("editar fato", "corrigir fato")
+    )
 
     if is_confirm_all or is_reject_all or is_single_reject or is_single_accept or is_single_edit:
         existing_finalize_effect = None
@@ -1330,51 +1584,6 @@ def dispatch_inbound_message(
             queued_keys.append(msg.idempotency_key)
             return queued_keys
 
-    # 4.5. Privacy & LGPD command handler ("privacidade", "lgpd", "excluir meus dados")
-    if any(
-        q in lower_text
-        for q in (
-            "privacidade",
-            "lgpd",
-            "meus dados",
-            "excluir dados",
-            "politica de privacidade",
-            "politica",
-        )
-    ):
-        if any(w in lower_text for w in ("excluir", "apagar", "remover", "deletar")):
-            response_text = (
-                "Exclusão de Dados Pessoais (LGPD):\n\n"
-                "Respeitamos integralmente seu direito à eliminação dos dados (LGPD, Art. 18).\n"
-                "Para solicitar a exclusão definitiva do seu cadastro, currículos e histórico, "
-                "envie uma mensagem confirmando: 'confirmar exclusao' ou fale com o suporte.\n\n"
-                "Após a confirmação, seus dados serão permanentemente desvinculados e excluídos."
-            )
-        else:
-            response_text = (
-                "Privacidade e Proteção de Dados (LGPD) — TapJob:\n\n"
-                "• Finalidade: O TapJob coleta e trata seus dados profissionais exclusivamente "
-                "para buscar vagas, calcular afinidade (match) e gerar kits de candidatura.\n"
-                "• Bases Legais: O tratamento fundamenta-se na Execução de Contrato a seu pedido "
-                "(Art. 7º, V da LGPD) e no Legítimo Interesse para desenvolvimento profissional "
-                "(Art. 7º, IX da LGPD), sem exigir consentimento prévio para a conversa inicial.\n"
-                "• Retenção: Suas informações permanecem protegidas e são mantidas apenas enquanto "
-                "sua conta estiver ativa ou até você solicitar a exclusão.\n"
-                "• Seus Direitos: Você pode consultar seus dados, pedir correções "
-                "ou solicitar a exclusão total enviando 'excluir meus dados'.\n\n"
-                "Para continuar, envie seu currículo, envie um link de vaga ou digite 'vagas'."
-            )
-
-        msg = queue_response_message(
-            session,
-            channel_identity_link_id=link_id,
-            recipient_external_id=external_id,
-            message_text=response_text,
-            idempotency_key=f"privacy_{inbound.provider_message_id}",
-        )
-        queued_keys.append(msg.idempotency_key)
-        return queued_keys
-
     # 5. Pasted Job Description intake
     if is_pasted_job_text(text) and not any(
         cmd in lower_text
@@ -1693,7 +1902,7 @@ def dispatch_inbound_message(
             "- 'Quero me candidatar': gerar Application Kit\n"
             "- 'Já me candidatei': atualizar status da candidatura\n"
             "- 'Me lembra de acompanhar': agendar lembrete\n"
-            "- 'Privacidade': consultar política de dados LGPD"
+            "- 'Privacidade': consultar informações sobre seus dados e direitos"
         )
 
     msg = queue_response_message(

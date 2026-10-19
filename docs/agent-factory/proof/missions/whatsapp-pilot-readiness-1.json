@@ -258,7 +258,14 @@
       "scope_verified_at": "2026-10-19T15:45:17.375842+00:00"
     }
   },
-  "created_at": "2026-10-19T15:01:50.896469+00:00",
-  "updated_at": "2026-10-19T15:45:19.851733+00:00",
-  "metadata": {}
+  "metadata": {
+    "corrective_hardening_round_1": {
+      "finding_1": "Resolved false data deletion flow: removed fake 'confirmar exclusao' execution promise, routed deletion to operator-assisted pilot procedure, ensured fact confirmation strictly rejects deletion keywords.",
+      "finding_2": "Enforced bounded N-part kit segmentation guaranteeing 0 < len(part) <= max_single_message_chars for every part, with truthful ungrounded fallbacks.",
+      "finding_3": "Hardened pilot_inspect.py: free-text PII sanitization (inline phones, JIDs, emails, credentials), provider message ID masking, and read-only DB transaction guard.",
+      "finding_4": "Reconciled LGPD legal basis documentation: candidate/working bases with LEGAL_REVIEW_REQUIRED_BEFORE_REAL_USER_PILOT=YES, distinguished Art. 11 incidental data, non-solicitation, and concise product greeting.",
+      "finding_5": "Eliminated redundant outbox immediate dispatch from process_inbound_envelope_task, preserving Session.after_commit as the single canonical acceleration signal.",
+      "finding_6": "Hardened privacy intent matching to reject broad 'politica' substrings, preventing collision with job postings mentioning work/benefit policies."
+    }
+  }
 }

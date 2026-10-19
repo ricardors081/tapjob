@@ -8,7 +8,7 @@ Este runbook define os procedimentos operacionais, checklists pré-voo, comandos
 
 - **Público-alvo:** 5 a 10 participantes controlados (equipe interna e canary testers autorizados).
 - **Escopo funcional validado:**
-  1. Primeiro contato amigável com aviso de privacidade e transparência LGPD (Art. 7º, V e IX).
+  1. Primeiro contato amigável com transparência ativa de privacidade e direitos do titular.
   2. Envio de currículo (PDF/documento) ou colagem de texto profissional.
   3. Extração e confirmação conversacional de fatos (Professional Truth Store).
   4. Matching inteligente com vagas reais via Career Core.
@@ -93,9 +93,9 @@ Exibe linha do tempo completa de mensagens recebidas e respostas enviadas para o
 ## 5. Gestão de Privacidade e Solicitações LGPD
 
 Durante o piloto, qualquer participante pode exercer seus direitos:
-1. **Comando `privacidade`:** O sistema responde informando as bases legais de tratamento (Art. 7º, V e IX da LGPD) e a finalidade profissional estrita.
-2. **Comando `excluir meus dados`:** O sistema informa o procedimento para exclusão irrevogável de dados cadastrais e histórico conversacional.
-3. **Exclusão Operacional:** Se solicitada formalmente, executar o pipeline de deleção de conta (`UserAccountDeletion`) via endpoints administrativos autorizados.
+1. **Comando `privacidade`:** O sistema responde informando as categorias de dados tratadas, a finalidade estrita de carreira e as orientações para exercício de direitos, sem jargões ou conclusões jurídicas precipitadas.
+2. **Comando `excluir meus dados`:** O sistema orienta o candidato de forma transparente que, por segurança da conta no piloto, a exclusão definitiva é processada via procedimento canônico com o operador do piloto, sem executar exclusões destrutivas automáticas por comandos de chat.
+3. **Exclusão Operacional:** Quando solicitada formalmente pelo participante, o operador do piloto processa a eliminação via procedimento canônico autorizado com registro de auditoria.
 
 ---
 

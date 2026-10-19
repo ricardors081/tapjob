@@ -2254,14 +2254,13 @@ class TestMissionExecution(unittest.TestCase):
                 for i in range(1, 4)
             ]
 
-            exit_codes = [p.wait(timeout=20) for p in procs]
-            for p in procs:
-                if p.stdout:
-                    p.stdout.close()
-                if p.stderr:
-                    p.stderr.close()
-            for i, code in enumerate(exit_codes, start=1):
-                self.assertEqual(code, 0, f"Worker process {i} failed with exit code {code}")
+            proc_outputs = [p.communicate(timeout=20) for p in procs]
+            for i, (p, (out, err)) in enumerate(zip(procs, proc_outputs), start=1):
+                self.assertEqual(
+                    p.returncode,
+                    0,
+                    f"Worker process {i} failed with exit code {p.returncode}\nSTDOUT: {out}\nSTDERR: {err}",
+                )
 
             entered_logs = sorted(log_dir.glob("*.entered"))
             self.assertEqual(len(entered_logs), 3)

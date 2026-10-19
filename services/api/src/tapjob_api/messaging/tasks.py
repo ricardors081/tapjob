@@ -37,7 +37,6 @@ from tapjob_api.messaging.models import ChannelType
 from tapjob_api.messaging.orchestration import dispatch_inbound_message
 from tapjob_api.messaging.outbox_service import (
     claim_and_dispatch_outbox_batch,
-    trigger_immediate_outbox_dispatch,
 )
 from tapjob_api.messaging.reminders_service import dispatch_due_reminders
 from tapjob_api.messaging.service import get_or_create_channel_provider
@@ -194,7 +193,6 @@ def process_inbound_envelope_task(envelope_id: int) -> None:
         if committed:
             session.commit()
             logger.info("messaging.task.envelope_processed", extra={"envelope_id": envelope_id})
-            trigger_immediate_outbox_dispatch()
         else:
             session.rollback()
             logger.warning(

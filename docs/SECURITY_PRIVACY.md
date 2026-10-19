@@ -54,20 +54,25 @@ Required product capabilities:
 
 ### 3.1. Bases Legais e Privacidade no Canal WhatsApp (LGPD)
 
-Para as interações conversacionais e onboarding de pessoas candidatas no WhatsApp:
+Para as interações conversacionais e onboarding de pessoas candidatas no canal WhatsApp:
 
-1. **Bases Legais Primárias (LGPD Art. 7º)**:
-   - **Art. 7º, V (Execução de Contrato e Procedimentos Preliminares)**: O tratamento de dados do currículo, experiências profissionais, competências e vagas-alvo ocorre a pedido expresso do titular (candidato) para execução dos serviços de assistência de carreira (análise de match, adaptação de currículo e geração de Application Kit).
-   - **Art. 7º, IX (Legítimo Interesse)**: Apoio e promoção do desenvolvimento profissional e descoberta de oportunidades para o candidato, respeitando suas legítimas expectativas e direitos fundamentais.
+1. **Bases Legais Candidatas / Posição de Trabalho Preliminar (Working Legal Bases)**:
+   - **Art. 7º, V da LGPD (Execução de Contrato / Procedimentos Preliminares)**: Base de trabalho candidata para o tratamento de dados profissionais fornecidos a pedido do titular (candidato) para execução do serviço pessoal de carreira (análise de perfil, matching com vagas e geração de Application Kit).
+   - **Art. 7º, IX da LGPD (Legítimo Interesse)**: Base de trabalho complementar para descoberta e recomendação de oportunidades de carreira compatíveis com as legítimas expectativas do titular.
+   - **Status de Avaliação Jurídica**: As bases legais acima constituem a posição de trabalho preliminar do controlador e NÃO constituem conclusão jurídica definitiva.
+   - `LEGAL_REVIEW_REQUIRED_BEFORE_REAL_USER_PILOT=YES`: Revisão jurídica formal independente é estritamente obrigatória antes de qualquer piloto comercial ou expansão com usuários reais fora do grupo controlado.
 
-2. **Inexistência de Consentimento Obrigatório para Contato Inicial**:
-   - A interação conversacional inicial (ex.: candidato iniciando conversa ou enviando currículo pelo WhatsApp) não exige opt-in formal prévio, pois enquadra-se como procedimento preliminar a pedido do titular (Art. 7º, V).
-   - O TapJob fornece **transparência ativa imediata** na primeira mensagem de saudação, informando a finalidade estrita de carreira e disponibilizando acesso direto às regras de privacidade.
+2. **Distinção entre Dados Profissionais Ordinários e Dados Pessoais Sensíveis (Art. 11)**:
+   - **Dados Profissionais Ordinários**: Nome, telefone/JID de contato, histórico profissional, experiências, formação acadêmica e competências declaradas.
+   - **Possíveis Dados Pessoais Sensíveis**: Currículos enviados por candidatos podem conter, de forma incidental e não solicitada, dados sensíveis protegidos pelo Art. 11 da LGPD (ex.: dados de saúde/PCD, raça/etnia, filiação sindical, convicção religiosa ou política).
+   - **Diretriz de Minimização e Não-Solicitação**: O TapJob **NÃO solicita intencionalmente** dados sensíveis para o piloto de WhatsApp.
+   - Uma base legal para dados ordinários (Art. 7º) **NÃO cobre automaticamente** dados sensíveis (Art. 11).
+   - O pipeline de ingestão de currículos deve aplicar minimização contínua: se dados sensíveis forem detectados de forma incidental, eles não devem ser propagados para o Professional Truth Store nem utilizados em matching, devendo o enquadramento jurídico final ser definido na revisão jurídica pré-piloto.
 
-3. **Mecanismos de Transparência, Consulta e Exclusão**:
-   - O candidato pode a qualquer momento consultar detalhes do tratamento enviando o comando `privacidade`.
-   - O candidato pode solicitar a exclusão definitiva do seu cadastro e dados enviando `excluir meus dados`.
-   - O consentimento expresso (Art. 7º, I) permanece reservado para tratamento de dados sensíveis (Art. 11) ou para eventuais submissões externas automatizadas em portais terceiros que exijam representação formal.
+3. **Mecanismos de Transparência e Exercício de Direitos**:
+   - **Saudação Inicial**: Transparência ativa e concisa na primeira mensagem de contato, informando a finalidade exclusiva de carreira e instruindo o candidato a digitar `privacidade`.
+   - **Consulta de Privacidade**: O comando `privacidade` detalha as categorias de dados coletados, a finalidade de uso, o prazo geral de retenção e os canais para exercício de direitos.
+   - **Solicitação de Exclusão de Dados**: O candidato pode enviar `excluir meus dados` a qualquer momento para manifestar seu direito de eliminação. Durante o piloto controlado, para prevenir exclusões indevidas via canal não autenticado, a eliminação definitiva é orientada e processada via procedimento canônico autorizado com o operador do piloto.
 
 
 ## 4. Gmail special handling
