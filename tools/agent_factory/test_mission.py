@@ -43,6 +43,7 @@ from tools.agent_factory.repair_loop import (
 from tools.agent_factory.task_contract import TaskContract
 from tools.agent_factory.worktree_dispatcher import (
     DirtyWorktreeError,
+    ScopeViolationError,
     WorktreeDispatcher,
 )
 
@@ -508,6 +509,24 @@ class TestMissionExecution(unittest.TestCase):
                         "owner_role": "core_platform_engineer",
                         "target_branch": "feat/t1",
                         "repair_count": 2,
+                        "repair_records": [
+                            {
+                                "iteration_index": 0,
+                                "implementer_role": "core_platform_engineer",
+                                "reviewer_role": "reviewer_security_engineer",
+                                "test_passed": False,
+                                "verdict": "CHANGES_REQUIRED",
+                                "findings": ["finding 1"],
+                            },
+                            {
+                                "iteration_index": 1,
+                                "implementer_role": "core_platform_engineer",
+                                "reviewer_role": "reviewer_security_engineer",
+                                "test_passed": False,
+                                "verdict": "CHANGES_REQUIRED",
+                                "findings": ["finding 2"],
+                            },
+                        ],
                         "contract": self._make_task(
                             "t1", "0123456789abcdef0123456789abcdef01234567"
                         ).to_dict(),
@@ -931,12 +950,16 @@ class TestMissionExecution(unittest.TestCase):
 
             # From DISPATCHED: fails
             with self.assertRaises(MissionCoordinatorError):
-                coordinator.verify_task_scope("mission-scope-guard", "task_scope_guard")
+                coordinator.verify_task_scope(
+                    "mission-scope-guard", "task_scope_guard", exact_head_sha=head_sha
+                )
 
             # From IMPLEMENTED: fails
             coordinator.record_task_implemented("mission-scope-guard", "task_scope_guard", head_sha)
             with self.assertRaises(MissionCoordinatorError):
-                coordinator.verify_task_scope("mission-scope-guard", "task_scope_guard")
+                coordinator.verify_task_scope(
+                    "mission-scope-guard", "task_scope_guard", exact_head_sha=head_sha
+                )
 
     # 31. Consolidation requires valid scope_verified_head_sha
     def test_31_consolidation_requires_verified_head_sha(self) -> None:
@@ -1491,6 +1514,342 @@ class TestMissionExecution(unittest.TestCase):
             cleaned = coordinator.cleanup_mission("mission-ok-clean")
             self.assertEqual(cleaned, ["task_ok_clean"])
             self.assertIsNone(coordinator.dispatcher.get_active_task("task_ok_clean"))
+
+    # 42. Duplicate mission does not poison coordinator in-memory cache (Finding 1)
+    def test_42_duplicate_mission_does_not_poison_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            repo_dir, head_sha = self._create_temp_git_repo(root)
+            worktrees_dir = root / "worktrees"
+
+            coordinator = MissionCoordinator(
+                dispatcher=WorktreeDispatcher(repo_root=repo_dir, worktrees_dir=worktrees_dir),
+                registry=MissionRegistry(worktrees_dir=worktrees_dir),
+            )
+            t1 = self._make_task("task_orig", head_sha, role="core_platform_engineer")
+            orig_mission = MissionContract(
+                mission_id="mission-cache-guard",
+                canonical_base_sha=head_sha,
+                objective="Original objective",
+                tasks=[t1],
+            )
+            coordinator.create_mission(orig_mission)
+
+            # Attempt to register duplicate with different task/objective
+            t_fake = self._make_task(
+                "task_fake", head_sha, role="qa_sdet_engineer", allowed_paths=["tests/test_fake.py"]
+            )
+            fake_mission = MissionContract(
+                mission_id="mission-cache-guard",
+                canonical_base_sha=head_sha,
+                objective="Attacker modified objective",
+                tasks=[t_fake],
+            )
+            with self.assertRaises(DuplicateMissionIdError):
+                coordinator.create_mission(fake_mission)
+
+            # Cache and contract retrieval must retain original
+            loaded = coordinator._get_mission_contract("mission-cache-guard")
+            self.assertEqual(loaded.objective, "Original objective")
+            self.assertEqual([t.task_id for t in loaded.tasks], ["task_orig"])
+
+    # 43. Post-review re-commit attack detected during scope verify and consolidation (Finding 2)
+    def test_43_post_review_recommit_attack_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            repo_dir, head_sha = self._create_temp_git_repo(root)
+            worktrees_dir = root / "worktrees"
+
+            dispatcher = WorktreeDispatcher(repo_root=repo_dir, worktrees_dir=worktrees_dir)
+            registry = MissionRegistry(worktrees_dir=worktrees_dir)
+            coordinator = MissionCoordinator(dispatcher=dispatcher, registry=registry)
+
+            t1 = self._make_task(
+                "task_attack",
+                head_sha,
+                role="core_platform_engineer",
+                allowed_paths=["services/api/src/tapjob_api/app.py"],
+            )
+            mission = MissionContract(
+                mission_id="mission-attack",
+                canonical_base_sha=head_sha,
+                objective="Test re-commit attack",
+                tasks=[t1],
+            )
+            coordinator.create_mission(mission)
+            coordinator.dispatch_execution_group("mission-attack", 0)
+
+            active = dispatcher.get_active_task("task_attack")
+            self.assertIsNotNone(active)
+            assert active is not None
+            _, winfo = active
+
+            # 1. Implement legitimate change
+            app_file = winfo.worktree_path / "services" / "api" / "src" / "tapjob_api" / "app.py"
+            app_file.parent.mkdir(parents=True, exist_ok=True)
+            app_file.write_text("# legitimate implementation\n", encoding="utf-8")
+            self._run_git(["add", "services/api/src/tapjob_api/app.py"], winfo.worktree_path)
+            self._run_git(["commit", "-m", "feat: legitimate code"], winfo.worktree_path)
+            res = self._run_git(["rev-parse", "HEAD"], winfo.worktree_path, text=True)
+            reviewed_sha = res.stdout.strip()
+
+            coordinator.record_task_implemented("mission-attack", "task_attack", reviewed_sha)
+            coordinator.record_task_review(
+                "mission-attack",
+                "task_attack",
+                "reviewer_security_engineer",
+                ReviewVerdict.APPROVE,
+                True,
+            )
+
+            # 2. Attacker adds sneaky commit between APPROVE and verify_task_scope
+            rogue_file = (
+                winfo.worktree_path / "services" / "api" / "src" / "tapjob_api" / "rogue.py"
+            )
+            rogue_file.write_text("# sneaky unauthorized commit\n", encoding="utf-8")
+            self._run_git(["add", "services/api/src/tapjob_api/rogue.py"], winfo.worktree_path)
+            self._run_git(["commit", "-m", "fix: sneaking after approve"], winfo.worktree_path)
+
+            # verify_task_scope must detect the live HEAD != reviewed_head_sha
+            with self.assertRaises(ScopeViolationError):
+                coordinator.verify_task_scope("mission-attack", "task_attack", reviewed_sha)
+
+            # Revert sneaky commit back to reviewed_sha
+            self._run_git(["reset", "--hard", reviewed_sha], winfo.worktree_path)
+            # Now verify_task_scope passes
+            coordinator.verify_task_scope("mission-attack", "task_attack", reviewed_sha)
+
+            # 3. Sneaky commit added after verify_task_scope must block consolidation
+            rogue_file.write_text("# another sneaky commit\n", encoding="utf-8")
+            self._run_git(["add", "services/api/src/tapjob_api/rogue.py"], winfo.worktree_path)
+            self._run_git(["commit", "-m", "fix: sneaky after scope verify"], winfo.worktree_path)
+            c_status = coordinator.check_consolidation_readiness("mission-attack")
+            self.assertFalse(c_status.ready)
+            self.assertTrue(any("HEAD mismatch across lifecycle" in b for b in c_status.blockers))
+
+    # 44. DAG ordering runtime enforcement & get_next_eligible_group (Finding 3)
+    def test_44_dag_ordering_runtime_enforcement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            repo_dir, head_sha = self._create_temp_git_repo(root)
+            worktrees_dir = root / "worktrees"
+
+            coordinator = MissionCoordinator(
+                dispatcher=WorktreeDispatcher(repo_root=repo_dir, worktrees_dir=worktrees_dir),
+                registry=MissionRegistry(worktrees_dir=worktrees_dir),
+            )
+            t1 = self._make_task("task_dag_1", head_sha, role="core_platform_engineer")
+            t2 = self._make_task(
+                "task_dag_2",
+                head_sha,
+                role="channel_whatsapp_engineer",
+                allowed_paths=["services/api/src/tapjob_api/messaging/router.py"],
+                dependencies=["task_dag_1"],
+            )
+            mission = MissionContract(
+                mission_id="mission-dag",
+                canonical_base_sha=head_sha,
+                objective="Test DAG runtime dispatch",
+                tasks=[t1, t2],
+            )
+            coordinator.create_mission(mission)
+
+            # Next eligible group must be 0
+            self.assertEqual(coordinator.get_next_eligible_group("mission-dag"), 0)
+
+            # Attempting to dispatch group 1 directly must fail closed
+            with self.assertRaises(MissionDispatchError):
+                coordinator.dispatch_execution_group("mission-dag", 1)
+
+            # Dispatch group 0
+            coordinator.dispatch_execution_group("mission-dag", 0)
+            # While group 0 is in-flight, next eligible group is None
+            self.assertIsNone(coordinator.get_next_eligible_group("mission-dag"))
+
+            # Complete task 1
+            coordinator.record_task_implemented("mission-dag", "task_dag_1", head_sha)
+            coordinator.record_task_review(
+                "mission-dag",
+                "task_dag_1",
+                "reviewer_security_engineer",
+                ReviewVerdict.APPROVE,
+                True,
+            )
+            coordinator.verify_task_scope("mission-dag", "task_dag_1", head_sha)
+
+            # Now next eligible group is 1
+            self.assertEqual(coordinator.get_next_eligible_group("mission-dag"), 1)
+            # Dispatch group 1 succeeds
+            dispatched = coordinator.dispatch_execution_group("mission-dag", 1)
+            self.assertIn("task_dag_2", dispatched)
+
+    # 45. DirectoryLock ABA-safe stale lock recovery (Finding 4)
+    def test_45_directory_lock_aba_safe_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from tools.agent_factory.lock import DirectoryLock
+
+            lock_path = Path(tmpdir) / ".test_lock"
+            lock1 = DirectoryLock(lock_path=lock_path, timeout_seconds=1.0)
+
+            # Manually simulate stale lock with dead PID
+            lock_path.mkdir(parents=True, exist_ok=True)
+            owner_file = lock_path / "owner.json"
+            owner_file.write_text(
+                json.dumps({"pid": 9999999, "token": "stale-tok", "created_at": 100}),
+                encoding="utf-8",
+            )
+
+            # lock1 must atomically steal via tombstone without ABA deletion race
+            with lock1.acquire(timeout_seconds=2.0):
+                self.assertTrue(lock_path.exists())
+
+            self.assertFalse(lock_path.exists())
+
+    # 46. Strict registry schema & repair state semantic binding (Finding 5)
+    def test_46_strict_registry_repair_state_schema(self) -> None:
+        contract_dict = self._make_task("t1", "0123456789abcdef0123456789abcdef01234567").to_dict()
+
+        base_data: dict[str, Any] = {
+            "mission_id": "m-strict",
+            "base_sha": "0123456789abcdef0123456789abcdef01234567",
+            "objective": "Strict validation test",
+            "human_gate_required": True,
+            "state": "running",
+            "task_ids": ["t1"],
+            "execution_groups": [["t1"]],
+            "task_states": {"t1": "dispatched"},
+            "task_records": {
+                "t1": {
+                    "owner_role": "core_platform_engineer",
+                    "target_branch": "feat/t1",
+                    "repair_count": 0,
+                    "repair_records": [],
+                    "contract": contract_dict,
+                }
+            },
+        }
+
+        # 1. Valid record parses cleanly
+        rec = MissionRegistryRecord.from_dict(base_data)
+        self.assertEqual(rec.mission_id, "m-strict")
+
+        # 2. execution_groups = ["t1"] (flat list instead of list[list[str]])
+        # raises CorruptMissionRegistryError
+        bad_groups = dict(base_data, execution_groups=["t1"])
+        with self.assertRaises(CorruptMissionRegistryError):
+            MissionRegistryRecord.from_dict(bad_groups)
+
+        # 3. Non-contiguous iteration_index in repair_records raises
+        bad_repairs = dict(base_data)
+        bad_repairs["task_records"] = {
+            "t1": {
+                "owner_role": "core_platform_engineer",
+                "target_branch": "feat/t1",
+                "repair_count": 1,
+                "contract": contract_dict,
+                "repair_records": [
+                    {
+                        "iteration_index": 5,  # non-contiguous (expected 0)
+                        "implementer_role": "core_platform_engineer",
+                        "reviewer_role": "reviewer_security_engineer",
+                        "test_passed": False,
+                        "verdict": "CHANGES_REQUIRED",
+                        "findings": ["finding"],
+                    }
+                ],
+            }
+        }
+        with self.assertRaises(CorruptMissionRegistryError):
+            MissionRegistryRecord.from_dict(bad_repairs)
+
+        # 4. Implementer role != owner_role in repair_records raises
+        bad_impl = dict(base_data)
+        bad_impl["task_records"] = {
+            "t1": {
+                "owner_role": "core_platform_engineer",
+                "target_branch": "feat/t1",
+                "repair_count": 1,
+                "contract": contract_dict,
+                "repair_records": [
+                    {
+                        "iteration_index": 0,
+                        "implementer_role": "wrong_role",
+                        "reviewer_role": "reviewer_security_engineer",
+                        "test_passed": False,
+                        "verdict": "CHANGES_REQUIRED",
+                        "findings": ["finding"],
+                    }
+                ],
+            }
+        }
+        with self.assertRaises(CorruptMissionRegistryError):
+            MissionRegistryRecord.from_dict(bad_impl)
+
+        # 5. Reviewer role == owner_role raises
+        bad_rev = dict(base_data)
+        bad_rev["task_records"] = {
+            "t1": {
+                "owner_role": "core_platform_engineer",
+                "target_branch": "feat/t1",
+                "repair_count": 1,
+                "contract": contract_dict,
+                "repair_records": [
+                    {
+                        "iteration_index": 0,
+                        "implementer_role": "core_platform_engineer",
+                        "reviewer_role": "core_platform_engineer",  # self-review
+                        "test_passed": False,
+                        "verdict": "CHANGES_REQUIRED",
+                        "findings": ["finding"],
+                    }
+                ],
+            }
+        }
+        with self.assertRaises(CorruptMissionRegistryError):
+            MissionRegistryRecord.from_dict(bad_rev)
+
+        # 6. Semantic binding: CHANGES_REQUESTED with APPROVE verdict raises
+        bad_semantic = dict(base_data)
+        bad_semantic["task_states"] = {"t1": "changes_requested"}
+        bad_semantic["task_records"] = {
+            "t1": {
+                "owner_role": "core_platform_engineer",
+                "target_branch": "feat/t1",
+                "repair_count": 1,
+                "contract": contract_dict,
+                "repair_records": [
+                    {
+                        "iteration_index": 0,
+                        "implementer_role": "core_platform_engineer",
+                        "reviewer_role": "reviewer_security_engineer",
+                        "test_passed": True,
+                        "verdict": "APPROVE",  # mismatch with changes_requested
+                        "findings": [],
+                    }
+                ],
+            }
+        }
+        with self.assertRaises(CorruptMissionRegistryError):
+            MissionRegistryRecord.from_dict(bad_semantic)
+
+    # 47. Emergency purge method removed from Coordinator and guarded in agent_guard (Finding 6)
+    def test_47_no_emergency_purge_in_coordinator_and_guard_pattern(self) -> None:
+        from tools.agent_guard.pre_tool_guard import FORCE_ASK_PATTERNS
+
+        # 1. MissionCoordinator has NO emergency_purge_unverified_task method
+        self.assertFalse(hasattr(MissionCoordinator, "emergency_purge_unverified_task"))
+
+        # 2. pre_tool_guard blocks emergency_purge / manual_recovery scripts
+        # under autonomous execution
+        blocked_commands = [
+            "python tools/agent_factory/manual_recovery.py",
+            "uv run python scripts/emergency_purge.py --confirm",
+            "destructive_purge_tasks",
+            "purge_unverified_worktree",
+        ]
+        for cmd in blocked_commands:
+            matched = any(pattern.search(cmd) for pattern, _ in FORCE_ASK_PATTERNS)
+            self.assertTrue(matched, f"Command '{cmd}' should have matched FORCE_ASK_PATTERNS")
 
 
 if __name__ == "__main__":

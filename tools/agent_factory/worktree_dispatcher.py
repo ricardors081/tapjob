@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import re
 import shutil
 import subprocess
-import sys
 import time
-import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -18,6 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from tools.agent_factory.lock import DirectoryLock
 from tools.agent_factory.task_contract import TaskContract
 from tools.agent_factory.team import ALL_ROLES, load_profile
 
@@ -88,39 +86,6 @@ class WorktreeInfo:
     base_sha: str
     head_sha: str
     is_clean: bool
-
-
-def _is_pid_alive(pid: int) -> bool:
-    """Check if process with given PID is alive across Windows and POSIX."""
-    if pid <= 0:
-        return False
-    if sys.platform == "win32":
-        try:
-            import ctypes
-
-            process_query = 0x1000  # PROCESS_QUERY_LIMITED_INFORMATION
-            synchronize = 0x00100000  # SYNCHRONIZE
-            handle = ctypes.windll.kernel32.OpenProcess(process_query | synchronize, False, pid)
-            if handle == 0:
-                return False
-            try:
-                exit_code = ctypes.c_ulong()
-                if ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
-                    still_active = 259
-                    return exit_code.value == still_active
-                return False
-            finally:
-                ctypes.windll.kernel32.CloseHandle(handle)
-        except Exception:
-            return True  # Fail-closed: assume alive if inspection fails
-    else:
-        try:
-            os.kill(pid, 0)
-            return True
-        except OSError as err:
-            import errno
-
-            return err.errno != errno.ESRCH
 
 
 def validate_registry_entry(tid: str, entry: Any) -> TaskContract:
@@ -300,78 +265,14 @@ class WorktreeDispatcher:
     @contextmanager
     def _registry_lock(self, timeout_seconds: float = 10.0) -> Iterator[None]:
         """Cross-platform directory-based file lock ensuring single-writer registry mutations."""
-        self.registry_dir.mkdir(parents=True, exist_ok=True)
-        token = uuid.uuid4().hex
-        owner_file = self.lock_path / "owner.json"
-        start_time = time.time()
-        acquired = False
-        while time.time() - start_time < timeout_seconds:
-            try:
-                self.lock_path.mkdir(parents=False, exist_ok=False)
-                # Acquired directory lock. Write owner metadata.
-                owner_data = {
-                    "pid": os.getpid(),
-                    "token": token,
-                    "created_at": time.time(),
-                }
-                owner_file.write_text(json.dumps(owner_data), encoding="utf-8")
-                acquired = True
-                break
-            except FileExistsError:
-                # Lock directory exists. Check if owner process is dead.
-                if owner_file.exists():
-                    try:
-                        owner_raw = owner_file.read_text(encoding="utf-8")
-                        owner_data = json.loads(owner_raw)
-                    except Exception as exc:
-                        raise CorruptRegistryError(
-                            f"Corrupt lock owner metadata at '{owner_file}': {exc}"
-                        ) from exc
-
-                    if type(owner_data) is not dict:
-                        raise CorruptRegistryError(
-                            f"Lock owner metadata at '{owner_file}' must be a JSON object."
-                        ) from None
-
-                    owner_pid = owner_data.get("pid")
-                    if type(owner_pid) is not int or owner_pid <= 0:
-                        raise CorruptRegistryError(
-                            f"Malformed PID in lock owner metadata: {owner_pid!r}"
-                        ) from None
-
-                    if not _is_pid_alive(owner_pid):
-                        # Deterministically recover stale lock from dead process
-                        owner_file.unlink(missing_ok=True)
-                        with contextlib.suppress(OSError):
-                            self.lock_path.rmdir()
-                        continue
-                time.sleep(0.05)
-
-        if not acquired:
-            msg = (
-                f"Timed out acquiring registry lock at '{self.lock_path}' after {timeout_seconds}s."
-            )
-            raise LockTimeoutError(msg)
-
-        try:
+        lock = DirectoryLock(
+            lock_path=self.lock_path,
+            timeout_seconds=timeout_seconds,
+            timeout_error_cls=LockTimeoutError,
+            corrupt_error_cls=CorruptRegistryError,
+        )
+        with lock.acquire(timeout_seconds=timeout_seconds):
             yield
-        finally:
-            if acquired and owner_file.exists():
-                try:
-                    cur_raw = owner_file.read_text(encoding="utf-8")
-                    cur_data = json.loads(cur_raw)
-                except Exception as exc:
-                    raise WorktreeDispatchError(
-                        f"Failed to read lock owner file on release: {exc}"
-                    ) from exc
-                if type(cur_data) is dict and cur_data.get("token") == token:
-                    owner_file.unlink(missing_ok=True)
-                    try:
-                        self.lock_path.rmdir()
-                    except OSError as exc:
-                        raise WorktreeDispatchError(
-                            f"Failed to remove lock dir '{self.lock_path}': {exc}"
-                        ) from exc
 
     def _read_registry_file(self) -> dict[str, Any]:
         """Read and validate the persistent registry file. Fails closed on corruption."""
@@ -645,6 +546,38 @@ class WorktreeDispatcher:
             )
 
         return len(proc.stdout.strip()) == 0
+
+    def get_worktree_head(self, worktree_path: Path | str) -> str:
+        """Get the current HEAD commit SHA of a worktree."""
+        target = Path(worktree_path).resolve()
+        proc = subprocess.run(  # noqa: S603
+            [GIT_EXE, "rev-parse", "HEAD"],
+            cwd=str(target),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise WorktreeDispatchError(
+                f"Failed to query HEAD in '{target}': {proc.stderr.strip()}"
+            )
+        return proc.stdout.strip()
+
+    def get_worktree_branch(self, worktree_path: Path | str) -> str:
+        """Get the current checked-out branch name of a worktree."""
+        target = Path(worktree_path).resolve()
+        proc = subprocess.run(  # noqa: S603
+            [GIT_EXE, "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(target),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise WorktreeDispatchError(
+                f"Failed to query branch in '{target}': {proc.stderr.strip()}"
+            )
+        return proc.stdout.strip()
 
     def list_worktrees(self) -> list[WorktreeInfo]:
         """List all active Git worktrees."""

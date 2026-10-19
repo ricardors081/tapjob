@@ -93,14 +93,11 @@ Executes the mission lifecycle and orchestrates worktree dispatch:
 stateDiagram-v2
     [*] --> PLANNED: create_mission()
     PLANNED --> DISPATCHING: dispatch_execution_group()
-    DISPATCHING --> RUNNING: all group worktrees active
-    DISPATCHING --> BLOCKED: dispatch error (rollback)
-    RUNNING --> REVIEWING: all group tasks implemented
-    REVIEWING --> REPAIRING: review requested changes
-    REPAIRING --> RUNNING: repair implemented
-    REVIEWING --> READY_FOR_CONSOLIDATION: all tasks approved & scope-verified
+    DISPATCHING --> RUNNING: group worktrees active
+    DISPATCHING --> BLOCKED: partial dispatch failure
+    RUNNING --> READY_FOR_CONSOLIDATION: all mission tasks scope-verified
     READY_FOR_CONSOLIDATION --> CONSOLIDATED: human-gated PR merge
-    RUNNING --> BLOCKED: repair budget exhausted (attempt 6)
+    RUNNING --> BLOCKED: task repair budget exhausted (> 5)
     RUNNING --> FAILED: unrecoverable scope violation
 ```
 
@@ -129,6 +126,11 @@ stateDiagram-v2
 4. **Time-of-Check to Time-of-Use (TOCTOU) Protection**: Scope verification freezes the verified HEAD commit SHA. Any subsequent commit added to the worktree before consolidation invalidates readiness.
 5. **No Direct Main Commits**: All worktree branches are restricted to feature conventions (`chore/`, `feat/`, `fix/`, `docs/`, `test/`, `security/`, `ops/`). Direct checkouts of `main` or `master` fail closed.
 6. **Zero Product Alterations in Governance Scope**: AF-2 modifies zero Career Core or mobile code. It is purely agent infrastructure.
+7. **Lock Primitive & ABA-Safe Stale Recovery**: Both `WorktreeDispatcher` and `MissionRegistry` utilize `DirectoryLock` (`tools/agent_factory/lock.py`). Stale locks from dead PIDs are reclaimed atomically via a tombstone directory (`.tombstone_<pid>_<tok>_<uuid>`) to eliminate ABA race conditions between stale detection and re-acquisition.
+8. **Exact Reviewed HEAD Lifecycle Binding**: Every transition (`IMPLEMENTED` -> `REVIEWED` -> `SCOPE_VERIFIED` -> `READY_FOR_CONSOLIDATION`) verifies that the live worktree HEAD matches the recorded, reviewed SHA, with clean worktree status and correct target branch.
+9. **DAG Runtime & Dependency Enforcement**: Execution groups must proceed strictly in order; `dispatch_execution_group(i)` fails closed if any task in groups `0 .. i-1` or any declared dependency is not in `SCOPE_VERIFIED` state.
+10. **Strict Schema & Semantic Repair Binding**: Registry records strictly validate list types, repair records (0-indexed contiguous `iteration_index`, implementer/reviewer roles, test verdicts), and state machine semantic consistency (`CHANGES_REQUESTED` binds to `CHANGES_REQUIRED`, `APPROVED`/`SCOPE_VERIFIED` binds to `APPROVE`).
+11. **Zero Autonomous Emergency Purge**: Unverified worktrees cannot be forcibly purged by autonomous agents. `MissionCoordinator` contains no purge bypass; manual operator interventions require out-of-band scripts strictly guarded by `tools/agent_guard/pre_tool_guard.py` (Tier C Human Gate / FORCE_ASK).
 
 ---
 
@@ -186,59 +188,66 @@ Two specialized Antigravity subagents were defined and invoked concurrently:
 
 ## 6. Testing & Verification
 
-The AF-2 test harness in `tools/agent_factory/test_mission.py` executes 41 comprehensive unit and integration scenarios:
+The AF-2 test harness in `tools/agent_factory/test_mission.py` executes 47 comprehensive unit and integration scenarios:
 
 | # | Test Scenario | Verified Invariant |
 |---|---------------|--------------------|
 | 1 | `test_01_mission_strict_parsing` | Validates strict boolean, string, and type parsing in `MissionContract`. |
-| 2 | `test_02_all_tasks_must_match_base_sha` | Rejects child tasks whose `canonical_base_sha` diverges from mission base. |
-| 3 | `test_03_unique_task_ids_required` | Fails closed on duplicate `task_id` definitions within a mission. |
-| 4 | `test_04_unique_target_branches_required` | Prohibits multiple tasks targeting the same branch within a mission. |
-| 5 | `test_05_unknown_dependency_fails_closed` | Rejects tasks referencing undeclared or external dependency IDs. |
-| 6 | `test_06_human_gate_required_must_be_true` | Enforces `human_gate_required` strictly `True` on mission contracts. |
-| 7 | `test_07_deterministic_topological_plan` | Computes identical, reproducible topological execution groups. |
-| 8 | `test_08_dependency_cycle_detection` | Detects circular dependencies (A -> B -> A) and raises `DependencyCycleError`. |
+| 2 | `test_02_human_gate_required_cannot_be_disabled` | Prohibits setting `human_gate_required=False` on missions. |
+| 3 | `test_03_all_tasks_must_match_base_sha` | Rejects child tasks whose `canonical_base_sha` diverges from mission base. |
+| 4 | `test_04_unique_task_ids_required` | Fails closed on duplicate `task_id` definitions within a mission. |
+| 5 | `test_05_unique_target_branches_required` | Prohibits multiple tasks targeting the same branch within a mission. |
+| 6 | `test_06_deterministic_topological_plan` | Computes identical, reproducible topological execution groups. |
+| 7 | `test_07_dependency_cycle_detection` | Detects circular dependencies (A -> B -> A) and raises `DependencyCycleError`. |
+| 8 | `test_08_missing_dependency_rejected` | Rejects tasks referencing undeclared or external dependency IDs. |
 | 9 | `test_09_critical_serial_paths_isolated` | Tasks touching critical shared paths are isolated into single-task groups. |
 | 10 | `test_10_conflicting_paths_partitioned` | Overlapping ownership paths in same layer are partitioned into serial stages. |
-| 11 | `test_11_role_permission_validation_in_planner` | Rejects tasks with paths outside owner role permissions at planning time. |
-| 12 | `test_12_registry_persistence_atomic_writes` | Registry records survive reload and use atomic replacement. |
-| 13 | `test_13_corrupt_registry_fails_closed` | Corrupted JSON or unparseable states in registry trigger fail-closed error. |
-| 14 | `test_14_registry_strict_schema_validation` | Enforces complete schema, valid states, SHA-40, and execution group coverage. |
-| 15 | `test_15_duplicate_mission_id_fails_closed` | Atomic create-only semantics reject duplicate mission IDs under lock. |
-| 16 | `test_16_cross_process_locking` | Directory lock enforces single-writer mutual exclusion across processes. |
-| 17 | `test_17_dead_pid_lock_recovery` | Stale locks held by deceased PIDs are reclaimed safely via OS checks. |
-| 18 | `test_18_malformed_lock_metadata_fails_closed` | Corrupt or invalid lock metadata fails closed without blind clearing. |
-| 19 | `test_19_group_dispatch_creates_worktrees` | Dispatches worktrees in parallel with correct branch and base SHA bindings. |
-| 20 | `test_20_partial_dispatch_failure_blocks_mission` | Dispatched tasks preserved, failing task recorded, mission marked BLOCKED. |
-| 21 | `test_21_record_task_implemented_validates_state_machine` | Implementation allowed only from DISPATCHED or CHANGES_REQUESTED. |
-| 22 | `test_22_record_task_review_validates_state_machine` | Review allowed only from IMPLEMENTED state. |
-| 23 | `test_23_test_passed_strict_boolean_validation` | Rejects non-strict-boolean values (truthy strings, numbers) for `test_passed`. |
-| 24 | `test_24_reviewer_separation_enforced` | Task owner cannot review their own task (`ReviewerSeparationError`). |
-| 25 | `test_25_repair_loop_accounting` | Tracks repair iterations up to `MAX_INTERNAL_REPAIR_LOOPS = 5`. |
-| 26 | `test_26_repair_attempt_6_blocked_escalated` | 6th failed attempt raises `BudgetExhaustedError` and transitions to `BLOCKED`. |
-| 27 | `test_27_verify_task_scope_validates_state_machine` | Scope verification allowed only from APPROVED state. |
-| 28 | `test_28_verify_task_scope_freezes_verified_head` | Scope verification records and freezes exact verified HEAD SHA. |
-| 29 | `test_29_consolidation_requires_scope_verified_state` | Consolidation readiness requires all tasks to be in SCOPE_VERIFIED state. |
-| 30 | `test_30_consolidation_requires_clean_worktree` | Uncommitted worktree changes block consolidation readiness. |
+| 11 | `test_11_planner_validates_role_ownership` | Rejects tasks with paths outside owner role permissions at planning time. |
+| 12 | `test_12_planner_read_only_role_with_writes_rejected` | Rejects assigning tasks with write paths to read-only roles. |
+| 13 | `test_13_registry_persistence_atomic_writes` | Registry records survive reload and use atomic replacement. |
+| 14 | `test_14_corrupt_registry_fails_closed` | Corrupted JSON or unparseable states in registry trigger fail-closed error. |
+| 15 | `test_15_strict_registry_semantic_corruption` | Enforces structural and semantic schema constraints on registry files. |
+| 16 | `test_16_duplicate_mission_id_same_process_rejected` | Atomic create-only semantics reject duplicate mission IDs in same process. |
+| 17 | `test_17_duplicate_mission_id_cross_instance_rejected` | Rejects duplicate mission creation across distinct registry instances. |
+| 18 | `test_18_original_mission_preserved_on_duplicate_rejection` | Original mission record remains byte/semantically intact after duplicate attempt. |
+| 19 | `test_19_cross_process_locking` | Directory lock enforces single-writer mutual exclusion across processes. |
+| 20 | `test_20_lock_malformed_metadata_fails_closed` | Corrupt or invalid lock metadata fails closed without blind clearing. |
+| 21 | `test_21_group_dispatch_creates_worktrees` | Dispatches worktrees in parallel with correct branch and base SHA bindings. |
+| 22 | `test_22_partial_dispatch_preserves_registered_and_marks_blocked` | Dispatched tasks preserved, failing task recorded, mission marked BLOCKED. |
+| 23 | `test_23_task_lifecycle_review_before_implementation_rejected` | Review rejected if task has not reached IMPLEMENTED state. |
+| 24 | `test_24_task_lifecycle_implementation_state_guards` | Implementation allowed only from DISPATCHED or CHANGES_REQUESTED. |
+| 25 | `test_25_reviewer_separation_enforced` | Task owner cannot review their own task (`ReviewerSeparationError`). |
+| 26 | `test_26_arbitrary_reviewer_role_rejected` | Reviewer role must be a registered profile with reviewer capability. |
+| 27 | `test_27_strict_bool_test_passed_required` | Rejects non-strict-boolean values (truthy strings, numbers) for `test_passed`. |
+| 28 | `test_28_repair_loop_accounting_via_controller` | Tracks repair iterations up to `MAX_INTERNAL_REPAIR_LOOPS = 5`. |
+| 29 | `test_29_repair_attempt_6_blocked_escalated` | 6th failed attempt raises `BudgetExhaustedError` and transitions to `BLOCKED`. |
+| 30 | `test_30_verify_scope_only_from_approved` | Scope verification allowed only from APPROVED state. |
 | 31 | `test_31_consolidation_requires_verified_head_sha` | Unverified or mismatching HEAD SHA blocks consolidation readiness. |
 | 32 | `test_32_consolidation_requires_matching_branch` | Branch mismatch between registry and worktree blocks consolidation. |
-| 33 | `test_33_consolidation_requires_registered_worktree_evidence` | Binds to WorktreeDispatcher persistent registry evidence. |
-| 34 | `test_34_toctou_head_mutation_detected` | Post-review commit added to worktree invalidates consolidation readiness. |
-| 35 | `test_35_all_tasks_valid_ready_for_consolidation` | When all tasks pass review and scope check, status is `READY_FOR_CONSOLIDATION`. |
-| 36 | `test_36_cleanup_mission_releases_verified_tasks` | Cleanup delegates scope-verified tasks to `release_task` cleanly. |
-| 37 | `test_37_cleanup_refuses_unresolved_tasks` | Cleanup refuses to remove worktrees for unverified/unresolved tasks. |
-| 38 | `test_38_cleanup_refuses_dirty_worktrees` | Cleanup refuses removal if worktree has uncommitted modifications. |
-| 39 | `test_39_no_force_bypass_in_autonomous_cleanup` | Prohibits force deletion bypass in autonomous mission cleanup. |
-| 40 | `test_40_emergency_purge_unverified_task_requires_exact_token` | Requires exact human confirmation token for emergency purge. |
-| 41 | `test_41_human_emergency_purge_removes_unverified_worktree` | Human emergency purge removes unverified worktree when explicitly confirmed. |
+| 33 | `test_33_consolidation_requires_dispatcher_scope_verified` | Binds to WorktreeDispatcher persistent registry evidence (`scope_verified`). |
+| 34 | `test_34_consolidation_requires_matching_dispatcher_head` | Dispatcher registry verified HEAD must match mission registry verified HEAD. |
+| 35 | `test_35_consolidation_requires_matching_contracts` | Tampered nested task contract in dispatcher blocks consolidation readiness. |
+| 36 | `test_36_toctou_head_mutation_detected` | Post-scope-verification commit added to worktree invalidates consolidation. |
+| 37 | `test_37_dirty_worktree_prevents_consolidation` | Uncommitted worktree changes block consolidation readiness. |
+| 38 | `test_38_all_tasks_valid_ready_for_consolidation` | When all tasks pass review and scope check, status is `READY_FOR_CONSOLIDATION`. |
+| 39 | `test_39_cleanup_unresolved_clean_task_rejected` | Cleanup refuses to remove worktrees for unverified/unresolved tasks. |
+| 40 | `test_40_cleanup_dirty_task_rejected` | Cleanup refuses removal if worktree has uncommitted modifications (`DirtyWorktreeError`). |
+| 41 | `test_41_cleanup_scope_verified_clean_task_succeeds` | Cleanup delegates scope-verified tasks to `release_task` cleanly. |
+| 42 | `test_42_duplicate_mission_does_not_poison_cache` | Rejected duplicate mission does not poison coordinator in-memory cache. |
+| 43 | `test_43_post_review_recommit_attack_detected` | Re-commit attack between review and scope verify or post-verify is detected. |
+| 44 | `test_44_dag_ordering_runtime_enforcement` | Dispatches next execution group only when preceding groups and dependencies are verified. |
+| 45 | `test_45_directory_lock_aba_safe_recovery` | Stale lock held by dead PID is atomically reclaimed via tombstone without ABA race. |
+| 46 | `test_46_strict_registry_repair_state_schema` | Registry strictly validates list types, repair records, and state semantic binding. |
+| 47 | `test_47_no_emergency_purge_in_coordinator_and_guard_pattern` | Emergency purge method absent from coordinator and intercepted by PreToolGuard. |
 
 ---
 
 ## 7. Recovery, Diagnostics & Escalation Procedures
 
-1. **Deadlock Recovery**: If a worker process dies holding `.mission_lock`, the lock manager automatically validates the PID from `owner.json`. If the process is dead, the stale lock is removed and acquisition proceeds.
+1. **Deadlock & ABA-Safe Recovery**: If a worker process dies holding `.mission_lock`, `DirectoryLock` atomically renames the lock to a tombstone directory (`.tombstone_<pid>_<tok>_<uuid>`) and verifies the PID from `owner.json`. If the process is dead, the stale lock is safely reclaimed without race conditions against newly spawned processes.
 2. **Budget Exhaustion Escalation**: When a task reaches 5 failed repair iterations, the coordinator marks it `BLOCKED` and halts execution group progression. The Engineering Manager presents the findings directly to the human engineer for intervention.
 3. **Dirty Worktree Protection**: If an agent process crashes leaving uncommitted files, cleanup refuses deletion (`DirtyWorktreeError`) to ensure candidate work is not destroyed.
-4. **Registry Inspection CLI**:
+4. **Manual Recovery Strictly Human-Gated**: Autonomous agents are strictly prohibited from forcibly purging unverified worktrees. Any manual recovery scripts or emergency purges require human operator execution and are blocked by `tools/agent_guard/pre_tool_guard.py` under autonomous execution.
+5. **Registry Inspection CLI**:
    - List active missions: `python -m tools.agent_factory.bootstrap --list-missions`
    - Show mission details: `python -m tools.agent_factory.bootstrap --show-mission <mission_id>`

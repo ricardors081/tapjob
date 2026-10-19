@@ -76,7 +76,6 @@ class MissionCoordinator:
         """Validate, plan, and register a new mission in PLANNED state."""
         mission.validate()
         plan = MissionPlanner.plan_mission(mission)
-        self._missions[mission.mission_id] = mission
 
         record = MissionRegistryRecord(
             mission_id=mission.mission_id,
@@ -98,14 +97,14 @@ class MissionCoordinator:
             },
             metadata=dict(mission.metadata),
         )
+        # Register in persistent registry BEFORE caching in-memory to prevent
+        # cache poisoning on duplicates
         self.registry.create_mission(record)
+        self._missions[mission.mission_id] = mission
         return plan
 
     def _get_mission_contract(self, mission_id: str) -> MissionContract:
-        """Retrieve the in-memory or persisted MissionContract."""
-        if mission_id in self._missions:
-            return self._missions[mission_id]
-
+        """Retrieve the canonical MissionContract validated against the persistent registry."""
         record = self.registry.get_mission(mission_id)
         tasks: list[TaskContract] = []
         for tid in record.task_ids:
@@ -135,11 +134,10 @@ class MissionCoordinator:
     ) -> dict[str, WorktreeInfo]:
         """Dispatch a planned execution group via WorktreeDispatcher.
 
-        Partial dispatch failure semantics:
-        - Successfully dispatched tasks remain registered, active, and visible in worktree registry.
-        - The mission transitions to BLOCKED to halt further autonomous progression.
-        - Undispatched tasks in the group remain PENDING.
-        - Deterministic diagnostic information is raised so the operator has complete visibility.
+        DAG Ordering & Dependency Invariants:
+        - All earlier groups (0 .. group_index - 1) must have all tasks in SCOPE_VERIFIED.
+        - All declared task dependencies must be in SCOPE_VERIFIED.
+        - Partial dispatch failures preserve successfully dispatched tasks and mark mission BLOCKED.
         """
         record = self.registry.get_mission(mission_id)
         if record.state in (MissionState.BLOCKED, MissionState.FAILED):
@@ -155,11 +153,34 @@ class MissionCoordinator:
                 f"Total groups: {len(record.execution_groups)}."
             )
 
+        # 1. Enforce DAG ordering: all tasks in earlier groups must be SCOPE_VERIFIED
+        for prev_idx in range(group_index):
+            for prev_tid in record.execution_groups[prev_idx]:
+                prev_state = record.task_states.get(prev_tid)
+                if prev_state != TaskMissionState.SCOPE_VERIFIED:
+                    msg = (
+                        f"Cannot dispatch group {group_index}: task '{prev_tid}' in earlier "
+                        f"group {prev_idx} is in state '{prev_state}', expected SCOPE_VERIFIED."
+                    )
+                    raise MissionDispatchError(msg)
+
         mission = self._get_mission_contract(mission_id)
         tasks_by_id = {t.task_id: t for t in mission.tasks}
         target_group = record.execution_groups[group_index]
 
-        # Verify all tasks in group are PENDING
+        # 2. Enforce explicit task dependencies: each task's dependencies must be SCOPE_VERIFIED
+        for tid in target_group:
+            contract = tasks_by_id[tid]
+            for dep_tid in contract.dependencies:
+                dep_state = record.task_states.get(dep_tid)
+                if dep_state != TaskMissionState.SCOPE_VERIFIED:
+                    msg = (
+                        f"Cannot dispatch group {group_index}: task '{tid}' has dependency "
+                        f"'{dep_tid}' in state '{dep_state}', expected SCOPE_VERIFIED."
+                    )
+                    raise MissionDispatchError(msg)
+
+        # 3. Verify all tasks in target group are PENDING
         for tid in target_group:
             curr_state = record.task_states.get(tid)
             if curr_state != TaskMissionState.PENDING:
@@ -198,6 +219,50 @@ class MissionCoordinator:
         self.registry.update_mission_state(mission_id, MissionState.RUNNING)
         return dispatched_worktrees
 
+    def get_next_eligible_group(self, mission_id: str) -> int | None:
+        """Return index of the next group eligible for dispatch, or None if blocked/completed."""
+        record = self.registry.get_mission(mission_id)
+        if record.state in (MissionState.BLOCKED, MissionState.FAILED):
+            return None
+
+        mission = self._get_mission_contract(mission_id)
+        tasks_by_id = {t.task_id: t for t in mission.tasks}
+
+        for g_idx, grp in enumerate(record.execution_groups):
+            group_states = [record.task_states.get(tid) for tid in grp]
+            if all(s == TaskMissionState.SCOPE_VERIFIED for s in group_states):
+                continue
+            if all(s == TaskMissionState.PENDING for s in group_states):
+                # Verify earlier groups are SCOPE_VERIFIED
+                earlier_done = True
+                for prev_idx in range(g_idx):
+                    for prev_tid in record.execution_groups[prev_idx]:
+                        if record.task_states.get(prev_tid) != TaskMissionState.SCOPE_VERIFIED:
+                            earlier_done = False
+                            break
+                    if not earlier_done:
+                        break
+                if not earlier_done:
+                    return None
+
+                # Verify task dependencies
+                deps_satisfied = True
+                for tid in grp:
+                    contract = tasks_by_id[tid]
+                    for dep in contract.dependencies:
+                        if record.task_states.get(dep) != TaskMissionState.SCOPE_VERIFIED:
+                            deps_satisfied = False
+                            break
+                    if not deps_satisfied:
+                        break
+
+                if deps_satisfied:
+                    return g_idx
+                return None
+            return None
+
+        return None
+
     def record_task_implemented(
         self,
         mission_id: str,
@@ -207,6 +272,7 @@ class MissionCoordinator:
         """Record that the implementer agent has completed code changes in the worktree.
 
         Allowed only from DISPATCHED (initial implementation) or CHANGES_REQUESTED (repair).
+        Validates live worktree existence, exact HEAD SHA match, clean working tree, and branch.
         """
         record = self.registry.get_mission(mission_id)
         curr_state = record.task_states.get(task_id)
@@ -223,11 +289,37 @@ class MissionCoordinator:
                 f"Invalid head_sha '{head_sha}' for task '{task_id}'. Must be a 40-character SHA."
             )
 
+        active = self.dispatcher.get_active_task(task_id)
+        if not active:
+            raise MissionCoordinatorError(f"Task '{task_id}' has no active worktree.")
+        contract, winfo = active
+
+        # Live worktree validations
+        live_head = self.dispatcher.get_worktree_head(winfo.worktree_path)
+        if live_head != clean_sha:
+            msg = (
+                f"Task '{task_id}' live HEAD mismatch: reported '{clean_sha}', "
+                f"live worktree HEAD is '{live_head}'."
+            )
+            raise MissionCoordinatorError(msg)
+
+        if not self.dispatcher.is_worktree_clean(winfo.worktree_path):
+            msg = f"Task '{task_id}' worktree at '{winfo.worktree_path}' has uncommitted changes."
+            raise DirtyWorktreeError(msg)
+
+        curr_branch = self.dispatcher.get_worktree_branch(winfo.worktree_path)
+        if curr_branch != contract.target_branch:
+            msg = (
+                f"Task '{task_id}' worktree branch mismatch: expected '{contract.target_branch}', "
+                f"got '{curr_branch}'."
+            )
+            raise MissionCoordinatorError(msg)
+
         self.registry.update_task_state(
             mission_id=mission_id,
             task_id=task_id,
             task_state=TaskMissionState.IMPLEMENTED,
-            details={"head_sha": clean_sha},
+            details={"implemented_head_sha": clean_sha, "head_sha": clean_sha},
         )
 
     def record_task_review(
@@ -246,6 +338,7 @@ class MissionCoordinator:
         - reviewer_role must be a valid registered ALL_ROLES role.
         - reviewer_role != owner_role (ReviewerSeparationError).
         - test_passed must be strict boolean.
+        - Active worktree live HEAD must match implemented_head_sha and be clean.
         - Uses RepairLoopController to manage budget (capped at 5 loops).
         """
         record = self.registry.get_mission(mission_id)
@@ -259,14 +352,40 @@ class MissionCoordinator:
                 "Must be in IMPLEMENTED state."
             )
 
-        # 1. Validate reviewer_role
+        task_rec = record.task_records[task_id]
+        owner_role = task_rec.get("owner_role", "")
+
+        # 1. Validate active worktree live HEAD and cleanliness against implemented HEAD
+        active = self.dispatcher.get_active_task(task_id)
+        if not active:
+            raise MissionCoordinatorError(f"Task '{task_id}' has no active worktree.")
+        _, winfo = active
+
+        implemented_sha = task_rec.get("implemented_head_sha") or task_rec.get("head_sha")
+        if not implemented_sha or not SHA_40_REGEX.match(implemented_sha):
+            raise MissionCoordinatorError(
+                f"Task '{task_id}' lacks valid implemented_head_sha: '{implemented_sha}'."
+            )
+
+        live_head = self.dispatcher.get_worktree_head(winfo.worktree_path)
+        if live_head != implemented_sha:
+            msg = (
+                f"Task '{task_id}' live HEAD changed after implementation: "
+                f"expected '{implemented_sha}', live is '{live_head}'."
+            )
+            raise MissionCoordinatorError(msg)
+
+        if not self.dispatcher.is_worktree_clean(winfo.worktree_path):
+            raise DirtyWorktreeError(
+                f"Task '{task_id}' worktree at '{winfo.worktree_path}' is dirty during review."
+            )
+
+        # 2. Validate reviewer_role
         if not isinstance(reviewer_role, str) or reviewer_role not in ALL_ROLES:
             raise ValueError(
                 f"Invalid reviewer_role '{reviewer_role}'. Must be a valid registered role."
             )
 
-        task_rec = record.task_records[task_id]
-        owner_role = task_rec.get("owner_role", "")
         if reviewer_role == owner_role:
             msg = (
                 f"Role '{reviewer_role}' cannot review its own task '{task_id}' "
@@ -274,14 +393,14 @@ class MissionCoordinator:
             )
             raise ReviewerSeparationError(msg)
 
-        # 2. Validate verdict
+        # 3. Validate verdict
         if not isinstance(verdict, ReviewVerdict):
             try:
                 verdict = ReviewVerdict(verdict)
             except ValueError as exc:
                 raise ValueError(f"Invalid ReviewVerdict: {verdict!r}") from exc
 
-        # 3. Validate test_passed strict boolean
+        # 4. Validate test_passed strict boolean
         if not isinstance(test_passed, bool) or type(test_passed) is not bool:
             msg = (
                 f"test_passed must be a strict boolean, "
@@ -289,13 +408,13 @@ class MissionCoordinator:
             )
             raise TypeError(msg)
 
-        # 4. Validate findings
+        # 5. Validate findings
         if findings is not None and (
             not isinstance(findings, list) or not all(isinstance(f, str) for f in findings)
         ):
             raise TypeError("findings must be a list of strings if provided.")
 
-        # 5. Use RepairLoopController to manage iteration bounds
+        # 6. Use RepairLoopController to manage iteration bounds
         controller = RepairLoopController(
             task_id=task_id,
             implementer_role=owner_role,
@@ -329,7 +448,7 @@ class MissionCoordinator:
                     "review_verdict": verdict.value,
                     "test_passed": test_passed,
                     "findings": findings or [],
-                    "repair_count": MAX_INTERNAL_REPAIR_LOOPS + 1,
+                    "repair_count": len(controller.records),
                     "escalated_to_human": True,
                 },
             )
@@ -345,14 +464,15 @@ class MissionCoordinator:
 
         persisted_repairs = [
             {
-                "iteration_index": r.iteration_index,
+                "iteration_index": idx,
+                "iteration_head_sha": implemented_sha,
                 "implementer_role": r.implementer_role,
                 "reviewer_role": r.reviewer_role,
                 "test_passed": r.test_passed,
                 "verdict": r.verdict.value,
                 "findings": r.findings,
             }
-            for r in controller.records
+            for idx, r in enumerate(controller.records)
         ]
 
         if test_passed and verdict == ReviewVerdict.APPROVE:
@@ -366,8 +486,9 @@ class MissionCoordinator:
                     "review_verdict": verdict.value,
                     "test_passed": True,
                     "findings": findings or [],
-                    "repair_count": len(controller.records) - 1,
+                    "repair_count": len(controller.records),
                     "repair_records": persisted_repairs,
+                    "reviewed_head_sha": implemented_sha,
                 },
             )
             return new_state
@@ -393,18 +514,56 @@ class MissionCoordinator:
         self,
         mission_id: str,
         task_id: str,
-        exact_head_sha: str | None = None,
+        exact_head_sha: str,
     ) -> list[str]:
         """Perform exact scope verification on an approved task worktree.
 
         Allowed ONLY from APPROVED state. Freezes the exact verified HEAD commit SHA.
+        Fails closed if exact_head_sha does not match reviewed_head_sha or live worktree HEAD.
         """
+        if not exact_head_sha or not SHA_40_REGEX.match(exact_head_sha.strip()):
+            msg = (
+                f"exact_head_sha is strictly required and must be a 40-character SHA, "
+                f"got '{exact_head_sha}'."
+            )
+            raise MissionCoordinatorError(msg)
+        exact_head = exact_head_sha.strip()
+
         record = self.registry.get_mission(mission_id)
         curr_state = record.task_states.get(task_id)
         if curr_state != TaskMissionState.APPROVED:
             raise MissionCoordinatorError(
                 f"Task '{task_id}' must be APPROVED before scope verification, got '{curr_state}'."
             )
+
+        task_rec = record.task_records.get(task_id, {})
+        reviewed_head = task_rec.get("reviewed_head_sha")
+        if reviewed_head != exact_head:
+            msg = (
+                f"Task '{task_id}' exact_head_sha mismatch: expected reviewed '{reviewed_head}', "
+                f"got '{exact_head}'."
+            )
+            raise ScopeViolationError(msg)
+
+        active = self.dispatcher.get_active_task(task_id)
+        if not active:
+            raise MissionCoordinatorError(f"Task '{task_id}' has no active worktree.")
+        _, winfo = active
+
+        live_head = self.dispatcher.get_worktree_head(winfo.worktree_path)
+        if live_head != exact_head:
+            msg = (
+                f"Task '{task_id}' live HEAD changed after review approval: "
+                f"reviewed '{reviewed_head}', live is '{live_head}'."
+            )
+            raise ScopeViolationError(msg)
+
+        if not self.dispatcher.is_worktree_clean(winfo.worktree_path):
+            msg = (
+                f"Task '{task_id}' worktree at '{winfo.worktree_path}' is dirty "
+                f"during scope verification."
+            )
+            raise DirtyWorktreeError(msg)
 
         try:
             self.dispatcher.verify_task_scope(task_id)
@@ -418,26 +577,13 @@ class MissionCoordinator:
             self.registry.update_mission_state(mission_id, MissionState.BLOCKED)
             raise
 
-        # Inspect current HEAD to freeze verified SHA
-        active = self.dispatcher.get_active_task(task_id)
-        if not active:
-            raise MissionCoordinatorError(f"Task '{task_id}' has no active worktree.")
-        _, winfo = active
-        verified_head = winfo.head_sha
-        if exact_head_sha and verified_head != exact_head_sha:
-            msg = (
-                f"Task '{task_id}' HEAD mismatch: expected '{exact_head_sha}', "
-                f"got '{verified_head}'."
-            )
-            raise ScopeViolationError(msg)
-
         now_iso = datetime.now(UTC).isoformat()
         self.registry.update_task_state(
             mission_id=mission_id,
             task_id=task_id,
             task_state=TaskMissionState.SCOPE_VERIFIED,
             details={
-                "scope_verified_head_sha": verified_head,
+                "scope_verified_head_sha": exact_head,
                 "scope_verified_at": now_iso,
             },
         )
@@ -511,7 +657,25 @@ class MissionCoordinator:
                 )
                 blockers.append(msg)
 
-            # 7. Bind to WorktreeDispatcher persistent registry and live worktree evidence
+            # 7. Check full lifecycle HEAD SHA binding: implemented == reviewed == verified == live
+            implemented_sha = trec.get("implemented_head_sha") or trec.get("head_sha")
+            reviewed_sha = trec.get("reviewed_head_sha")
+            active = self.dispatcher.get_active_task(tid)
+            if not active:
+                blockers.append(f"Task '{tid}' has no active worktree.")
+                continue
+            _, winfo = active
+            live_head = self.dispatcher.get_worktree_head(winfo.worktree_path)
+
+            if not (implemented_sha == reviewed_sha == verified_head == live_head):
+                msg = (
+                    f"Task '{tid}' HEAD mismatch across lifecycle: "
+                    f"implemented='{implemented_sha}', reviewed='{reviewed_sha}', "
+                    f"verified='{verified_head}', live='{live_head}'."
+                )
+                blockers.append(msg)
+
+            # 8. Bind to WorktreeDispatcher persistent registry and live worktree evidence
             disp_blockers = self.dispatcher.validate_task_consolidation_evidence(
                 contract=contract,
                 expected_head_sha=verified_head,
@@ -571,35 +735,3 @@ class MissionCoordinator:
             cleaned.append(tid)
 
         return cleaned
-
-    def emergency_purge_unverified_task(
-        self,
-        mission_id: str,
-        task_id: str,
-        human_operator_confirmation: str,
-    ) -> None:
-        """Emergency destructive recovery path reserved strictly for human operators.
-
-        Autonomous agents and orchestrators are prohibited from invoking this method.
-        """
-        if human_operator_confirmation != "CONFIRM_EMERGENCY_DESTRUCTIVE_PURGE":
-            raise PermissionError(
-                "Human operator confirmation token required for emergency destructive purge."
-            )
-
-        active = self.dispatcher.get_active_task(task_id)
-        if active:
-            _, winfo = active
-            self.dispatcher.remove_worktree(winfo.worktree_path)
-
-        with self.dispatcher._registry_lock():
-            rdata = self.dispatcher._read_registry_file()
-            rdata.pop(task_id, None)
-            self.dispatcher._write_registry_file(rdata)
-
-        self.registry.update_task_state(
-            mission_id=mission_id,
-            task_id=task_id,
-            task_state=TaskMissionState.FAILED,
-            details={"purged_by_human_emergency": True},
-        )

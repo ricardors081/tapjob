@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import re
 import time
-import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -16,10 +14,10 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from tools.agent_factory.lock import DirectoryLock
 from tools.agent_factory.repair_loop import ReviewVerdict
 from tools.agent_factory.task_contract import TaskContract
 from tools.agent_factory.team import ALL_ROLES
-from tools.agent_factory.worktree_dispatcher import _is_pid_alive
 
 MISSION_ID_REGEX = re.compile(r"^[a-zA-Z0-9_\-]+$")
 SHA_40_REGEX = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -292,6 +290,15 @@ class MissionRegistryRecord:
                 )
                 raise CorruptMissionRegistryError(msg)
 
+            # Repair records validation
+            repair_records = trec.get("repair_records", [])
+            if type(repair_records) is not list:
+                msg = (
+                    f"MissionRegistryRecord '{self.mission_id}' task '{tid}' "
+                    "repair_records must be a list."
+                )
+                raise CorruptMissionRegistryError(msg)
+
             repair_count = trec.get("repair_count", 0)
             if type(repair_count) is not int or repair_count < 0:
                 msg = (
@@ -300,7 +307,94 @@ class MissionRegistryRecord:
                 )
                 raise CorruptMissionRegistryError(msg)
 
-            # Review fields validation if present
+            if repair_count != len(repair_records):
+                msg = (
+                    f"MissionRegistryRecord '{self.mission_id}' task '{tid}' "
+                    f"repair_count ({repair_count}) does not match "
+                    f"len(repair_records) ({len(repair_records)})."
+                )
+                raise CorruptMissionRegistryError(msg)
+
+            for idx, r in enumerate(repair_records):
+                if type(r) is not dict:
+                    msg = (
+                        f"MissionRegistryRecord '{self.mission_id}' task '{tid}' "
+                        f"repair_records[{idx}] must be a dict."
+                    )
+                    raise CorruptMissionRegistryError(msg)
+                it_idx = r.get("iteration_index")
+                if type(it_idx) is not int or it_idx != idx:
+                    msg = (
+                        f"MissionRegistryRecord '{self.mission_id}' task '{tid}' "
+                        f"repair_records[{idx}] iteration_index ({it_idx}) must equal {idx}."
+                    )
+                    raise CorruptMissionRegistryError(msg)
+                impl_role = r.get("implementer_role")
+                if impl_role != owner_role:
+                    msg = (
+                        f"MissionRegistryRecord '{self.mission_id}' task '{tid}' "
+                        f"repair_records[{idx}] implementer_role ('{impl_role}') must equal "
+                        f"owner_role ('{owner_role}')."
+                    )
+                    raise CorruptMissionRegistryError(msg)
+                rev_role = r.get("reviewer_role")
+                if (
+                    not isinstance(rev_role, str)
+                    or rev_role not in ALL_ROLES
+                    or rev_role == owner_role
+                ):
+                    msg = (
+                        f"MissionRegistryRecord '{self.mission_id}' task '{tid}' "
+                        f"repair_records[{idx}] reviewer_role ('{rev_role}') must be valid role "
+                        f"and != owner_role."
+                    )
+                    raise CorruptMissionRegistryError(msg)
+                tp = r.get("test_passed")
+                if type(tp) is not bool:
+                    msg = (
+                        f"MissionRegistryRecord '{self.mission_id}' task '{tid}' "
+                        f"repair_records[{idx}] test_passed must be strict bool."
+                    )
+                    raise CorruptMissionRegistryError(msg)
+                verd = r.get("verdict")
+                if verd not in (ReviewVerdict.APPROVE.value, ReviewVerdict.CHANGES_REQUIRED.value):
+                    msg = (
+                        f"MissionRegistryRecord '{self.mission_id}' task '{tid}' "
+                        f"repair_records[{idx}] verdict ('{verd}') invalid."
+                    )
+                    raise CorruptMissionRegistryError(msg)
+                findings = r.get("findings", [])
+                if type(findings) is not list or not all(isinstance(f, str) for f in findings):
+                    msg = (
+                        f"MissionRegistryRecord '{self.mission_id}' task '{tid}' "
+                        f"repair_records[{idx}] findings must be list of strings."
+                    )
+                    raise CorruptMissionRegistryError(msg)
+
+            # Semantic binding with task_states
+            t_state = self.task_states[tid]
+            if t_state == TaskMissionState.CHANGES_REQUESTED:
+                if (
+                    not repair_records
+                    or repair_records[-1].get("verdict") != ReviewVerdict.CHANGES_REQUIRED.value
+                ):
+                    msg = (
+                        f"MissionRegistryRecord '{self.mission_id}' task '{tid}' in "
+                        f"CHANGES_REQUESTED must have last repair_record verdict CHANGES_REQUIRED."
+                    )
+                    raise CorruptMissionRegistryError(msg)
+            elif t_state in (TaskMissionState.APPROVED, TaskMissionState.SCOPE_VERIFIED) and (
+                not repair_records
+                or repair_records[-1].get("verdict") != ReviewVerdict.APPROVE.value
+                or repair_records[-1].get("test_passed") is not True
+            ):
+                msg = (
+                    f"MissionRegistryRecord '{self.mission_id}' task '{tid}' in {t_state.value} "
+                    f"must have last repair_record verdict APPROVE and test_passed=True."
+                )
+                raise CorruptMissionRegistryError(msg)
+
+            # Review fields validation if present (for top-level mirrors)
             if "reviewer_role" in trec:
                 rev = trec["reviewer_role"]
                 if not isinstance(rev, str) or rev not in ALL_ROLES or rev == owner_role:
@@ -401,6 +495,21 @@ class MissionRegistryRecord:
         except ValueError as exc:
             raise CorruptMissionRegistryError(f"Invalid mission state: {data['state']}") from exc
 
+        # task_ids: strict list[str]
+        raw_tids = data["task_ids"]
+        if type(raw_tids) is not list or not all(isinstance(x, str) for x in raw_tids):
+            raise CorruptMissionRegistryError("task_ids must be a list of strings.")
+
+        # execution_groups: strict list[list[str]]
+        raw_egroups = data["execution_groups"]
+        if type(raw_egroups) is not list:
+            raise CorruptMissionRegistryError("execution_groups must be a list.")
+        for g in raw_egroups:
+            if type(g) is not list or not all(isinstance(x, str) for x in g):
+                raise CorruptMissionRegistryError(
+                    "execution_groups must be a list of lists of strings."
+                )
+
         raw_states = data["task_states"]
         if type(raw_states) is not dict:
             raise CorruptMissionRegistryError("task_states must be a dict.")
@@ -414,18 +523,20 @@ class MissionRegistryRecord:
                     f"Invalid task state '{v}' for task '{k}'."
                 ) from exc
 
+        raw_trecs = data.get("task_records", {})
+        if type(raw_trecs) is not dict:
+            raise CorruptMissionRegistryError("task_records must be a dict.")
+
         record = cls(
             mission_id=data["mission_id"],
             base_sha=data["base_sha"],
             objective=data["objective"],
             human_gate_required=True,
             state=state,
-            task_ids=list(data["task_ids"]) if type(data["task_ids"]) is list else [],
-            execution_groups=[list(g) for g in data["execution_groups"]]
-            if type(data["execution_groups"]) is list
-            else [],
+            task_ids=list(raw_tids),
+            execution_groups=[list(g) for g in raw_egroups],
             task_states=parsed_states,
-            task_records=data.get("task_records", {}),
+            task_records=raw_trecs,
             created_at=data.get("created_at", ""),
             updated_at=data.get("updated_at", ""),
             metadata=data.get("metadata", {}),
@@ -446,84 +557,15 @@ class MissionRegistry:
 
     @contextmanager
     def _lock(self, timeout_seconds: float = 10.0) -> Iterator[None]:
-        """Cross-platform directory-based file lock ensuring single-writer mission mutations.
-
-        Safety invariants:
-        - Fails closed on malformed owner metadata (no blind suppression).
-        - Dead-process locks are deterministically stolen after liveness verification.
-        - Foreign locks can never be removed by non-owners.
-        """
-        self.registry_dir.mkdir(parents=True, exist_ok=True)
-        token = uuid.uuid4().hex
-        owner_file = self.lock_path / "owner.json"
-        start_time = time.time()
-        acquired = False
-        while time.time() - start_time < timeout_seconds:
-            try:
-                self.lock_path.mkdir(parents=False, exist_ok=False)
-                owner_data = {
-                    "pid": os.getpid(),
-                    "token": token,
-                    "created_at": time.time(),
-                }
-                owner_file.write_text(json.dumps(owner_data), encoding="utf-8")
-                acquired = True
-                break
-            except FileExistsError:
-                if owner_file.exists():
-                    try:
-                        owner_raw = owner_file.read_text(encoding="utf-8")
-                        owner_data = json.loads(owner_raw)
-                    except Exception as exc:
-                        raise CorruptMissionRegistryError(
-                            f"Corrupt lock owner metadata at '{owner_file}': {exc}"
-                        ) from exc
-
-                    if type(owner_data) is not dict:
-                        raise CorruptMissionRegistryError(
-                            f"Lock owner metadata at '{owner_file}' must be a JSON object."
-                        ) from None
-
-                    owner_pid = owner_data.get("pid")
-                    if type(owner_pid) is not int or owner_pid <= 0:
-                        raise CorruptMissionRegistryError(
-                            f"Malformed PID in lock owner metadata: {owner_pid!r}"
-                        ) from None
-
-                    if not _is_pid_alive(owner_pid):
-                        # Proven dead owner process: safely reclaim lock
-                        owner_file.unlink(missing_ok=True)
-                        with contextlib.suppress(OSError):
-                            self.lock_path.rmdir()
-                        continue
-                time.sleep(0.05)
-
-        if not acquired:
-            msg = (
-                f"Timed out acquiring mission lock at '{self.lock_path}' after {timeout_seconds}s."
-            )
-            raise MissionLockTimeoutError(msg)
-
-        try:
+        """Cross-platform directory-based file lock ensuring single-writer mission mutations."""
+        lock = DirectoryLock(
+            lock_path=self.lock_path,
+            timeout_seconds=timeout_seconds,
+            timeout_error_cls=MissionLockTimeoutError,
+            corrupt_error_cls=CorruptMissionRegistryError,
+        )
+        with lock.acquire(timeout_seconds=timeout_seconds):
             yield
-        finally:
-            if acquired and owner_file.exists():
-                try:
-                    cur_raw = owner_file.read_text(encoding="utf-8")
-                    cur_data = json.loads(cur_raw)
-                except Exception as exc:
-                    raise MissionRegistryError(
-                        f"Failed to read lock owner file on release: {exc}"
-                    ) from exc
-
-                if type(cur_data) is dict and cur_data.get("token") == token:
-                    owner_file.unlink(missing_ok=True)
-                    try:
-                        self.lock_path.rmdir()
-                    except OSError as exc:
-                        raise MissionRegistryError(
-                            f"Failed to remove lock dir '{self.lock_path}': {exc}"
-                        ) from exc
 
     def _mission_file(self, mission_id: str) -> Path:
         clean = mission_id.strip()

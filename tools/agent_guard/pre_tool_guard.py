@@ -49,6 +49,13 @@ FORCE_ASK_PATTERNS = [
         re.compile(r"\b(?:dns|domain)\b.*?\b(?:change|update|delete|transfer)\b", re.IGNORECASE),
         "DNS/domain configuration change requires explicit human gate.",
     ),
+    (
+        re.compile(
+            r"\b(?:emergency_purge|manual_recovery|destructive_purge|purge_unverified)\w*\b",
+            re.IGNORECASE,
+        ),
+        "Manual emergency purge or destructive recovery script requires explicit human gate.",
+    ),
 ]
 
 SHELL_WRAPPERS = {
