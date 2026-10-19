@@ -192,7 +192,12 @@ class MissionCoordinator:
 
         self.registry.transition_mission_state(
             mission_id=mission_id,
-            expected_states={MissionState.PLANNED, MissionState.DISPATCHING, MissionState.RUNNING},
+            expected_states={
+                MissionState.PLANNED,
+                MissionState.DISPATCHING,
+                MissionState.RUNNING,
+                MissionState.REPAIRING,
+            },
             new_state=MissionState.DISPATCHING,
         )
         dispatched_worktrees: dict[str, WorktreeInfo] = {}
@@ -620,6 +625,22 @@ class MissionCoordinator:
                 "scope_verified_at": now_iso,
             },
         )
+
+        # If mission is in REPAIRING and no task in the mission remains in
+        # CHANGES_REQUESTED or IMPLEMENTED, deterministically transition mission back to RUNNING.
+        refreshed = self.registry.get_mission(mission_id)
+        if refreshed.state == MissionState.REPAIRING:
+            has_pending_repairs = any(
+                st in (TaskMissionState.CHANGES_REQUESTED, TaskMissionState.IMPLEMENTED)
+                for st in refreshed.task_states.values()
+            )
+            if not has_pending_repairs:
+                self.registry.transition_mission_state(
+                    mission_id=mission_id,
+                    expected_states={MissionState.REPAIRING},
+                    new_state=MissionState.RUNNING,
+                )
+
         return []
 
     def check_consolidation_readiness(self, mission_id: str) -> ConsolidationStatus:

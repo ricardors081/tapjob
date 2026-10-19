@@ -31,6 +31,7 @@ from tools.agent_factory.mission_planner import (
 from tools.agent_factory.mission_registry import (
     CorruptMissionRegistryError,
     DuplicateMissionIdError,
+    InvalidStateTransitionError,
     MissionRegistry,
     MissionRegistryRecord,
     MissionState,
@@ -583,7 +584,8 @@ class TestMissionExecution(unittest.TestCase):
             with registry._lock(timeout_seconds=2.0):
                 self.assertTrue(registry.lock_path.exists())
 
-            self.assertFalse(registry.lock_path.exists())
+            self.assertTrue(registry.lock_path.exists())
+            self.assertFalse((registry.lock_path / "owner.json").exists())
 
     # 20. Lock malformed metadata fails closed without suppress
     def test_20_lock_malformed_metadata_fails_closed(self) -> None:
@@ -999,13 +1001,11 @@ class TestMissionExecution(unittest.TestCase):
             )
             coordinator.verify_task_scope("mission-sha-check", "task_sha_check", head_sha)
 
-            # Modify scope_verified_head_sha in mission record to an unverified SHA
-            coordinator.registry.update_task_state(
-                "mission-sha-check",
-                "task_sha_check",
-                TaskMissionState.SCOPE_VERIFIED,
-                details={"scope_verified_head_sha": "a" * 40},
-            )
+            # Modify scope_verified_head_sha in mission record directly in fixture JSON
+            mfile = coordinator.registry._mission_file("mission-sha-check")
+            mdata = json.loads(mfile.read_text(encoding="utf-8"))
+            mdata["task_records"]["task_sha_check"]["scope_verified_head_sha"] = "a" * 40
+            mfile.write_text(json.dumps(mdata, indent=2), encoding="utf-8")
 
             status = coordinator.check_consolidation_readiness("mission-sha-check")
             self.assertFalse(status.ready)
@@ -2167,6 +2167,293 @@ class TestMissionExecution(unittest.TestCase):
                     mission_id="m_atomic",
                     expected_states={MissionState.RUNNING, MissionState.REPAIRING},
                     new_state=MissionState.RUNNING,
+                )
+
+    # 50. Persistent lock file and stable inode handoff (Finding 1)
+    def test_50_persistent_lock_file_and_stable_inode_handoff(self) -> None:
+        """Finding 1 (Round 4): Verify lock file/dir persist across release and inode stability."""
+        import subprocess
+        import sys
+        import threading
+        import time
+
+        from tools.agent_factory.lock import DirectoryLock, LockTimeoutError
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock_path = Path(tmpdir) / ".stable_lock"
+            lock1 = DirectoryLock(lock_path=lock_path, timeout_seconds=2.0)
+
+            # Class attributes contract
+            self.assertTrue(DirectoryLock.LOCK_OS_BACKED)
+            self.assertFalse(DirectoryLock.AUTONOMOUS_STALE_DIRECTORY_RECLAIM_PRESENT)
+            self.assertTrue(DirectoryLock.LOCK_FILE_PERSISTENT)
+            self.assertFalse(DirectoryLock.LOCK_FILE_UNLINK_ON_RELEASE)
+            self.assertFalse(DirectoryLock.LOCK_DIRECTORY_RMDIR_ON_RELEASE)
+
+            # 1. Acquire and release
+            with lock1.acquire(timeout_seconds=2.0):
+                self.assertTrue(lock1.is_locked)
+                self.assertTrue(lock1.lock_file.exists())
+                initial_stat = lock1.lock_file.stat()
+
+            # 2. Canonical lock_file still exists after release (NEVER unlinked)
+            self.assertTrue(lock1.lock_file.exists())
+            self.assertTrue(lock1.lock_dir.exists())
+            post_release_stat = lock1.lock_file.stat()
+
+            # 3. Repeated acquire/release uses the exact same canonical file and inode
+            lock2 = DirectoryLock(lock_path=lock_path, timeout_seconds=2.0)
+            with lock2.acquire(timeout_seconds=2.0):
+                self.assertTrue(lock2.is_locked)
+                second_stat = lock2.lock_file.stat()
+                if hasattr(initial_stat, "st_ino") and initial_stat.st_ino != 0:
+                    self.assertEqual(initial_stat.st_ino, post_release_stat.st_ino)
+                    self.assertEqual(initial_stat.st_ino, second_stat.st_ino)
+
+            # 4. Three-process stress / controlled handoff cannot create simultaneous owners
+            active_owners: list[int] = []
+            max_simultaneous = 0
+
+            def acquire_and_hold(inst_id: int, duration: float) -> None:
+                nonlocal max_simultaneous
+                l_inst = DirectoryLock(lock_path=lock_path, timeout_seconds=5.0)
+                with l_inst.acquire(timeout_seconds=5.0):
+                    active_owners.append(inst_id)
+                    cur_count = len(active_owners)
+                    if cur_count > max_simultaneous:
+                        max_simultaneous = cur_count
+                    time.sleep(duration)
+                    active_owners.remove(inst_id)
+
+            t1 = threading.Thread(target=acquire_and_hold, args=(1, 0.05))
+            t2 = threading.Thread(target=acquire_and_hold, args=(2, 0.05))
+            t3 = threading.Thread(target=acquire_and_hold, args=(3, 0.05))
+
+            t1.start()
+            t2.start()
+            t3.start()
+            t1.join()
+            t2.join()
+            t3.join()
+
+            self.assertEqual(max_simultaneous, 1)
+            self.assertEqual(len(active_owners), 0)
+
+            # 5. Waiting process acquiring immediately after release cannot lose
+            # its canonical lock pathname
+            self.assertTrue(lock1.lock_file.exists())
+
+            # 6. Crash recovery still works with persistent lock file
+            code = (
+                "import sys, time\n"
+                "from pathlib import Path\n"
+                "from tools.agent_factory.lock import DirectoryLock\n"
+                f"l = DirectoryLock(Path(r'{lock_path}'), timeout_seconds=5.0)\n"
+                "l.acquire_lock()\n"
+                "print('ACQUIRED', flush=True)\n"
+                "time.sleep(1.0)\n"
+                "sys.exit(0)\n"
+            )
+            proc = subprocess.Popen(  # noqa: S603
+                [sys.executable, "-c", code],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=str(Path.cwd()),
+            )
+            line = proc.stdout.readline() if proc.stdout else ""
+            self.assertEqual(line.strip(), "ACQUIRED")
+
+            # While child holds, contender times out
+            lock_contender = DirectoryLock(lock_path=lock_path, timeout_seconds=0.2)
+            with self.assertRaises(LockTimeoutError):
+                lock_contender.acquire_lock()
+
+            # Wait for child to exit
+            proc.wait(timeout=5)
+
+            # Next contender acquires without error on the exact same lock file
+            lock_after_crash = DirectoryLock(lock_path=lock_path, timeout_seconds=2.0)
+            with lock_after_crash.acquire(timeout_seconds=2.0):
+                self.assertTrue(lock_after_crash.is_locked)
+            self.assertTrue(lock_after_crash.lock_file.exists())
+
+    # 51. Repairing mission progresses to next DAG group (Finding 2)
+    def test_51_repairing_mission_progresses_to_next_dag_group(self) -> None:
+        """Finding 2 (Round 4): Multi-group mission progresses to next group after repair."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            repo_dir, base_sha = self._create_temp_git_repo(root)
+            worktrees_dir = root / "worktrees"
+
+            coordinator = MissionCoordinator(
+                dispatcher=WorktreeDispatcher(repo_root=repo_dir, worktrees_dir=worktrees_dir),
+                registry=MissionRegistry(worktrees_dir=worktrees_dir),
+            )
+
+            task_a = self._make_task("task_a", base_sha)
+            task_b = self._make_task(
+                "task_b",
+                base_sha,
+                role="qa_sdet_engineer",
+                allowed_paths=["services/api/tests/test_api.py"],
+                dependencies=["task_a"],
+            )
+
+            mission = MissionContract(
+                mission_id="mission_multi_group_repair",
+                canonical_base_sha=base_sha,
+                objective="Test multi-group mission progression after repair",
+                human_gate_required=True,
+                tasks=[task_a, task_b],
+            )
+
+            coordinator.create_mission(mission)
+            rec = coordinator.registry.get_mission("mission_multi_group_repair")
+            self.assertEqual(len(rec.execution_groups), 2)
+            self.assertEqual(rec.execution_groups[0], ["task_a"])
+            self.assertEqual(rec.execution_groups[1], ["task_b"])
+
+            # Dispatch group 0 (task_a)
+            coordinator.dispatch_execution_group("mission_multi_group_repair", 0)
+            active_a = coordinator.dispatcher.get_active_task("task_a")
+            if active_a is None:
+                self.fail("active_a is None")
+            winfo_a = active_a[1]
+            wpath_a = winfo_a.worktree_path
+
+            # Task A implements HEAD A1
+            test_file_a = wpath_a / "services" / "api" / "src" / "tapjob_api" / "app.py"
+            test_file_a.parent.mkdir(parents=True, exist_ok=True)
+            test_file_a.write_text("# impl A1\n", encoding="utf-8")
+            self._run_git(["add", "."], wpath_a)
+            self._run_git(["commit", "-m", "impl A1"], wpath_a)
+            head_a1 = coordinator.dispatcher.get_worktree_head(wpath_a)
+
+            coordinator.record_task_implemented("mission_multi_group_repair", "task_a", head_a1)
+
+            # Review task A with CHANGES_REQUIRED
+            coordinator.record_task_review(
+                mission_id="mission_multi_group_repair",
+                task_id="task_a",
+                reviewer_role="reviewer_security_engineer",
+                verdict=ReviewVerdict.CHANGES_REQUIRED,
+                test_passed=False,
+                findings=["Finding: needs repair"],
+            )
+
+            # Verification 1: Mission is REPAIRING, Task A is CHANGES_REQUESTED
+            rec = coordinator.registry.get_mission("mission_multi_group_repair")
+            self.assertEqual(rec.state, MissionState.REPAIRING)
+            self.assertEqual(rec.task_states["task_a"], TaskMissionState.CHANGES_REQUESTED)
+
+            # Verification 2: Group 1 remains blocked while A is CHANGES_REQUESTED
+            self.assertIsNone(coordinator.get_next_eligible_group("mission_multi_group_repair"))
+            with self.assertRaises(MissionDispatchError):
+                coordinator.dispatch_execution_group("mission_multi_group_repair", 1)
+
+            # Repair task A with HEAD A2
+            test_file_a.write_text("# impl A2 (repaired)\n", encoding="utf-8")
+            self._run_git(["add", "."], wpath_a)
+            self._run_git(["commit", "-m", "repair A2"], wpath_a)
+            head_a2 = coordinator.dispatcher.get_worktree_head(wpath_a)
+
+            coordinator.record_task_implemented("mission_multi_group_repair", "task_a", head_a2)
+
+            # Verification 3: Group 1 remains blocked while repaired A is only IMPLEMENTED
+            self.assertIsNone(coordinator.get_next_eligible_group("mission_multi_group_repair"))
+            with self.assertRaises(MissionDispatchError):
+                coordinator.dispatch_execution_group("mission_multi_group_repair", 1)
+
+            # Review task A with APPROVE
+            coordinator.record_task_review(
+                mission_id="mission_multi_group_repair",
+                task_id="task_a",
+                reviewer_role="reviewer_security_engineer",
+                verdict=ReviewVerdict.APPROVE,
+                test_passed=True,
+                findings=[],
+            )
+
+            # Verification 4: Group 1 remains blocked while A is only APPROVED
+            self.assertIsNone(coordinator.get_next_eligible_group("mission_multi_group_repair"))
+            with self.assertRaises(MissionDispatchError):
+                coordinator.dispatch_execution_group("mission_multi_group_repair", 1)
+
+            # Scope verify task A at exact HEAD A2
+            coordinator.verify_task_scope("mission_multi_group_repair", "task_a", head_a2)
+
+            # Verification 5: Task A is SCOPE_VERIFIED, unlocks group 1!
+            rec = coordinator.registry.get_mission("mission_multi_group_repair")
+            self.assertEqual(rec.task_states["task_a"], TaskMissionState.SCOPE_VERIFIED)
+            self.assertEqual(coordinator.get_next_eligible_group("mission_multi_group_repair"), 1)
+
+            # Dispatch group 1 succeeds!
+            dispatched = coordinator.dispatch_execution_group("mission_multi_group_repair", 1)
+            self.assertIn("task_b", dispatched)
+            rec = coordinator.registry.get_mission("mission_multi_group_repair")
+            self.assertEqual(rec.task_states["task_b"], TaskMissionState.DISPATCHED)
+            self.assertEqual(rec.state, MissionState.RUNNING)
+
+    # 52. No blind state mutation APIs on MissionRegistry (Finding 3)
+    def test_52_no_blind_state_mutation_apis(self) -> None:
+        """Finding 3 (Round 4): Ensure blind mutation APIs are removed from MissionRegistry."""
+        # 1. Blind state mutation APIs must NOT exist on MissionRegistry
+        self.assertFalse(
+            hasattr(MissionRegistry, "update_mission_state"),
+            "MissionRegistry must not expose blind update_mission_state",
+        )
+        self.assertFalse(
+            hasattr(MissionRegistry, "update_task_state"),
+            "MissionRegistry must not expose blind update_task_state",
+        )
+
+        # 2. Compare-and-transition APIs MUST exist
+        self.assertTrue(hasattr(MissionRegistry, "transition_mission_state"))
+        self.assertTrue(hasattr(MissionRegistry, "transition_task_state"))
+
+        # 3. transition_mission_state and transition_task_state enforce expected_states
+        with tempfile.TemporaryDirectory() as tmpdir:
+            worktrees_dir = Path(tmpdir)
+            registry = MissionRegistry(worktrees_dir=worktrees_dir)
+            contract = self._make_task("t_api", "0" * 40)
+            rec = MissionRegistryRecord(
+                mission_id="m_api",
+                base_sha="0" * 40,
+                objective="test blind api removal",
+                human_gate_required=True,
+                state=MissionState.RUNNING,
+                task_ids=["t_api"],
+                execution_groups=[["t_api"]],
+                task_states={"t_api": TaskMissionState.DISPATCHED},
+                task_records={
+                    "t_api": {
+                        "owner_role": contract.owner_role,
+                        "target_branch": contract.target_branch,
+                        "repair_count": 0,
+                        "contract": contract.to_dict(),
+                    }
+                },
+            )
+            registry.create_mission(rec)
+
+            # Calling transition_task_state with wrong expected_state raises
+            # InvalidStateTransitionError
+            with self.assertRaises(InvalidStateTransitionError):
+                registry.transition_task_state(
+                    mission_id="m_api",
+                    task_id="t_api",
+                    expected_states={TaskMissionState.PENDING},  # actual is DISPATCHED
+                    new_state=TaskMissionState.IMPLEMENTED,
+                )
+
+            # Calling transition_mission_state with wrong expected_state raises
+            # InvalidStateTransitionError
+            with self.assertRaises(InvalidStateTransitionError):
+                registry.transition_mission_state(
+                    mission_id="m_api",
+                    expected_states={MissionState.PLANNED},  # actual is RUNNING
+                    new_state=MissionState.DISPATCHING,
                 )
 
 

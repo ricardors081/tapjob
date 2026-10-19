@@ -1619,8 +1619,9 @@ class TestAgentFactory(unittest.TestCase):
                 ):
                     pass
 
-            # After exit, lock directory is cleaned
-            self.assertFalse(dispatcher.lock_path.exists())
+            # After exit, canonical lock directory persists, owner metadata is cleaned
+            self.assertTrue(dispatcher.lock_path.exists())
+            self.assertFalse(owner_file.exists())
 
             # 2. Token mismatch: owner cannot delete another owner's lock
             dispatcher.lock_path.mkdir(parents=True, exist_ok=True)
@@ -1663,7 +1664,8 @@ class TestAgentFactory(unittest.TestCase):
                     (dispatcher.lock_path / "owner.json").read_text(encoding="utf-8")
                 )
                 self.assertEqual(cur_data["pid"], os.getpid())
-            self.assertFalse(dispatcher.lock_path.exists())
+            self.assertTrue(dispatcher.lock_path.exists())
+            self.assertFalse((dispatcher.lock_path / "owner.json").exists())
 
     # 30. Missing Task Release Fails Closed (Additional Small Correction 1)
     def test_30_missing_task_release_fails_closed(self) -> None:

@@ -107,6 +107,9 @@ class DirectoryLock:
 
     LOCK_OS_BACKED: bool = True
     AUTONOMOUS_STALE_DIRECTORY_RECLAIM_PRESENT: bool = False
+    LOCK_FILE_PERSISTENT: bool = True
+    LOCK_FILE_UNLINK_ON_RELEASE: bool = False
+    LOCK_DIRECTORY_RMDIR_ON_RELEASE: bool = False
 
     def __init__(
         self,
@@ -294,18 +297,6 @@ class DirectoryLock:
 
         self._unlock_os_lock(f.fileno())
         f.close()
-
-        if self.lock_file.exists():
-            try:
-                self.lock_file.unlink()
-            except OSError as err:
-                _ = err
-
-        if self.lock_dir.exists() and self.lock_dir == self.lock_path:
-            try:
-                self.lock_dir.rmdir()
-            except OSError as err:
-                _ = err
 
     @contextmanager
     def acquire(self, timeout_seconds: float | None = None) -> Iterator[DirectoryLock]:

@@ -653,20 +653,6 @@ class MissionRegistry:
 
         return MissionRegistryRecord.from_dict(data)
 
-    def update_mission_state(
-        self, mission_id: str, new_state: MissionState
-    ) -> MissionRegistryRecord:
-        """Atomically update the overall state of a mission."""
-        with self._lock():
-            record = self.get_mission(mission_id)
-            record.state = new_state
-            record.updated_at = datetime.now(UTC).isoformat()
-            target_file = self._mission_file(mission_id)
-            tmp_file = self.missions_dir / f"{mission_id}.json.tmp.{os.getpid()}.{time.time_ns()}"
-            tmp_file.write_text(json.dumps(record.to_dict(), indent=2), encoding="utf-8")
-            tmp_file.replace(target_file)
-            return record
-
     def transition_mission_state(
         self,
         mission_id: str,
@@ -731,32 +717,6 @@ class MissionRegistry:
                 record.task_records[task_id].update(details)
             record.updated_at = datetime.now(UTC).isoformat()
             record.validate()
-            target_file = self._mission_file(mission_id)
-            tmp_file = self.missions_dir / f"{mission_id}.json.tmp.{os.getpid()}.{time.time_ns()}"
-            tmp_file.write_text(json.dumps(record.to_dict(), indent=2), encoding="utf-8")
-            tmp_file.replace(target_file)
-            return record
-
-    def update_task_state(
-        self,
-        mission_id: str,
-        task_id: str,
-        task_state: TaskMissionState,
-        details: dict[str, Any] | None = None,
-    ) -> MissionRegistryRecord:
-        """Atomically update a child task's state and record details."""
-        with self._lock():
-            record = self.get_mission(mission_id)
-            if task_id not in record.task_states:
-                raise MissionRegistryError(
-                    f"Task '{task_id}' is not registered under mission '{mission_id}'."
-                )
-            record.task_states[task_id] = task_state
-            if details:
-                if task_id not in record.task_records:
-                    record.task_records[task_id] = {}
-                record.task_records[task_id].update(details)
-            record.updated_at = datetime.now(UTC).isoformat()
             target_file = self._mission_file(mission_id)
             tmp_file = self.missions_dir / f"{mission_id}.json.tmp.{os.getpid()}.{time.time_ns()}"
             tmp_file.write_text(json.dumps(record.to_dict(), indent=2), encoding="utf-8")

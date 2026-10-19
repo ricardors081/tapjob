@@ -65,7 +65,10 @@ Computes an immutable `ExecutionPlan` consisting of sequential `ExecutionGroup` 
 
 ### 2.3 MissionRegistry (`tools/agent_factory/mission_registry.py`)
 Provides persistent, crash-resilient storage for mission state outside the repository (`<worktrees_dir>/.tapjob-agent-factory/missions/<mission_id>.json`):
-- **Cross-Process Mutex**: Uses directory-based lock files (`.mission_lock`) containing PID, token, and timestamp. Dead-process locks are detected and safely reclaimed via OS-level PID liveness checks (`ctypes.windll.kernel32.OpenProcess` on Windows, `os.kill(pid, 0)` on POSIX).
+- **Stable OS-Backed Mutex**: Uses a permanent, OS-backed lock file (`.mission_lock/exclusive.lock`). Mutual exclusion is enforced by kernel file locking primitives (`fcntl.flock` on POSIX, `msvcrt.locking` on Windows) tied to an open file descriptor.
+- **Zero Autonomous Stale Stealing**: Process termination or crash immediately and automatically releases kernel ownership without autonomous stale lock stealing, directory moves, or tombstones.
+- **Permanent Infrastructure State**: The canonical lock file and directory are intentionally persistent across normal acquire/release cycles and are never unlinked during release, preserving inode stability on POSIX and preventing ABA multi-owner races.
+- **Atomic Compare-and-Transition**: All mission and task state mutations route strictly through `transition_mission_state` and `transition_task_state` with `expected_states` validation under the lock. Blind state mutation APIs are eliminated.
 - **Atomic Writes**: Writes mission records to temporary files followed by atomic filesystem replacement (`os.replace`) to prevent corruption from abrupt aborts.
 - **Strict Validation**: Fails closed if any registry file contains missing fields, unparseable states, or inconsistent task states.
 
@@ -95,6 +98,10 @@ stateDiagram-v2
     PLANNED --> DISPATCHING: dispatch_execution_group()
     DISPATCHING --> RUNNING: group worktrees active
     DISPATCHING --> BLOCKED: partial dispatch failure
+    RUNNING --> REPAIRING: review verdict CHANGES_REQUIRED
+    REPAIRING --> RUNNING: repair verified (all tasks in group SCOPE_VERIFIED)
+    REPAIRING --> DISPATCHING: dispatch_execution_group() for next DAG group
+    REPAIRING --> BLOCKED: task repair budget exhausted (> 5)
     RUNNING --> READY_FOR_CONSOLIDATION: all mission tasks scope-verified
     READY_FOR_CONSOLIDATION --> CONSOLIDATED: human-gated PR merge
     RUNNING --> BLOCKED: task repair budget exhausted (> 5)
