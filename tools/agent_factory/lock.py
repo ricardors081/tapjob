@@ -25,16 +25,12 @@ def _is_pid_alive(pid: int) -> bool:
 
             process_query = 0x1000  # PROCESS_QUERY_LIMITED_INFORMATION
             synchronize = 0x00100000  # SYNCHRONIZE
-            handle = ctypes.windll.kernel32.OpenProcess(
-                process_query | synchronize, False, pid
-            )
+            handle = ctypes.windll.kernel32.OpenProcess(process_query | synchronize, False, pid)
             if handle == 0:
                 return False
             try:
                 exit_code = ctypes.c_ulong()
-                if ctypes.windll.kernel32.GetExitCodeProcess(
-                    handle, ctypes.byref(exit_code)
-                ):
+                if ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
                     still_active = 259
                     return exit_code.value == still_active
                 return False

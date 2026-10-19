@@ -1580,8 +1580,8 @@ class TestMissionExecution(unittest.TestCase):
             coordinator.dispatch_execution_group("mission-attack", 0)
 
             active = dispatcher.get_active_task("task_attack")
-            self.assertIsNotNone(active)
-            assert active is not None
+            if active is None:
+                self.fail("Expected active task_attack")
             _, winfo = active
 
             # 1. Implement legitimate change
