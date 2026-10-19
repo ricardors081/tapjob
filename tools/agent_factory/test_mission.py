@@ -2174,8 +2174,6 @@ class TestMissionExecution(unittest.TestCase):
         """Finding 1 (Round 4): Verify lock file/dir persist across release and inode stability."""
         import subprocess
         import sys
-        import threading
-        import time
 
         from tools.agent_factory.lock import DirectoryLock, LockTimeoutError
 
@@ -2210,58 +2208,88 @@ class TestMissionExecution(unittest.TestCase):
                     self.assertEqual(initial_stat.st_ino, post_release_stat.st_ino)
                     self.assertEqual(initial_stat.st_ino, second_stat.st_ino)
 
-            # 4. Three-process stress / controlled handoff cannot create simultaneous owners
-            active_owners: list[int] = []
-            max_simultaneous = 0
+            # 4. True three-process stress / controlled handoff: three independent Python processes
+            # Each process acquires DirectoryLock, attempts exclusive-create of a shared sentinel,
+            # logs its entry, holds briefly, unlinks the sentinel, and releases DirectoryLock.
+            # If two processes were ever in the critical section simultaneously, exclusive creation
+            # fails with FileExistsError and the process exits with failure code.
+            sentinel_file = Path(tmpdir) / "shared_sentinel.txt"
+            log_dir = Path(tmpdir) / "proc_logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
 
-            def acquire_and_hold(inst_id: int, duration: float) -> None:
-                nonlocal max_simultaneous
-                l_inst = DirectoryLock(lock_path=lock_path, timeout_seconds=5.0)
-                with l_inst.acquire(timeout_seconds=5.0):
-                    active_owners.append(inst_id)
-                    cur_count = len(active_owners)
-                    if cur_count > max_simultaneous:
-                        max_simultaneous = cur_count
-                    time.sleep(duration)
-                    active_owners.remove(inst_id)
+            worker_script = (
+                "import os, sys, time\n"
+                "from pathlib import Path\n"
+                "from tools.agent_factory.lock import DirectoryLock\n"
+                f"lock_path = Path(r'{lock_path}')\n"
+                f"sentinel = Path(r'{sentinel_file}')\n"
+                f"log_dir = Path(r'{log_dir}')\n"
+                "worker_id = sys.argv[1]\n"
+                "lock = DirectoryLock(lock_path=lock_path, timeout_seconds=15.0)\n"
+                "with lock.acquire(timeout_seconds=15.0):\n"
+                "    try:\n"
+                "        fd = os.open(str(sentinel), os.O_CREAT | os.O_EXCL | os.O_WRONLY)\n"
+                "    except FileExistsError:\n"
+                "        # Sentinel already exists: mutual exclusion violated!\n"
+                "        sys.exit(42)\n"
+                "    with os.fdopen(fd, 'w') as sf:\n"
+                "        sf.write(worker_id)\n"
+                "    (log_dir / f'{worker_id}.entered').write_text(f'{time.time()}\\n')\n"
+                "    time.sleep(0.08)\n"
+                "    try:\n"
+                "        sentinel.unlink()\n"
+                "    except OSError:\n"
+                "        sys.exit(43)\n"
+                "sys.exit(0)\n"
+            )
 
-            t1 = threading.Thread(target=acquire_and_hold, args=(1, 0.05))
-            t2 = threading.Thread(target=acquire_and_hold, args=(2, 0.05))
-            t3 = threading.Thread(target=acquire_and_hold, args=(3, 0.05))
+            procs = [
+                subprocess.Popen(  # noqa: S603
+                    [sys.executable, "-c", worker_script, str(i)],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    cwd=str(Path.cwd()),
+                )
+                for i in range(1, 4)
+            ]
 
-            t1.start()
-            t2.start()
-            t3.start()
-            t1.join()
-            t2.join()
-            t3.join()
+            exit_codes = [p.wait(timeout=20) for p in procs]
+            for p in procs:
+                if p.stdout:
+                    p.stdout.close()
+                if p.stderr:
+                    p.stderr.close()
+            for i, code in enumerate(exit_codes, start=1):
+                self.assertEqual(code, 0, f"Worker process {i} failed with exit code {code}")
 
-            self.assertEqual(max_simultaneous, 1)
-            self.assertEqual(len(active_owners), 0)
+            entered_logs = sorted(log_dir.glob("*.entered"))
+            self.assertEqual(len(entered_logs), 3)
+            self.assertEqual({p.stem for p in entered_logs}, {"1", "2", "3"})
 
             # 5. Waiting process acquiring immediately after release cannot lose
             # its canonical lock pathname
             self.assertTrue(lock1.lock_file.exists())
 
-            # 6. Crash recovery still works with persistent lock file
-            code = (
+            # 6. Abrupt process termination proof (SIGKILL / terminate)
+            # Child process acquires lock, prints ACQUIRED, and sleeps indefinitely
+            code_crash = (
                 "import sys, time\n"
                 "from pathlib import Path\n"
                 "from tools.agent_factory.lock import DirectoryLock\n"
                 f"l = DirectoryLock(Path(r'{lock_path}'), timeout_seconds=5.0)\n"
                 "l.acquire_lock()\n"
                 "print('ACQUIRED', flush=True)\n"
-                "time.sleep(1.0)\n"
-                "sys.exit(0)\n"
+                "time.sleep(30.0)\n"
             )
-            proc = subprocess.Popen(  # noqa: S603
-                [sys.executable, "-c", code],
+            crash_proc = subprocess.Popen(  # noqa: S603
+                [sys.executable, "-c", code_crash],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=str(Path.cwd()),
             )
-            line = proc.stdout.readline() if proc.stdout else ""
+            line = crash_proc.stdout.readline() if crash_proc.stdout else ""
             self.assertEqual(line.strip(), "ACQUIRED")
 
             # While child holds, contender times out
@@ -2269,8 +2297,13 @@ class TestMissionExecution(unittest.TestCase):
             with self.assertRaises(LockTimeoutError):
                 lock_contender.acquire_lock()
 
-            # Wait for child to exit
-            proc.wait(timeout=5)
+            # Abruptly kill the process while holding the lock
+            crash_proc.kill()
+            crash_proc.wait(timeout=5)
+            if crash_proc.stdout:
+                crash_proc.stdout.close()
+            if crash_proc.stderr:
+                crash_proc.stderr.close()
 
             # Next contender acquires without error on the exact same lock file
             lock_after_crash = DirectoryLock(lock_path=lock_path, timeout_seconds=2.0)

@@ -196,7 +196,7 @@ Two specialized Antigravity subagents were defined and invoked concurrently:
 
 ## 6. Testing & Verification
 
-The AF-2 test harness in `tools/agent_factory/test_mission.py` executes 47 comprehensive unit and integration scenarios:
+The AF-2 test harness in `tools/agent_factory/test_mission.py` executes 52 comprehensive unit and integration scenarios (82 total agent factory tests alongside 30 tests in `test_agent_factory.py`):
 
 | # | Test Scenario | Verified Invariant |
 |---|---------------|--------------------|
@@ -249,6 +249,9 @@ The AF-2 test harness in `tools/agent_factory/test_mission.py` executes 47 compr
 | 47 | `test_47_no_emergency_purge_in_coordinator_and_guard_pattern` | Emergency purge method absent from coordinator and intercepted by PreToolGuard. |
 | 48 | `test_48_repair_history_heads_immutable` | Historical review iterations preserve exact commit SHA under review (HEAD A != HEAD B). |
 | 49 | `test_49_atomic_state_transitions_and_stale_writer_protection` | Concurrent reviewers and stale writers fail closed against atomic transitions. |
+| 50 | `test_50_persistent_lock_file_and_stable_inode_handoff` | Permanent lock file persists on release, stable POSIX inode, true 3-subprocess contention, abrupt termination release. |
+| 51 | `test_51_repairing_mission_progresses_to_next_dag_group` | Multi-group mission progresses from REPAIRING to next group after repair, requiring SCOPE_VERIFIED for dependencies. |
+| 52 | `test_52_no_blind_state_mutation_apis` | Blind update APIs removed from registry; all mutations enforce atomic compare-and-transition. |
 
 ---
 
