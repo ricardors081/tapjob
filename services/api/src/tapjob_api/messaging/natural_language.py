@@ -1,6 +1,10 @@
 """Natural Language Understanding and Conversational Intent Engine for TapJob Messaging.
 
-Layered architecture:
+Architecture:
+Hybrid deterministic conversational intent router with contextual disambiguation
+and safe clarification fallback.
+
+Layered pipeline:
 1. Untrusted NL Input ->
 2. Conversational Understanding (Semantic Interpretation with ConversationContext) ->
 3. Structured Typed Result (SemanticInterpretation with intent/confidence/entities) ->
@@ -8,8 +12,6 @@ Layered architecture:
 5. Safe Domain Action.
 
 Supports colloquial, formal, informal, slang, and typo variations of Brazilian Portuguese (PT-BR).
-Avoids brittle hardcoded keyword lists through semantic categorization, context awareness,
-URL classification, and safe disambiguation fallbacks.
 """
 
 from __future__ import annotations

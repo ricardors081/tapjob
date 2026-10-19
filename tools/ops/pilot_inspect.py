@@ -341,7 +341,10 @@ def inspect_participant(session: Session, phone_or_jid: str) -> dict[str, Any]:
     # Resolve linked user
     user_row = session.execute(
         sa.text(
-            "SELECT user_id FROM channel_identity_links WHERE external_id LIKE :pattern LIMIT 1"
+            "SELECT cil.user_id "
+            "FROM channel_identity_links cil "
+            "JOIN channel_identities ci ON cil.channel_identity_id = ci.id "
+            "WHERE ci.external_id LIKE :pattern LIMIT 1"
         ),
         {"pattern": f"%{clean_digits}%"},
     ).fetchone()

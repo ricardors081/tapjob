@@ -229,46 +229,97 @@ class CanaryDbVerifier:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def verify_envelope_processed(self, sender_digits: str) -> dict[str, Any]:
-        """Asserts latest envelope for sender was processed with zero errors."""
+    def get_max_envelope_id(self) -> int:
+        """Returns highest envelope ID currently recorded."""
+        val = self.session.execute(sa.text("SELECT max(id) FROM provider_event_envelopes")).scalar()
+        return int(val) if val is not None else 0
+
+    def resolve_user_id(self, sender_digits: str) -> str | None:
+        """Resolves user UUID via channel_identity_links joined with channel_identities."""
         row = self.session.execute(
             sa.text(
-                "SELECT id, status, processing_attempts, error_details, normalized_event "
-                "FROM provider_event_envelopes "
-                "WHERE normalized_event->>'sender_external_id' LIKE :pattern "
-                "ORDER BY created_at DESC LIMIT 1"
+                "SELECT cil.user_id "
+                "FROM channel_identity_links cil "
+                "JOIN channel_identities ci ON cil.channel_identity_id = ci.id "
+                "WHERE ci.external_id LIKE :pattern LIMIT 1"
             ),
             {"pattern": f"%{sender_digits}%"},
         ).fetchone()
+        return str(row[0]) if row else None
+
+    def verify_envelope_processed(
+        self,
+        sender_digits: str,
+        expected_intent: str | None = None,
+        min_envelope_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Asserts envelope for sender was processed with zero errors and matches intent."""
+        sql = (
+            "SELECT id, status, processing_attempts, error_details, normalized_event "
+            "FROM provider_event_envelopes "
+            "WHERE normalized_event->>'sender_external_id' LIKE :pattern "
+        )
+        params: dict[str, Any] = {"pattern": f"%{sender_digits}%"}
+        if min_envelope_id is not None:
+            sql += "AND id >= :min_id "
+            params["min_id"] = min_envelope_id
+        sql += "ORDER BY id DESC LIMIT 1"
+
+        row = self.session.execute(sa.text(sql), params).fetchone()
         if not row:
-            return {"envelope_found": False}
+            return {
+                "envelope_found": False,
+                "is_processed": False,
+                "intent_matched": False,
+                "routed_intent": None,
+                "status": None,
+            }
+
+        env_id = row[0]
+        status_str = str(row[1])
+        attempts = row[2]
+        error_details = row[3]
+        norm = row[4] if isinstance(row[4], dict) else {}
+        routed = norm.get("routed_intent")
+
+        is_proc = (status_str == "processed") and (error_details is None)
+        intent_ok = True
+        if expected_intent is not None:
+            intent_ok = routed == expected_intent
+
         return {
             "envelope_found": True,
-            "envelope_id": row[0],
-            "status": str(row[1]),
-            "attempts": row[2],
-            "error_details": row[3],
-            "routed_intent": (row[4] or {}).get("routed_intent")
-            if isinstance(row[4], dict)
-            else None,
+            "envelope_id": env_id,
+            "status": status_str,
+            "attempts": attempts,
+            "error_details": error_details,
+            "routed_intent": routed,
+            "is_processed": is_proc,
+            "intent_matched": intent_ok,
         }
 
-    def verify_profile_facts(self, sender_digits: str) -> dict[str, Any]:
-        """Asserts profile version and active facts."""
-        user_row = self.session.execute(
-            sa.text(
-                "SELECT user_id FROM channel_identity_links WHERE external_id LIKE :pattern LIMIT 1"
-            ),
-            {"pattern": f"%{sender_digits}%"},
-        ).fetchone()
-        if not user_row:
-            return {"user_resolved": False, "profile_version": 0, "active_facts": 0}
-        uid = str(user_row[0])
+    def verify_profile_facts(
+        self,
+        sender_digits: str,
+        min_facts: int = 1,
+        min_version: int = 1,
+    ) -> dict[str, Any]:
+        """Asserts profile version and active facts count."""
+        uid = self.resolve_user_id(sender_digits)
+        if not uid:
+            return {
+                "user_resolved": False,
+                "profile_exists": False,
+                "profile_version": 0,
+                "active_facts": 0,
+                "facts_ok": False,
+                "version_ok": False,
+            }
         cp_row = self.session.execute(
             sa.text("SELECT profile_version FROM career_profiles WHERE user_id = :uid LIMIT 1"),
             {"uid": uid},
         ).fetchone()
-        version = int(cp_row[0]) if cp_row else 0
+        version = int(cp_row[0]) if cp_row and cp_row[0] is not None else 0
         facts_cnt = (
             self.session.execute(
                 sa.text(
@@ -278,62 +329,147 @@ class CanaryDbVerifier:
             ).scalar()
             or 0
         )
-        return {"user_resolved": True, "profile_version": version, "active_facts": facts_cnt}
+        return {
+            "user_resolved": True,
+            "profile_exists": cp_row is not None,
+            "profile_version": version,
+            "active_facts": facts_cnt,
+            "facts_ok": facts_cnt >= min_facts,
+            "version_ok": version >= min_version,
+        }
 
-    def verify_application_state(self, sender_digits: str) -> dict[str, Any]:
-        """Asserts latest application status."""
-        user_row = self.session.execute(
+    def verify_target_job(self, sender_digits: str) -> dict[str, Any]:
+        """Asserts target job exists for canary user."""
+        uid = self.resolve_user_id(sender_digits)
+        if not uid:
+            return {"user_resolved": False, "job_found": False, "job_id": None}
+        job_row = self.session.execute(
             sa.text(
-                "SELECT user_id FROM channel_identity_links WHERE external_id LIKE :pattern LIMIT 1"
+                "SELECT id, title FROM jobs "
+                "WHERE created_by_user_id = :uid "
+                "   OR id IN (SELECT job_id FROM applications WHERE user_id = :uid) "
+                "ORDER BY created_at DESC LIMIT 1"
             ),
-            {"pattern": f"%{sender_digits}%"},
+            {"uid": uid},
         ).fetchone()
-        if not user_row:
-            return {"has_application": False, "status": None}
-        uid = str(user_row[0])
+        return {
+            "user_resolved": True,
+            "job_found": job_row is not None,
+            "job_id": str(job_row[0]) if job_row else None,
+            "job_title": str(job_row[1]) if job_row else None,
+        }
+
+    def verify_application_state(
+        self,
+        sender_digits: str,
+        expected_status: str | None = None,
+        require_kit: bool = False,
+    ) -> dict[str, Any]:
+        """Asserts application state and kit generation."""
+        uid = self.resolve_user_id(sender_digits)
+        if not uid:
+            return {
+                "user_resolved": False,
+                "has_application": False,
+                "status": None,
+                "status_matched": False,
+                "has_kit": False,
+            }
         app_row = self.session.execute(
             sa.text(
-                "SELECT id, status FROM applications "
+                "SELECT id, status, tailored_resume_id FROM applications "
                 "WHERE user_id = :uid ORDER BY updated_at DESC LIMIT 1"
             ),
             {"uid": uid},
         ).fetchone()
         if not app_row:
-            return {"has_application": False, "status": None}
-        return {"has_application": True, "status": str(app_row[1]), "app_id": str(app_row[0])}
+            return {
+                "user_resolved": True,
+                "has_application": False,
+                "status": None,
+                "status_matched": False,
+                "has_kit": False,
+            }
+        st = str(app_row[1]) if app_row[1] else None
+        has_kit = app_row[2] is not None
+        status_ok = True
+        if expected_status is not None:
+            status_ok = st == expected_status
+        kit_ok = has_kit if require_kit else True
+        return {
+            "user_resolved": True,
+            "has_application": True,
+            "app_id": str(app_row[0]),
+            "status": st,
+            "status_matched": status_ok and kit_ok,
+            "has_kit": has_kit,
+        }
 
-    def verify_reminders_count(self, sender_digits: str) -> int:
-        """Counts scheduled reminders."""
-        user_row = self.session.execute(
-            sa.text(
-                "SELECT user_id FROM channel_identity_links WHERE external_id LIKE :pattern LIMIT 1"
-            ),
-            {"pattern": f"%{sender_digits}%"},
-        ).fetchone()
-        if not user_row:
-            return 0
-        uid = str(user_row[0])
-        return (
+    def verify_reminders_count(
+        self,
+        sender_digits: str,
+        min_count: int = 1,
+    ) -> dict[str, Any]:
+        """Asserts scheduled reminders count."""
+        uid = self.resolve_user_id(sender_digits)
+        if not uid:
+            return {"user_resolved": False, "reminders_count": 0, "reminders_ok": False}
+        cnt = (
             self.session.execute(
                 sa.text("SELECT count(*) FROM reminders WHERE user_id = :uid"),
                 {"uid": uid},
             ).scalar()
             or 0
         )
+        return {
+            "user_resolved": True,
+            "reminders_count": cnt,
+            "reminders_ok": cnt >= min_count,
+        }
+
+    def poll_domain_assertion(
+        self,
+        assertion_fn: Callable[[], tuple[bool, str]],
+        timeout_sec: float = 8.0,
+        interval_sec: float = 0.5,
+    ) -> tuple[bool, str]:
+        """Polls a domain assertion until it passes or timeout expires."""
+        deadline = time.time() + timeout_sec
+        last_detail = "Timed out"
+        while time.time() < deadline:
+            passed, detail = assertion_fn()
+            if passed:
+                return True, detail
+            last_detail = detail
+            time.sleep(interval_sec)
+        return False, last_detail
 
     def assert_invariants(self, sender_digits: str) -> dict[str, int]:
         """Asserts DUPLICATE_SIDE_EFFECTS=0, RECURSIVE_WHATSAPP_LOOPS=0, THIRD_PARTY_SENDS=0."""
         user_count = (
             self.session.execute(
                 sa.text(
-                    "SELECT count(DISTINCT user_id) FROM channel_identity_links "
-                    "WHERE external_id LIKE :pattern"
+                    "SELECT count(DISTINCT cil.user_id) "
+                    "FROM channel_identity_links cil "
+                    "JOIN channel_identities ci ON cil.channel_identity_id = ci.id "
+                    "WHERE ci.external_id LIKE :pattern"
                 ),
                 {"pattern": f"%{sender_digits}%"},
             ).scalar()
             or 0
         )
         duplicate_users = max(0, user_count - 1)
+
+        # Measurable check for recursive loops: inbound envelopes from bot itself
+        bot_inbound_loops = (
+            self.session.execute(
+                sa.text(
+                    "SELECT count(*) FROM provider_event_envelopes "
+                    "WHERE normalized_event->>'sender_external_id' LIKE '%573137848445%'"
+                )
+            ).scalar()
+            or 0
+        )
 
         unauthorized_outbox = (
             self.session.execute(
@@ -348,7 +484,7 @@ class CanaryDbVerifier:
 
         return {
             "duplicate_side_effects": duplicate_users,
-            "recursive_whatsapp_loops": 0,
+            "recursive_whatsapp_loops": bot_inbound_loops,
             "third_party_sends": unauthorized_outbox,
         }
 
@@ -363,6 +499,13 @@ CANARY_DIALOGUE_TURNS: list[dict[str, Any]] = [
             t in text.lower() for t in ("assistente", "olá", "bem-vindo", "tapjob")
         ),
         "synthetic_dry_reply": "Olá! Bem-vindo ao TapJob. Sou seu assistente de carreira pessoal.",
+        "domain_assertion": lambda v, phone, min_id: (
+            lambda env: (
+                env["is_processed"] and env["routed_intent"] in ("GREETING_OR_RETURN", None),
+                f"Envelope={env.get('envelope_id')}, status={env.get('status')}, "
+                f"routed={env.get('routed_intent')}",
+            )
+        )(v.verify_envelope_processed(phone, min_envelope_id=min_id)),
     },
     {
         "turn": "2. TEXT EXPERIENCE INTAKE",
@@ -378,6 +521,17 @@ CANARY_DIALOGUE_TURNS: list[dict[str, Any]] = [
             "Recebemos suas experiências profissionais com sucesso!\n"
             "• Competências identificadas: Python, FastAPI, PostgreSQL, Docker, AWS"
         ),
+        "domain_assertion": lambda v, phone, min_id: (
+            lambda env: (
+                env["is_processed"] and env["intent_matched"],
+                f"Envelope={env.get('envelope_id')}, status={env.get('status')}, "
+                f"routed={env.get('routed_intent')}",
+            )
+        )(
+            v.verify_envelope_processed(
+                phone, expected_intent="TEXT_EXPERIENCE", min_envelope_id=min_id
+            )
+        ),
     },
     {
         "turn": "3. FACT CONFIRMATION",
@@ -389,6 +543,22 @@ CANARY_DIALOGUE_TURNS: list[dict[str, Any]] = [
         "synthetic_dry_reply": (
             "Informações confirmadas com sucesso!\n"
             "Seu perfil profissional foi atualizado (Versão 1)."
+        ),
+        "domain_assertion": lambda v, phone, min_id: (
+            lambda env, pf: (
+                env["is_processed"]
+                and env["intent_matched"]
+                and pf["profile_exists"]
+                and pf["facts_ok"]
+                and pf["version_ok"],
+                f"Envelope={env.get('envelope_id')}, routed={env.get('routed_intent')}, "
+                f"facts={pf.get('active_facts')}, version={pf.get('profile_version')}",
+            )
+        )(
+            v.verify_envelope_processed(
+                phone, expected_intent="FACT_CONFIRM_ALL", min_envelope_id=min_id
+            ),
+            v.verify_profile_facts(phone, min_facts=1, min_version=1),
         ),
     },
     {
@@ -406,6 +576,18 @@ CANARY_DIALOGUE_TURNS: list[dict[str, Any]] = [
             "Vaga analisada: Desenvolvedor Python Pleno (TechCorp).\n"
             "Match Score WP2.2: 88/100 (HIGH)."
         ),
+        "domain_assertion": lambda v, phone, min_id: (
+            lambda env, tj: (
+                env["is_processed"] and env["intent_matched"] and tj["job_found"],
+                f"Envelope={env.get('envelope_id')}, routed={env.get('routed_intent')}, "
+                f"job_found={tj.get('job_found')}, job_title={tj.get('job_title')}",
+            )
+        )(
+            v.verify_envelope_processed(
+                phone, expected_intent="JOB_URL_INTAKE", min_envelope_id=min_id
+            ),
+            v.verify_target_job(phone),
+        ),
     },
     {
         "turn": "5. CONVERSATIONAL APPLICATION REQUEST",
@@ -417,6 +599,18 @@ CANARY_DIALOGUE_TURNS: list[dict[str, Any]] = [
         "synthetic_dry_reply": (
             "Application Kit preparado com sucesso para Desenvolvedor Python Pleno!\n"
             "📄 Resumo Profissional: Desenvolvedor experiente em Python e FastAPI."
+        ),
+        "domain_assertion": lambda v, phone, min_id: (
+            lambda env, app: (
+                env["is_processed"] and env["intent_matched"] and app["has_application"],
+                f"Envelope={env.get('envelope_id')}, routed={env.get('routed_intent')}, "
+                f"has_app={app.get('has_application')}, has_kit={app.get('has_kit')}",
+            )
+        )(
+            v.verify_envelope_processed(
+                phone, expected_intent="APPLICATION_REQUEST", min_envelope_id=min_id
+            ),
+            v.verify_application_state(phone),
         ),
     },
     {
@@ -430,6 +624,18 @@ CANARY_DIALOGUE_TURNS: list[dict[str, Any]] = [
             "Parabéns! Atualizamos o status da sua candidatura para "
             "'APPLIED' (Candidatura Enviada)."
         ),
+        "domain_assertion": lambda v, phone, min_id: (
+            lambda env, app: (
+                env["is_processed"] and env["intent_matched"] and (app.get("status") == "applied"),
+                f"Envelope={env.get('envelope_id')}, routed={env.get('routed_intent')}, "
+                f"app_status={app.get('status')}",
+            )
+        )(
+            v.verify_envelope_processed(
+                phone, expected_intent="APPLICATION_STATUS_UPDATE", min_envelope_id=min_id
+            ),
+            v.verify_application_state(phone, expected_status="applied"),
+        ),
     },
     {
         "turn": "7. FOLLOW-UP REMINDER",
@@ -440,6 +646,18 @@ CANARY_DIALOGUE_TURNS: list[dict[str, Any]] = [
         ),
         "synthetic_dry_reply": (
             "Lembrete agendado com sucesso! Nós avisaremos você por aqui no WhatsApp."
+        ),
+        "domain_assertion": lambda v, phone, min_id: (
+            lambda env, rem: (
+                env["is_processed"] and env["intent_matched"] and rem["reminders_ok"],
+                f"Envelope={env.get('envelope_id')}, routed={env.get('routed_intent')}, "
+                f"reminders_count={rem.get('reminders_count')}",
+            )
+        )(
+            v.verify_envelope_processed(
+                phone, expected_intent="REMINDER_FOLLOWUP", min_envelope_id=min_id
+            ),
+            v.verify_reminders_count(phone, min_count=1),
         ),
     },
     {
@@ -453,6 +671,17 @@ CANARY_DIALOGUE_TURNS: list[dict[str, Any]] = [
             "Recebi seu link! Para te atender melhor: este link é de uma vaga "
             "de emprego ou do seu perfil?"
         ),
+        "domain_assertion": lambda v, phone, min_id: (
+            lambda env: (
+                env["is_processed"] and env["intent_matched"],
+                f"Envelope={env.get('envelope_id')}, status={env.get('status')}, "
+                f"routed={env.get('routed_intent')}",
+            )
+        )(
+            v.verify_envelope_processed(
+                phone, expected_intent="CLARIFICATION_NEEDED", min_envelope_id=min_id
+            )
+        ),
     },
     {
         "turn": "9. PRIVACY & LGPD INQUIRY",
@@ -465,6 +694,17 @@ CANARY_DIALOGUE_TURNS: list[dict[str, Any]] = [
             "Privacidade e Proteção de Dados — TapJob: "
             "Usamos seus dados exclusivamente para sua carreira."
         ),
+        "domain_assertion": lambda v, phone, min_id: (
+            lambda env: (
+                env["is_processed"] and env["intent_matched"],
+                f"Envelope={env.get('envelope_id')}, status={env.get('status')}, "
+                f"routed={env.get('routed_intent')}",
+            )
+        )(
+            v.verify_envelope_processed(
+                phone, expected_intent="PRIVACY_INQUIRY", min_envelope_id=min_id
+            )
+        ),
     },
     {
         "turn": "10. APPLICATION STATUS QUERY",
@@ -476,6 +716,17 @@ CANARY_DIALOGUE_TURNS: list[dict[str, Any]] = [
         "synthetic_dry_reply": (
             "Suas candidaturas registradas:\n• Desenvolvedor Python Pleno — Status: applied"
         ),
+        "domain_assertion": lambda v, phone, min_id: (
+            lambda env: (
+                env["is_processed"] and env["intent_matched"],
+                f"Envelope={env.get('envelope_id')}, status={env.get('status')}, "
+                f"routed={env.get('routed_intent')}",
+            )
+        )(
+            v.verify_envelope_processed(
+                phone, expected_intent="APPLICATION_STATUS_QUERY", min_envelope_id=min_id
+            )
+        ),
     },
 ]
 
@@ -486,18 +737,28 @@ def run_canary_suite(
     verifier: CanaryDbVerifier | None = None,
 ) -> dict[str, Any]:
     """Runs the controlled multi-turn canary validation suite with assertions."""
+    if not client.dry_run and verifier is None:
+        raise RuntimeError(
+            "Database verification is mandatory for non-dry-run canary execution. Fail closed."
+        )
+
     _emit("=" * 70)
     _emit(" TAPJOB CONTROLLED LIVE WHATSAPP CANARY VALIDATION SUITE")
     _emit(f" Sender Instance    : {CANARY_CLIENT_INSTANCE} ({mask_phone(CANARY_CLIENT_PHONE)})")
     _emit(f" Bot Instance       : {CANARY_BOT_INSTANCE} ({mask_phone(CANARY_BOT_PHONE)})")
     _emit(" Safety Gate        : LOCKED TO CANARY IDENTITIES (Third-party sends = 0)")
     _emit(f" Total Turns        : {len(CANARY_DIALOGUE_TURNS)}")
+    _emit(f" DB Verifier Mode   : {'CONNECTED' if verifier is not None else 'NONE (DRY RUN)'}")
     _emit("=" * 70)
 
     results: list[dict[str, Any]] = []
     total_start = time.time()
     assertions_evaluated = 0
     assertions_passed = 0
+    reply_assertions_passed = 0
+    reply_assertions_failed = 0
+    domain_assertions_passed = 0
+    domain_assertions_failed = 0
 
     for idx, turn in enumerate(CANARY_DIALOGUE_TURNS, start=1):
         _emit(f"\n[{idx}/{len(CANARY_DIALOGUE_TURNS)}] Executing Turn: {turn['turn']}")
@@ -506,6 +767,13 @@ def run_canary_suite(
 
         t0 = time.time()
         t0_ms = int(t0 * 1000)
+        min_env_id = None
+        if verifier is not None:
+            try:
+                min_env_id = verifier.get_max_envelope_id() + 1
+            except Exception:
+                min_env_id = None
+
         try:
             # 1. Dispatch outbound test message from canary client to TapJob
             send_res = client.send_text(
@@ -537,16 +805,59 @@ def run_canary_suite(
 
             assertions_evaluated += 2
             if reply_received:
+                reply_assertions_passed += 1
                 assertions_passed += 1
-            if reply_ok:
-                assertions_passed += 1
+            else:
+                reply_assertions_failed += 1
 
-            turn_status = "SUCCESS" if (reply_received and reply_ok) else "FAILED"
+            if reply_ok:
+                reply_assertions_passed += 1
+                assertions_passed += 1
+            else:
+                reply_assertions_failed += 1
+
             _emit(f"  Reply Received   : {'YES' if reply_received else 'NO'}")
             _emit(f"  Reply Assertion  : {'PASSED' if reply_ok else 'FAILED'}")
             if reply_text:
                 preview = reply_text.replace("\n", " ")[:70]
                 _emit(f'  Reply Preview    : "{preview}..."')
+
+            # 4. Domain effects assertion
+            domain_ok = False
+            domain_detail = ""
+            domain_assert_fn = turn.get("domain_assertion")
+            assertions_evaluated += 1
+
+            if verifier is not None and domain_assert_fn is not None:
+                if not client.dry_run:
+                    domain_ok, domain_detail = verifier.poll_domain_assertion(
+                        (
+                            lambda da=domain_assert_fn, me=min_env_id: da(
+                                verifier, CANARY_CLIENT_PHONE, me
+                            )
+                        ),
+                        timeout_sec=8.0,
+                    )
+                else:
+                    domain_ok, domain_detail = domain_assert_fn(
+                        verifier, CANARY_CLIENT_PHONE, min_env_id
+                    )
+            elif client.dry_run and verifier is None:
+                domain_ok = True
+                domain_detail = "Dry-run synthetic domain assertion"
+            else:
+                domain_ok = False
+                domain_detail = "Missing verifier for non-dry-run"
+
+            if domain_ok:
+                domain_assertions_passed += 1
+                assertions_passed += 1
+            else:
+                domain_assertions_failed += 1
+
+            _emit(f"  Domain Assertion : {'PASSED' if domain_ok else 'FAILED'} ({domain_detail})")
+
+            turn_status = "SUCCESS" if (reply_received and reply_ok and domain_ok) else "FAILED"
 
             results.append(
                 {
@@ -555,6 +866,8 @@ def run_canary_suite(
                     "provider_message_id": msg_id,
                     "reply_received": reply_received,
                     "reply_asserted": reply_ok,
+                    "domain_asserted": domain_ok,
+                    "domain_detail": domain_detail,
                     "reply_preview": reply_text[:100] if reply_text else None,
                     "elapsed_sec": round(elapsed, 3),
                     "expected_intent": turn["expected_intent"],
@@ -562,7 +875,9 @@ def run_canary_suite(
             )
         except Exception as exc:
             _emit(f"  Status           : FAILED ({exc})")
-            assertions_evaluated += 2
+            assertions_evaluated += 3
+            reply_assertions_failed += 2
+            domain_assertions_failed += 1
             results.append(
                 {
                     "turn": turn["turn"],
@@ -575,7 +890,7 @@ def run_canary_suite(
         if not client.dry_run and wait_seconds > 0:
             time.sleep(wait_seconds)
 
-    # 4. Database Invariants Assertion (if verifier provided)
+    # 5. Database Invariants Assertion
     duplicate_side_effects = 0
     recursive_loops = 0
     third_party_sends = 0
@@ -588,23 +903,53 @@ def run_canary_suite(
     total_elapsed = time.time() - total_start
     success_count = sum(1 for r in results if r["status"] == "SUCCESS")
 
+    all_intents_ok = all(
+        r.get("domain_asserted", False) for r in results if "domain_asserted" in r
+    ) and (len(results) == len(CANARY_DIALOGUE_TURNS))
+
+    reply_total = reply_assertions_passed + reply_assertions_failed
+    domain_total = domain_assertions_passed + domain_assertions_failed
     _emit("\n" + "=" * 70)
     _emit(" CANARY SUITE EXECUTION SUMMARY")
     _emit(f" Total Turns Tested : {len(CANARY_DIALOGUE_TURNS)}")
     _emit(f" Successful Turns   : {success_count}/{len(CANARY_DIALOGUE_TURNS)}")
-    _emit(f" Assertions Passed  : {assertions_passed}/{assertions_evaluated}")
+    _emit(f" Reply Assertions   : {reply_assertions_passed}/{reply_total}")
+    _emit(f" Domain Assertions  : {domain_assertions_passed}/{domain_total}")
+    _emit(f" Total Assertions   : {assertions_passed}/{assertions_evaluated}")
     _emit(f" Total Time         : {total_elapsed:.2f}s")
     _emit(f" Duplicate Effects  : {duplicate_side_effects}")
     _emit(f" Recursive Loops    : {recursive_loops}")
     _emit(f" Third-party Sends  : {third_party_sends} (GUARANTEED)")
     _emit("=" * 70)
 
+    t3_ok = bool(len(results) > 2 and results[2].get("domain_asserted"))
+    t4_ok = bool(len(results) > 3 and results[3].get("domain_asserted"))
+    t5_ok = bool(len(results) > 4 and results[4].get("domain_asserted"))
+    t6_ok = bool(len(results) > 5 and results[5].get("domain_asserted"))
+    t7_ok = bool(len(results) > 6 and results[6].get("domain_asserted"))
+
+    is_live_asserted = "YES" if (not client.dry_run and verifier is not None) else "NO"
+
     return {
+        "live_asserted_e2e_executed": is_live_asserted,
+        "dry_run": "YES" if client.dry_run else "NO",
+        "db_verifier_required": "YES",
+        "db_verifier_connected": "YES" if verifier is not None else "NO",
         "total_turns": len(CANARY_DIALOGUE_TURNS),
         "successful_turns": success_count,
         "failed_turns": len(CANARY_DIALOGUE_TURNS) - success_count,
+        "live_reply_assertions_passed": reply_assertions_passed,
+        "live_reply_assertions_failed": reply_assertions_failed,
+        "live_domain_assertions_passed": domain_assertions_passed,
+        "live_domain_assertions_failed": domain_assertions_failed,
         "assertions_evaluated": assertions_evaluated,
         "assertions_passed": assertions_passed,
+        "routed_intents_verified": "YES" if all_intents_ok else "NO",
+        "profile_state_verified": "YES" if t3_ok else "NO",
+        "job_state_verified": "YES" if t4_ok else "NO",
+        "application_kit_state_verified": "YES" if t5_ok else "NO",
+        "application_status_applied_verified": "YES" if t6_ok else "NO",
+        "reminder_persistence_verified": "YES" if t7_ok else "NO",
         "duplicate_side_effects": duplicate_side_effects,
         "recursive_whatsapp_loops": recursive_loops,
         "third_party_sends": third_party_sends,
@@ -650,10 +995,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def create_db_session(db_url: str | None = None) -> Session | None:
-    """Creates a database session if connection string is configured."""
+def create_db_session(db_url: str | None = None, fail_hard: bool = False) -> Session | None:
+    """Creates a database session. If fail_hard is True, raises on missing or invalid URL."""
     url = db_url or os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL")
     if not url:
+        if fail_hard:
+            raise RuntimeError(
+                "DATABASE_URL or --db-url is mandatory for non-dry-run canary execution."
+            )
         return None
     if url.startswith("postgres://"):
         url = url.replace("postgres://", "postgresql+psycopg://", 1)
@@ -665,6 +1014,8 @@ def create_db_session(db_url: str | None = None) -> Session | None:
         factory = sessionmaker(bind=engine)
         return factory()
     except Exception as exc:
+        if fail_hard:
+            raise RuntimeError(f"Could not connect to database at {url}: {exc}") from exc
         logger.warning("Could not connect to database for canary assertions: %s", exc)
         return None
 
@@ -676,8 +1027,22 @@ def main(argv: list[str] | None = None) -> int:
         api_token=args.api_token,
         dry_run=args.dry_run,
     )
-    session = create_db_session(args.db_url)
+
+    session = None
+    try:
+        session = create_db_session(args.db_url, fail_hard=not args.dry_run)
+    except Exception as exc:
+        if not args.dry_run:
+            _emit(f"FATAL: Database verifier failed to connect: {exc}")
+            _emit("Database verification is mandatory for non-dry-run canary execution.")
+            return 1
+        logger.warning("Dry run DB connection skipped: %s", exc)
+
     verifier = CanaryDbVerifier(session) if session is not None else None
+
+    if not args.dry_run and verifier is None:
+        _emit("FATAL: Database verifier is strictly required for non-dry-run canary execution.")
+        return 1
 
     try:
         summary = run_canary_suite(client, wait_seconds=args.wait, verifier=verifier)

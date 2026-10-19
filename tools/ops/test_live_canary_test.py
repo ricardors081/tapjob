@@ -99,6 +99,7 @@ class TestCanaryDbVerifier(unittest.TestCase):
         mock_session = MagicMock()
         mock_session.execute.return_value.scalar.side_effect = [
             1,  # user_count (1 user = 0 duplicates)
+            0,  # bot_inbound_loops (0 loops)
             0,  # unauthorized_outbox (0 unauthorized sends)
         ]
         verifier = CanaryDbVerifier(mock_session)
@@ -111,11 +112,13 @@ class TestCanaryDbVerifier(unittest.TestCase):
         mock_session = MagicMock()
         mock_session.execute.return_value.scalar.side_effect = [
             3,  # user_count (3 users = 2 duplicates)
+            2,  # bot_inbound_loops (2 loops detected)
             1,  # unauthorized_outbox (1 leak)
         ]
         verifier = CanaryDbVerifier(mock_session)
         inv = verifier.assert_invariants(CANARY_CLIENT_PHONE)
         self.assertEqual(inv["duplicate_side_effects"], 2)
+        self.assertEqual(inv["recursive_whatsapp_loops"], 2)
         self.assertEqual(inv["third_party_sends"], 1)
 
 
@@ -132,14 +135,26 @@ class TestLiveCanaryExecution(unittest.TestCase):
         self.assertEqual(summary["duplicate_side_effects"], 0)
         self.assertEqual(summary["recursive_whatsapp_loops"], 0)
         self.assertEqual(summary["third_party_sends"], 0)
-        self.assertEqual(summary["assertions_evaluated"], 20)
-        self.assertEqual(summary["assertions_passed"], 20)
+        self.assertEqual(summary["assertions_evaluated"], 30)
+        self.assertEqual(summary["assertions_passed"], 30)
+        self.assertEqual(summary["live_reply_assertions_passed"], 20)
+        self.assertEqual(summary["live_domain_assertions_passed"], 10)
+        self.assertEqual(summary["live_asserted_e2e_executed"], "NO")
+        self.assertEqual(summary["dry_run"], "YES")
+        self.assertEqual(summary["db_verifier_required"], "YES")
         self.assertEqual(len(summary["turns"]), 10)
         for r in summary["turns"]:
             self.assertEqual(r["status"], "SUCCESS")
             self.assertTrue(r["reply_received"])
             self.assertTrue(r["reply_asserted"])
+            self.assertTrue(r["domain_asserted"])
             self.assertTrue(r["provider_message_id"].startswith("dry_msg_"))
+
+    def test_non_dry_run_fails_closed_without_verifier(self) -> None:
+        client = EvolutionCanaryClient(dry_run=False, api_token="test_token")  # noqa: S106
+        with self.assertRaises(RuntimeError) as ctx:
+            run_canary_suite(client, wait_seconds=0.0, verifier=None)
+        self.assertIn("Database verification is mandatory", str(ctx.exception))
 
     def test_parse_args(self) -> None:
         args = parse_args(
