@@ -6,7 +6,7 @@ import json
 import os
 import re
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -21,6 +21,10 @@ from tools.agent_factory.team import ALL_ROLES
 
 MISSION_ID_REGEX = re.compile(r"^[a-zA-Z0-9_\-]+$")
 SHA_40_REGEX = re.compile(r"^[0-9a-fA-F]{40}$")
+
+
+class MissionCoordinatorError(Exception):
+    """Base error for MissionCoordinator failures."""
 
 
 class MissionRegistryError(Exception):
@@ -41,6 +45,10 @@ class MissionNotFoundError(MissionRegistryError):
 
 class MissionLockTimeoutError(MissionRegistryError):
     """Raised when acquiring the persistent mission lock times out."""
+
+
+class InvalidStateTransitionError(MissionRegistryError, MissionCoordinatorError):
+    """Raised when an atomic state transition is attempted from an unexpected or stale state."""
 
 
 class MissionState(StrEnum):
@@ -370,6 +378,14 @@ class MissionRegistryRecord:
                         f"repair_records[{idx}] findings must be list of strings."
                     )
                     raise CorruptMissionRegistryError(msg)
+                it_sha = r.get("iteration_head_sha")
+                if type(it_sha) is not str or not SHA_40_REGEX.match(it_sha):
+                    msg = (
+                        f"MissionRegistryRecord '{self.mission_id}' task '{tid}' "
+                        f"repair_records[{idx}] iteration_head_sha ('{it_sha}') "
+                        f"must be a 40-character SHA."
+                    )
+                    raise CorruptMissionRegistryError(msg)
 
             # Semantic binding with task_states
             t_state = self.task_states[tid]
@@ -383,16 +399,35 @@ class MissionRegistryRecord:
                         f"CHANGES_REQUESTED must have last repair_record verdict CHANGES_REQUIRED."
                     )
                     raise CorruptMissionRegistryError(msg)
-            elif t_state in (TaskMissionState.APPROVED, TaskMissionState.SCOPE_VERIFIED) and (
-                not repair_records
-                or repair_records[-1].get("verdict") != ReviewVerdict.APPROVE.value
-                or repair_records[-1].get("test_passed") is not True
-            ):
-                msg = (
-                    f"MissionRegistryRecord '{self.mission_id}' task '{tid}' in {t_state.value} "
-                    f"must have last repair_record verdict APPROVE and test_passed=True."
-                )
-                raise CorruptMissionRegistryError(msg)
+            elif t_state in (TaskMissionState.APPROVED, TaskMissionState.SCOPE_VERIFIED):
+                if (
+                    not repair_records
+                    or repair_records[-1].get("verdict") != ReviewVerdict.APPROVE.value
+                    or repair_records[-1].get("test_passed") is not True
+                ):
+                    msg = (
+                        f"MissionRegistryRecord '{self.mission_id}' task '{tid}' in "
+                        f"{t_state.value} must have last repair_record verdict APPROVE and "
+                        f"test_passed=True."
+                    )
+                    raise CorruptMissionRegistryError(msg)
+                reviewed_head = trec.get("reviewed_head_sha")
+                last_it_sha = repair_records[-1].get("iteration_head_sha")
+                if not reviewed_head or last_it_sha != reviewed_head:
+                    msg = (
+                        f"MissionRegistryRecord '{self.mission_id}' task '{tid}' in "
+                        f"{t_state.value} last repair_record iteration_head_sha "
+                        f"('{last_it_sha}') must equal reviewed_head_sha ('{reviewed_head}')."
+                    )
+                    raise CorruptMissionRegistryError(msg)
+                impl_head = trec.get("implemented_head_sha")
+                if not impl_head or reviewed_head != impl_head:
+                    msg = (
+                        f"MissionRegistryRecord '{self.mission_id}' task '{tid}' in "
+                        f"{t_state.value} reviewed_head_sha ('{reviewed_head}') must equal "
+                        f"implemented_head_sha ('{impl_head}')."
+                    )
+                    raise CorruptMissionRegistryError(msg)
 
             # Review fields validation if present (for top-level mirrors)
             if "reviewer_role" in trec:
@@ -626,6 +661,76 @@ class MissionRegistry:
             record = self.get_mission(mission_id)
             record.state = new_state
             record.updated_at = datetime.now(UTC).isoformat()
+            target_file = self._mission_file(mission_id)
+            tmp_file = self.missions_dir / f"{mission_id}.json.tmp.{os.getpid()}.{time.time_ns()}"
+            tmp_file.write_text(json.dumps(record.to_dict(), indent=2), encoding="utf-8")
+            tmp_file.replace(target_file)
+            return record
+
+    def transition_mission_state(
+        self,
+        mission_id: str,
+        expected_states: Sequence[MissionState] | set[MissionState],
+        new_state: MissionState,
+    ) -> MissionRegistryRecord:
+        """Atomically validate expected mission state and transition to new_state under lock.
+
+        Fails closed with InvalidStateTransitionError if current state is not in expected_states.
+        """
+        with self._lock():
+            record = self.get_mission(mission_id)
+            curr = record.state
+            expected_set = set(expected_states)
+            if curr not in expected_set:
+                msg = (
+                    f"Mission '{mission_id}' invalid state transition: "
+                    f"current state '{curr.value}' is not in expected states "
+                    f"{[s.value for s in expected_set]}. Cannot transition to '{new_state.value}'."
+                )
+                raise InvalidStateTransitionError(msg)
+            record.state = new_state
+            record.updated_at = datetime.now(UTC).isoformat()
+            record.validate()
+            target_file = self._mission_file(mission_id)
+            tmp_file = self.missions_dir / f"{mission_id}.json.tmp.{os.getpid()}.{time.time_ns()}"
+            tmp_file.write_text(json.dumps(record.to_dict(), indent=2), encoding="utf-8")
+            tmp_file.replace(target_file)
+            return record
+
+    def transition_task_state(
+        self,
+        mission_id: str,
+        task_id: str,
+        expected_states: Sequence[TaskMissionState] | set[TaskMissionState],
+        new_state: TaskMissionState,
+        details: dict[str, Any] | None = None,
+    ) -> MissionRegistryRecord:
+        """Atomically validate expected task state and transition to new_state under lock.
+
+        Fails closed with InvalidStateTransitionError if current state is not in expected_states.
+        """
+        with self._lock():
+            record = self.get_mission(mission_id)
+            if task_id not in record.task_states:
+                raise MissionRegistryError(
+                    f"Task '{task_id}' is not registered under mission '{mission_id}'."
+                )
+            curr = record.task_states[task_id]
+            expected_set = set(expected_states)
+            if curr not in expected_set:
+                msg = (
+                    f"Task '{task_id}' invalid state transition: current state '{curr.value}' "
+                    f"is not in expected states {[s.value for s in expected_set]}. "
+                    f"Cannot transition to '{new_state.value}'."
+                )
+                raise InvalidStateTransitionError(msg)
+            record.task_states[task_id] = new_state
+            if details:
+                if task_id not in record.task_records:
+                    record.task_records[task_id] = {}
+                record.task_records[task_id].update(details)
+            record.updated_at = datetime.now(UTC).isoformat()
+            record.validate()
             target_file = self._mission_file(mission_id)
             tmp_file = self.missions_dir / f"{mission_id}.json.tmp.{os.getpid()}.{time.time_ns()}"
             tmp_file.write_text(json.dumps(record.to_dict(), indent=2), encoding="utf-8")

@@ -126,11 +126,12 @@ stateDiagram-v2
 4. **Time-of-Check to Time-of-Use (TOCTOU) Protection**: Scope verification freezes the verified HEAD commit SHA. Any subsequent commit added to the worktree before consolidation invalidates readiness.
 5. **No Direct Main Commits**: All worktree branches are restricted to feature conventions (`chore/`, `feat/`, `fix/`, `docs/`, `test/`, `security/`, `ops/`). Direct checkouts of `main` or `master` fail closed.
 6. **Zero Product Alterations in Governance Scope**: AF-2 modifies zero Career Core or mobile code. It is purely agent infrastructure.
-7. **Lock Primitive & ABA-Safe Stale Recovery**: Both `WorktreeDispatcher` and `MissionRegistry` utilize `DirectoryLock` (`tools/agent_factory/lock.py`). Stale locks from dead PIDs are reclaimed atomically via a tombstone directory (`.tombstone_<pid>_<tok>_<uuid>`) to eliminate ABA race conditions between stale detection and re-acquisition.
-8. **Exact Reviewed HEAD Lifecycle Binding**: Every transition (`IMPLEMENTED` -> `REVIEWED` -> `SCOPE_VERIFIED` -> `READY_FOR_CONSOLIDATION`) verifies that the live worktree HEAD matches the recorded, reviewed SHA, with clean worktree status and correct target branch.
-9. **DAG Runtime & Dependency Enforcement**: Execution groups must proceed strictly in order; `dispatch_execution_group(i)` fails closed if any task in groups `0 .. i-1` or any declared dependency is not in `SCOPE_VERIFIED` state.
-10. **Strict Schema & Semantic Repair Binding**: Registry records strictly validate list types, repair records (0-indexed contiguous `iteration_index`, implementer/reviewer roles, test verdicts), and state machine semantic consistency (`CHANGES_REQUESTED` binds to `CHANGES_REQUIRED`, `APPROVED`/`SCOPE_VERIFIED` binds to `APPROVE`).
-11. **Zero Autonomous Emergency Purge**: Unverified worktrees cannot be forcibly purged by autonomous agents. `MissionCoordinator` contains no purge bypass; manual operator interventions require out-of-band scripts strictly guarded by `tools/agent_guard/pre_tool_guard.py` (Tier C Human Gate / FORCE_ASK).
+7. **OS-Backed Exclusive Locking & Fail-Closed Liveness**: Both `WorktreeDispatcher` and `MissionRegistry` utilize `DirectoryLock` (`tools/agent_factory/lock.py`). Mutual exclusion is enforced directly by the operating system kernel (`msvcrt.locking` on Windows, `fcntl.flock` on POSIX) tied to an open file handle, ensuring immediate lock release upon process termination or crash without autonomous stale directory stealing. Owner liveness inspection strictly fails closed: permission errors (POSIX `EPERM`, Windows `ERROR_ACCESS_DENIED`) and inspection errors classify processes as alive.
+8. **Exact Reviewed HEAD Lifecycle Binding & Immutable Repair History**: Every transition (`IMPLEMENTED` -> `REVIEWED` -> `SCOPE_VERIFIED` -> `READY_FOR_CONSOLIDATION`) verifies that the live worktree HEAD matches the recorded, reviewed SHA. Each review iteration in `repair_records` immutably preserves its own `iteration_head_sha` rather than rewriting historical iterations with subsequent repair commit SHAs.
+9. **Atomic State Transitions & Stale Writer Protection**: State transitions (`transition_task_state` and `transition_mission_state`) execute atomically under the registry mutex lock with compare-and-transition validation against `expected_states`. Stale concurrent writes fail closed with `InvalidStateTransitionError`.
+10. **DAG Runtime & Dependency Enforcement**: Execution groups must proceed strictly in order; `dispatch_execution_group(i)` fails closed if any task in groups `0 .. i-1` or any declared dependency is not in `SCOPE_VERIFIED` state.
+11. **Strict Schema & Semantic Repair Binding**: Registry records strictly validate list types, repair records (0-indexed contiguous `iteration_index`, exact 40-character `iteration_head_sha`, implementer/reviewer roles, test verdicts), and state machine semantic consistency (`CHANGES_REQUESTED` binds to `CHANGES_REQUIRED`, `APPROVED`/`SCOPE_VERIFIED` binds to `APPROVE`).
+12. **Zero Autonomous Emergency Purge**: Unverified worktrees cannot be forcibly purged by autonomous agents. `MissionCoordinator` contains no purge bypass; manual operator interventions require out-of-band scripts strictly guarded by `tools/agent_guard/pre_tool_guard.py` (Tier C Human Gate / FORCE_ASK).
 
 ---
 
@@ -236,15 +237,17 @@ The AF-2 test harness in `tools/agent_factory/test_mission.py` executes 47 compr
 | 42 | `test_42_duplicate_mission_does_not_poison_cache` | Rejected duplicate mission does not poison coordinator in-memory cache. |
 | 43 | `test_43_post_review_recommit_attack_detected` | Re-commit attack between review and scope verify or post-verify is detected. |
 | 44 | `test_44_dag_ordering_runtime_enforcement` | Dispatches next execution group only when preceding groups and dependencies are verified. |
-| 45 | `test_45_directory_lock_aba_safe_recovery` | Stale lock held by dead PID is atomically reclaimed via tombstone without ABA race. |
+| 45 | `test_45_os_backed_concurrent_lock` | OS-backed kernel lock mutual exclusion, fail-closed liveness, process crash recovery. |
 | 46 | `test_46_strict_registry_repair_state_schema` | Registry strictly validates list types, repair records, and state semantic binding. |
 | 47 | `test_47_no_emergency_purge_in_coordinator_and_guard_pattern` | Emergency purge method absent from coordinator and intercepted by PreToolGuard. |
+| 48 | `test_48_repair_history_heads_immutable` | Historical review iterations preserve exact commit SHA under review (HEAD A != HEAD B). |
+| 49 | `test_49_atomic_state_transitions_and_stale_writer_protection` | Concurrent reviewers and stale writers fail closed against atomic transitions. |
 
 ---
 
 ## 7. Recovery, Diagnostics & Escalation Procedures
 
-1. **Deadlock & ABA-Safe Recovery**: If a worker process dies holding `.mission_lock`, `DirectoryLock` atomically renames the lock to a tombstone directory (`.tombstone_<pid>_<tok>_<uuid>`) and verifies the PID from `owner.json`. If the process is dead, the stale lock is safely reclaimed without race conditions against newly spawned processes.
+1. **Kernel-Enforced Lock Release & Fail-Closed Recovery**: Mutual exclusion is backed by OS file locks (`msvcrt.locking` on Windows, `fcntl.flock` on POSIX). When a process dies or crashes, the OS kernel immediately and automatically frees the file handle, allowing subsequent processes to acquire the lock safely without autonomous directory stealing or rename tombstones. Owner liveness inspection strictly fails closed: permission or inspection errors treat processes as alive.
 2. **Budget Exhaustion Escalation**: When a task reaches 5 failed repair iterations, the coordinator marks it `BLOCKED` and halts execution group progression. The Engineering Manager presents the findings directly to the human engineer for intervention.
 3. **Dirty Worktree Protection**: If an agent process crashes leaving uncommitted files, cleanup refuses deletion (`DirtyWorktreeError`) to ensure candidate work is not destroyed.
 4. **Manual Recovery Strictly Human-Gated**: Autonomous agents are strictly prohibited from forcibly purging unverified worktrees. Any manual recovery scripts or emergency purges require human operator execution and are blocked by `tools/agent_guard/pre_tool_guard.py` under autonomous execution.

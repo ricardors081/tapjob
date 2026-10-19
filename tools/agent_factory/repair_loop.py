@@ -52,6 +52,7 @@ class RepairIterationRecord:
     test_passed: bool
     verdict: ReviewVerdict
     findings: list[str] = field(default_factory=list)
+    iteration_head_sha: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -113,6 +114,7 @@ class RepairLoopController:
         verdict: ReviewVerdict,
         reviewer_role: str | None = None,
         findings: list[str] | None = None,
+        iteration_head_sha: str = "",
     ) -> RepairPhase:
         """Record the outcome of the QA and internal review step."""
         actual_reviewer = reviewer_role or self.reviewer_role
@@ -129,6 +131,7 @@ class RepairLoopController:
             test_passed=test_passed,
             verdict=verdict,
             findings=findings or [],
+            iteration_head_sha=iteration_head_sha,
         )
         self.records.append(record)
 

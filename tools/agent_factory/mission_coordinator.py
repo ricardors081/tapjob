@@ -10,10 +10,14 @@ from pathlib import Path
 from tools.agent_factory.mission_contract import MissionContract
 from tools.agent_factory.mission_planner import ExecutionPlan, MissionPlanner
 from tools.agent_factory.mission_registry import (
+    InvalidStateTransitionError,
     MissionRegistry,
     MissionRegistryRecord,
     MissionState,
     TaskMissionState,
+)
+from tools.agent_factory.mission_registry import (
+    MissionCoordinatorError as MissionCoordinatorError,
 )
 from tools.agent_factory.repair_loop import (
     MAX_INTERNAL_REPAIR_LOOPS,
@@ -33,10 +37,6 @@ from tools.agent_factory.worktree_dispatcher import (
 )
 
 SHA_40_REGEX = re.compile(r"^[0-9a-fA-F]{40}$")
-
-
-class MissionCoordinatorError(Exception):
-    """Base error for MissionCoordinator failures."""
 
 
 class MissionDispatchError(MissionCoordinatorError):
@@ -190,7 +190,11 @@ class MissionCoordinator:
                 )
                 raise MissionDispatchError(msg)
 
-        self.registry.update_mission_state(mission_id, MissionState.DISPATCHING)
+        self.registry.transition_mission_state(
+            mission_id=mission_id,
+            expected_states={MissionState.PLANNED, MissionState.DISPATCHING, MissionState.RUNNING},
+            new_state=MissionState.DISPATCHING,
+        )
         dispatched_worktrees: dict[str, WorktreeInfo] = {}
 
         try:
@@ -198,10 +202,11 @@ class MissionCoordinator:
                 contract = tasks_by_id[tid]
                 w_info = self.dispatcher.dispatch_task(contract)
                 dispatched_worktrees[tid] = w_info
-                self.registry.update_task_state(
+                self.registry.transition_task_state(
                     mission_id=mission_id,
                     task_id=tid,
-                    task_state=TaskMissionState.DISPATCHED,
+                    expected_states={TaskMissionState.PENDING},
+                    new_state=TaskMissionState.DISPATCHED,
                     details={
                         "worktree_path": str(w_info.worktree_path),
                         "branch_name": w_info.branch_name,
@@ -211,12 +216,20 @@ class MissionCoordinator:
                 )
         except Exception as exc:
             # Partial dispatch failure: preserve successfully dispatched tasks, mark mission BLOCKED
-            self.registry.update_mission_state(mission_id, MissionState.BLOCKED)
+            self.registry.transition_mission_state(
+                mission_id=mission_id,
+                expected_states={MissionState.DISPATCHING, MissionState.RUNNING},
+                new_state=MissionState.BLOCKED,
+            )
             raise MissionDispatchError(
                 f"Partial dispatch failure in group {group_index} of mission '{mission_id}': {exc}"
             ) from exc
 
-        self.registry.update_mission_state(mission_id, MissionState.RUNNING)
+        self.registry.transition_mission_state(
+            mission_id=mission_id,
+            expected_states={MissionState.DISPATCHING},
+            new_state=MissionState.RUNNING,
+        )
         return dispatched_worktrees
 
     def get_next_eligible_group(self, mission_id: str) -> int | None:
@@ -281,7 +294,7 @@ class MissionCoordinator:
                 f"Cannot record implementation for task '{task_id}': "
                 f"current state is '{curr_state}'. Must be DISPATCHED or CHANGES_REQUESTED."
             )
-            raise MissionCoordinatorError(msg)
+            raise InvalidStateTransitionError(msg)
 
         clean_sha = head_sha.strip()
         if not SHA_40_REGEX.match(clean_sha):
@@ -315,10 +328,11 @@ class MissionCoordinator:
             )
             raise MissionCoordinatorError(msg)
 
-        self.registry.update_task_state(
+        self.registry.transition_task_state(
             mission_id=mission_id,
             task_id=task_id,
-            task_state=TaskMissionState.IMPLEMENTED,
+            expected_states={TaskMissionState.DISPATCHED, TaskMissionState.CHANGES_REQUESTED},
+            new_state=TaskMissionState.IMPLEMENTED,
             details={"implemented_head_sha": clean_sha, "head_sha": clean_sha},
         )
 
@@ -347,7 +361,7 @@ class MissionCoordinator:
 
         curr_state = record.task_states.get(task_id)
         if curr_state != TaskMissionState.IMPLEMENTED:
-            raise MissionCoordinatorError(
+            raise InvalidStateTransitionError(
                 f"Task '{task_id}' cannot be reviewed from state '{curr_state}'. "
                 "Must be in IMPLEMENTED state."
             )
@@ -432,6 +446,7 @@ class MissionCoordinator:
                 test_passed=r["test_passed"],
                 verdict=ReviewVerdict(r["verdict"]),
                 findings=r.get("findings", []),
+                iteration_head_sha=r.get("iteration_head_sha", ""),
             )
             controller.records.append(r_rec)
         controller.current_iteration = len(controller.records)
@@ -439,10 +454,11 @@ class MissionCoordinator:
         try:
             controller.start_iteration()
         except BudgetExhaustedError:
-            self.registry.update_task_state(
+            self.registry.transition_task_state(
                 mission_id=mission_id,
                 task_id=task_id,
-                task_state=TaskMissionState.BLOCKED,
+                expected_states={TaskMissionState.IMPLEMENTED},
+                new_state=TaskMissionState.BLOCKED,
                 details={
                     "reviewer_role": reviewer_role,
                     "review_verdict": verdict.value,
@@ -452,7 +468,11 @@ class MissionCoordinator:
                     "escalated_to_human": True,
                 },
             )
-            self.registry.update_mission_state(mission_id, MissionState.BLOCKED)
+            self.registry.transition_mission_state(
+                mission_id=mission_id,
+                expected_states={MissionState.RUNNING, MissionState.REPAIRING},
+                new_state=MissionState.BLOCKED,
+            )
             raise
 
         controller.record_review_result(
@@ -460,12 +480,13 @@ class MissionCoordinator:
             verdict=verdict,
             reviewer_role=reviewer_role,
             findings=findings,
+            iteration_head_sha=implemented_sha,
         )
 
         persisted_repairs = [
             {
                 "iteration_index": idx,
-                "iteration_head_sha": implemented_sha,
+                "iteration_head_sha": r.iteration_head_sha,
                 "implementer_role": r.implementer_role,
                 "reviewer_role": r.reviewer_role,
                 "test_passed": r.test_passed,
@@ -477,10 +498,11 @@ class MissionCoordinator:
 
         if test_passed and verdict == ReviewVerdict.APPROVE:
             new_state = TaskMissionState.APPROVED
-            self.registry.update_task_state(
+            self.registry.transition_task_state(
                 mission_id=mission_id,
                 task_id=task_id,
-                task_state=new_state,
+                expected_states={TaskMissionState.IMPLEMENTED},
+                new_state=new_state,
                 details={
                     "reviewer_role": reviewer_role,
                     "review_verdict": verdict.value,
@@ -494,10 +516,11 @@ class MissionCoordinator:
             return new_state
 
         new_state = TaskMissionState.CHANGES_REQUESTED
-        self.registry.update_task_state(
+        self.registry.transition_task_state(
             mission_id=mission_id,
             task_id=task_id,
-            task_state=new_state,
+            expected_states={TaskMissionState.IMPLEMENTED},
+            new_state=new_state,
             details={
                 "reviewer_role": reviewer_role,
                 "review_verdict": verdict.value,
@@ -507,7 +530,11 @@ class MissionCoordinator:
                 "repair_records": persisted_repairs,
             },
         )
-        self.registry.update_mission_state(mission_id, MissionState.REPAIRING)
+        self.registry.transition_mission_state(
+            mission_id=mission_id,
+            expected_states={MissionState.RUNNING, MissionState.REPAIRING},
+            new_state=MissionState.REPAIRING,
+        )
         return new_state
 
     def verify_task_scope(
@@ -532,7 +559,7 @@ class MissionCoordinator:
         record = self.registry.get_mission(mission_id)
         curr_state = record.task_states.get(task_id)
         if curr_state != TaskMissionState.APPROVED:
-            raise MissionCoordinatorError(
+            raise InvalidStateTransitionError(
                 f"Task '{task_id}' must be APPROVED before scope verification, got '{curr_state}'."
             )
 
@@ -568,20 +595,26 @@ class MissionCoordinator:
         try:
             self.dispatcher.verify_task_scope(task_id)
         except ScopeViolationError as exc:
-            self.registry.update_task_state(
+            self.registry.transition_task_state(
                 mission_id=mission_id,
                 task_id=task_id,
-                task_state=TaskMissionState.FAILED,
+                expected_states={TaskMissionState.APPROVED},
+                new_state=TaskMissionState.FAILED,
                 details={"scope_violations": [str(exc)]},
             )
-            self.registry.update_mission_state(mission_id, MissionState.BLOCKED)
+            self.registry.transition_mission_state(
+                mission_id=mission_id,
+                expected_states={MissionState.RUNNING, MissionState.REPAIRING},
+                new_state=MissionState.BLOCKED,
+            )
             raise
 
         now_iso = datetime.now(UTC).isoformat()
-        self.registry.update_task_state(
+        self.registry.transition_task_state(
             mission_id=mission_id,
             task_id=task_id,
-            task_state=TaskMissionState.SCOPE_VERIFIED,
+            expected_states={TaskMissionState.APPROVED},
+            new_state=TaskMissionState.SCOPE_VERIFIED,
             details={
                 "scope_verified_head_sha": exact_head,
                 "scope_verified_at": now_iso,
@@ -689,7 +722,15 @@ class MissionCoordinator:
                 blockers=blockers,
             )
 
-        self.registry.update_mission_state(mission_id, MissionState.READY_FOR_CONSOLIDATION)
+        self.registry.transition_mission_state(
+            mission_id=mission_id,
+            expected_states={
+                MissionState.RUNNING,
+                MissionState.REPAIRING,
+                MissionState.READY_FOR_CONSOLIDATION,
+            },
+            new_state=MissionState.READY_FOR_CONSOLIDATION,
+        )
         return ConsolidationStatus(
             ready=True,
             status="READY_FOR_CONSOLIDATION",

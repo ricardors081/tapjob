@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from tools.agent_factory.mission_contract import (
     InvalidMissionContractError,
@@ -512,6 +513,7 @@ class TestMissionExecution(unittest.TestCase):
                         "repair_records": [
                             {
                                 "iteration_index": 0,
+                                "iteration_head_sha": "0123456789abcdef0123456789abcdef01234567",
                                 "implementer_role": "core_platform_engineer",
                                 "reviewer_role": "reviewer_security_engineer",
                                 "test_passed": False,
@@ -520,6 +522,7 @@ class TestMissionExecution(unittest.TestCase):
                             },
                             {
                                 "iteration_index": 1,
+                                "iteration_head_sha": "0123456789abcdef0123456789abcdef01234567",
                                 "implementer_role": "core_platform_engineer",
                                 "reviewer_role": "reviewer_security_engineer",
                                 "test_passed": False,
@@ -1683,27 +1686,128 @@ class TestMissionExecution(unittest.TestCase):
             dispatched = coordinator.dispatch_execution_group("mission-dag", 1)
             self.assertIn("task_dag_2", dispatched)
 
-    # 45. DirectoryLock ABA-safe stale lock recovery (Finding 4)
-    def test_45_directory_lock_aba_safe_recovery(self) -> None:
+    # 45. Real OS-backed mutual exclusion, process death recovery, and fail-closed lock tests
+    def test_45_os_backed_concurrent_lock(self) -> None:
+        """Finding 1 (Round 3): Verify OS-backed kernel lock properties and concurrency."""
+        import subprocess
+        import sys
+        import time
+
+        from tools.agent_factory.lock import (
+            CorruptLockMetadataError,
+            DirectoryLock,
+            ForeignLockError,
+            LockTimeoutError,
+            _is_pid_alive,
+        )
+
         with tempfile.TemporaryDirectory() as tmpdir:
-            from tools.agent_factory.lock import DirectoryLock
-
             lock_path = Path(tmpdir) / ".test_lock"
-            lock1 = DirectoryLock(lock_path=lock_path, timeout_seconds=1.0)
+            lock1 = DirectoryLock(lock_path=lock_path, timeout_seconds=2.0)
 
-            # Manually simulate stale lock with dead PID
-            lock_path.mkdir(parents=True, exist_ok=True)
-            owner_file = lock_path / "owner.json"
-            owner_file.write_text(
-                json.dumps({"pid": 9999999, "token": "stale-tok", "created_at": 100}),
-                encoding="utf-8",
-            )
-
-            # lock1 must atomically steal via tombstone without ABA deletion race
+            # 1. Live lock cannot be stolen
             with lock1.acquire(timeout_seconds=2.0):
-                self.assertTrue(lock_path.exists())
+                self.assertTrue(lock1.is_locked)
+                lock2 = DirectoryLock(lock_path=lock_path, timeout_seconds=0.2)
+                with self.assertRaises(LockTimeoutError):
+                    lock2.acquire_lock()
+                # lock1 still owns the lock intact
+                self.assertTrue(lock1.is_locked)
 
-            self.assertFalse(lock_path.exists())
+            # 2. Inspection failure cannot classify owner as dead (fail closed)
+            # Specifically test _is_pid_alive fail-closed behavior
+            if sys.platform == "win32":
+                import ctypes
+
+                # Access Denied (5): fail closed -> alive (True)
+                with (
+                    mock.patch.object(ctypes.windll.kernel32, "OpenProcess", return_value=0),
+                    mock.patch.object(ctypes.windll.kernel32, "GetLastError", return_value=5),
+                ):
+                    self.assertTrue(_is_pid_alive(12345))
+
+                # Nonexistent process (87): positively dead -> (False)
+                with (
+                    mock.patch.object(ctypes.windll.kernel32, "OpenProcess", return_value=0),
+                    mock.patch.object(ctypes.windll.kernel32, "GetLastError", return_value=87),
+                ):
+                    self.assertFalse(_is_pid_alive(12345))
+
+                # Any unhandled inspection error fails closed as alive
+                with mock.patch.object(
+                    ctypes.windll.kernel32,
+                    "OpenProcess",
+                    side_effect=RuntimeError("ctypes boom"),
+                ):
+                    self.assertTrue(_is_pid_alive(12345))
+            else:
+                import errno
+
+                # EPERM means process exists but we lack permission -> ALIVE
+                eperm_err = OSError()
+                eperm_err.errno = errno.EPERM
+                with mock.patch("os.kill", side_effect=eperm_err):
+                    self.assertTrue(_is_pid_alive(12345))
+
+                # ESRCH means no such process -> DEAD
+                esrch_err = OSError()
+                esrch_err.errno = errno.ESRCH
+                with mock.patch("os.kill", side_effect=esrch_err):
+                    self.assertFalse(_is_pid_alive(12345))
+
+            # 4. Two processes contend for same lock; simultaneous ownership impossible
+            # 5. Process death releases lock safely
+            code = (
+                "import time, sys\n"
+                "from pathlib import Path\n"
+                "from tools.agent_factory.lock import DirectoryLock\n"
+                f"l = DirectoryLock(Path(r'{lock_path}'), timeout_seconds=5.0)\n"
+                "l.acquire_lock()\n"
+                "sys.stdout.write('ACQUIRED\\n')\n"
+                "sys.stdout.flush()\n"
+                "time.sleep(1.0)\n"
+                "# Abrupt exit simulating crash\n"
+                "import os; os._exit(0)\n"
+            )
+            proc = subprocess.Popen(  # noqa: S603
+                [sys.executable, "-c", code],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=str(Path.cwd()),
+            )
+            # Wait for child to acquire
+            line = proc.stdout.readline() if proc.stdout else ""
+            self.assertEqual(line.strip(), "ACQUIRED")
+
+            # While child holds the lock, second lock cannot acquire
+            lock_contender = DirectoryLock(lock_path=lock_path, timeout_seconds=0.2)
+            with self.assertRaises(LockTimeoutError):
+                lock_contender.acquire_lock()
+
+            # Wait for child to exit abruptly (crash)
+            proc.wait(timeout=5)
+
+            # 6. Process death automatically freed kernel lock: contender can now acquire
+            lock_after_crash = DirectoryLock(lock_path=lock_path, timeout_seconds=2.0)
+            with lock_after_crash.acquire(timeout_seconds=2.0):
+                self.assertTrue(lock_after_crash.is_locked)
+
+            # 7. Token/ownership mismatch on release fails closed
+            lock_tamper = DirectoryLock(lock_path=lock_path, timeout_seconds=1.0)
+            with lock_tamper.acquire(timeout_seconds=1.0):
+                # Tamper with owner.json to simulate foreign process
+                tampered_owner = {"pid": 99999, "token": "foreign-tok", "created_at": time.time()}
+                lock_tamper.owner_file.write_text(json.dumps(tampered_owner), encoding="utf-8")
+                with self.assertRaises(ForeignLockError):
+                    lock_tamper.release()
+
+            # 8. Malformed metadata fails closed if metadata remains relevant
+            lock_path.mkdir(parents=True, exist_ok=True)
+            (lock_path / "owner.json").write_text("{malformed json", encoding="utf-8")
+            lock_malformed = DirectoryLock(lock_path=lock_path, timeout_seconds=0.5)
+            with self.assertRaises(CorruptLockMetadataError):
+                lock_malformed.acquire_lock()
 
     # 46. Strict registry schema & repair state semantic binding (Finding 5)
     def test_46_strict_registry_repair_state_schema(self) -> None:
@@ -1850,6 +1954,220 @@ class TestMissionExecution(unittest.TestCase):
         for cmd in blocked_commands:
             matched = any(pattern.search(cmd) for pattern, _ in FORCE_ASK_PATTERNS)
             self.assertTrue(matched, f"Command '{cmd}' should have matched FORCE_ASK_PATTERNS")
+
+    # 48. Immutable repair iteration HEAD history (Finding 2)
+    def test_48_repair_history_heads_immutable(self) -> None:
+        """Finding 2 (Round 3): Verify repair history preserves immutable iteration_head_sha."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            repo_dir, base_sha = self._create_temp_git_repo(root)
+            worktrees_dir = root / "worktrees"
+
+            coordinator = MissionCoordinator(
+                dispatcher=WorktreeDispatcher(repo_root=repo_dir, worktrees_dir=worktrees_dir),
+                registry=MissionRegistry(worktrees_dir=worktrees_dir),
+            )
+
+            task = self._make_task("task_repair_history", base_sha)
+            mission = MissionContract(
+                mission_id="mission_repair_history",
+                canonical_base_sha=base_sha,
+                objective="Test immutable repair history",
+                human_gate_required=True,
+                tasks=[task],
+            )
+            coordinator.create_mission(mission)
+            coordinator.dispatch_execution_group("mission_repair_history", 0)
+
+            # Iteration 0: implementer creates HEAD A
+            active = coordinator.dispatcher.get_active_task("task_repair_history")
+            self.assertIsNotNone(active)
+            _, winfo = active  # type: ignore[misc]
+            wpath = winfo.worktree_path
+
+            # Allowed file change
+            test_file = wpath / "services" / "api" / "src" / "tapjob_api" / "app.py"
+            test_file.parent.mkdir(parents=True, exist_ok=True)
+            test_file.write_text("# version 1\n", encoding="utf-8")
+            self._run_git(["add", "."], wpath)
+            self._run_git(["commit", "-m", "commit 1"], wpath)
+            head_a = coordinator.dispatcher.get_worktree_head(wpath)
+
+            coordinator.record_task_implemented(
+                "mission_repair_history", "task_repair_history", head_a
+            )
+
+            # Review 0: CHANGES_REQUESTED
+            coordinator.record_task_review(
+                mission_id="mission_repair_history",
+                task_id="task_repair_history",
+                reviewer_role="reviewer_security_engineer",
+                verdict=ReviewVerdict.CHANGES_REQUIRED,
+                test_passed=False,
+                findings=["fix version 1"],
+            )
+
+            # Iteration 1: implementer repairs and creates HEAD B
+            test_file.write_text("# version 2 - repaired\n", encoding="utf-8")
+            self._run_git(["add", "."], wpath)
+            self._run_git(["commit", "-m", "commit 2"], wpath)
+            head_b = coordinator.dispatcher.get_worktree_head(wpath)
+            self.assertNotEqual(head_a, head_b)
+
+            coordinator.record_task_implemented(
+                "mission_repair_history", "task_repair_history", head_b
+            )
+
+            # Review 1: APPROVE
+            coordinator.record_task_review(
+                mission_id="mission_repair_history",
+                task_id="task_repair_history",
+                reviewer_role="reviewer_security_engineer",
+                verdict=ReviewVerdict.APPROVE,
+                test_passed=True,
+                findings=[],
+            )
+
+            # Reload record freshly from disk
+            disk_rec = coordinator.registry.get_mission("mission_repair_history")
+            task_rec = disk_rec.task_records["task_repair_history"]
+            repair_records = task_rec["repair_records"]
+            self.assertEqual(len(repair_records), 2)
+
+            # Assert immutable exact HEAD per iteration
+            self.assertEqual(repair_records[0]["iteration_head_sha"], head_a)
+            self.assertEqual(repair_records[1]["iteration_head_sha"], head_b)
+            self.assertEqual(task_rec["reviewed_head_sha"], head_b)
+            self.assertEqual(task_rec["implemented_head_sha"], head_b)
+
+            # Scope verification and consolidation must use head_b
+            coordinator.verify_task_scope("mission_repair_history", "task_repair_history", head_b)
+            status = coordinator.check_consolidation_readiness("mission_repair_history")
+            self.assertTrue(status.ready)
+            self.assertEqual(status.status, "READY_FOR_CONSOLIDATION")
+
+    # 49. Atomic state transitions and stale writer protection (Finding 3)
+    def test_49_atomic_state_transitions_and_stale_writer_protection(self) -> None:
+        """Finding 3 (Round 3): Concurrent reviewers and stale writers fail closed."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            repo_dir, base_sha = self._create_temp_git_repo(root)
+            worktrees_dir = root / "worktrees"
+
+            # Create coordinator A and coordinator B pointing to the SAME shared worktrees/registry
+            coord_a = MissionCoordinator(
+                dispatcher=WorktreeDispatcher(repo_root=repo_dir, worktrees_dir=worktrees_dir),
+                registry=MissionRegistry(worktrees_dir=worktrees_dir),
+            )
+            coord_b = MissionCoordinator(
+                dispatcher=WorktreeDispatcher(repo_root=repo_dir, worktrees_dir=worktrees_dir),
+                registry=MissionRegistry(worktrees_dir=worktrees_dir),
+            )
+
+            task = self._make_task("t_atomic", base_sha)
+            mission = MissionContract(
+                mission_id="m_atomic",
+                canonical_base_sha=base_sha,
+                objective="Test atomic transitions",
+                human_gate_required=True,
+                tasks=[task],
+            )
+            coord_a.create_mission(mission)
+            coord_a.dispatch_execution_group("m_atomic", 0)
+
+            active = coord_a.dispatcher.get_active_task("t_atomic")
+            self.assertIsNotNone(active)
+            _, winfo = active  # type: ignore[misc]
+            wpath = winfo.worktree_path
+
+            test_file = wpath / "services" / "api" / "src" / "tapjob_api" / "app.py"
+            test_file.parent.mkdir(parents=True, exist_ok=True)
+            test_file.write_text("# atomic content\n", encoding="utf-8")
+            self._run_git(["add", "."], wpath)
+            self._run_git(["commit", "-m", "impl commit"], wpath)
+            head = coord_a.dispatcher.get_worktree_head(wpath)
+
+            coord_a.record_task_implemented("m_atomic", "t_atomic", head)
+
+            # Both instances observe IMPLEMENTED
+            rec_a = coord_a.registry.get_mission("m_atomic")
+            self.assertEqual(rec_a.task_states["t_atomic"], TaskMissionState.IMPLEMENTED)
+
+            # Reviewer A submits CHANGES_REQUIRED
+            coord_a.record_task_review(
+                mission_id="m_atomic",
+                task_id="t_atomic",
+                reviewer_role="reviewer_security_engineer",
+                verdict=ReviewVerdict.CHANGES_REQUIRED,
+                test_passed=False,
+                findings=["changes needed"],
+            )
+
+            # State is now CHANGES_REQUESTED
+            rec_now = coord_a.registry.get_mission("m_atomic")
+            self.assertEqual(rec_now.task_states["t_atomic"], TaskMissionState.CHANGES_REQUESTED)
+
+            # Reviewer B now tries to submit APPROVE with stale state (believing it is IMPLEMENTED)
+            from tools.agent_factory.mission_registry import InvalidStateTransitionError
+
+            with self.assertRaises(InvalidStateTransitionError):
+                coord_b.record_task_review(
+                    mission_id="m_atomic",
+                    task_id="t_atomic",
+                    reviewer_role="reviewer_security_engineer",
+                    verdict=ReviewVerdict.APPROVE,
+                    test_passed=True,
+                    findings=[],
+                )
+
+            # Verify stale second transition did NOT corrupt state
+            rec_check = coord_a.registry.get_mission("m_atomic")
+            self.assertEqual(rec_check.task_states["t_atomic"], TaskMissionState.CHANGES_REQUESTED)
+
+            # Stale IMPLEMENTED write cannot overwrite APPROVED
+            # Let's transition properly to IMPLEMENTED and then APPROVED
+            test_file.write_text("# atomic content v2\n", encoding="utf-8")
+            self._run_git(["add", "."], wpath)
+            self._run_git(["commit", "-m", "fix commit"], wpath)
+            head2 = coord_a.dispatcher.get_worktree_head(wpath)
+            coord_a.record_task_implemented("m_atomic", "t_atomic", head2)
+            coord_a.record_task_review(
+                mission_id="m_atomic",
+                task_id="t_atomic",
+                reviewer_role="reviewer_security_engineer",
+                verdict=ReviewVerdict.APPROVE,
+                test_passed=True,
+                findings=[],
+            )
+
+            # Now task is APPROVED.
+            # Attempting record_task_implemented raises InvalidStateTransitionError
+            with self.assertRaises(InvalidStateTransitionError):
+                coord_b.record_task_implemented("m_atomic", "t_atomic", head2)
+
+            # Stale scope verify cannot overwrite FAILED/BLOCKED
+            coord_a.registry.transition_task_state(
+                mission_id="m_atomic",
+                task_id="t_atomic",
+                expected_states={TaskMissionState.APPROVED},
+                new_state=TaskMissionState.FAILED,
+                details={"scope_violations": ["manual fail"]},
+            )
+            with self.assertRaises(InvalidStateTransitionError):
+                coord_b.verify_task_scope("m_atomic", "t_atomic", head2)
+
+            # BLOCKED mission cannot be returned to RUNNING by stale writer
+            coord_a.registry.transition_mission_state(
+                mission_id="m_atomic",
+                expected_states={MissionState.RUNNING, MissionState.REPAIRING},
+                new_state=MissionState.BLOCKED,
+            )
+            with self.assertRaises(InvalidStateTransitionError):
+                coord_b.registry.transition_mission_state(
+                    mission_id="m_atomic",
+                    expected_states={MissionState.RUNNING, MissionState.REPAIRING},
+                    new_state=MissionState.RUNNING,
+                )
 
 
 if __name__ == "__main__":
