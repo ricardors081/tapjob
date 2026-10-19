@@ -53,6 +53,14 @@ from tapjob_api.messaging.inbound_service import (
     is_transient_inbound_error,
     reserve_inbound_effect,
 )
+from tapjob_api.messaging.natural_language import (
+    ConversationalIntent,
+    classify_conversational_intent,
+    extract_single_action_details,
+    extract_skills_from_text,
+    normalize_text,
+)
+from tapjob_api.messaging.outbox import OutboundMessageQueue
 from tapjob_api.messaging.service import (
     get_user_profile_status,
     link_or_create_identity,
@@ -1056,10 +1064,41 @@ def dispatch_inbound_message(
             queued_keys.append(msg.idempotency_key)
             return queued_keys
 
+    # 2.5 Classify Conversational Intent using natural language engine
+    intent = classify_conversational_intent(text)
+
+    # Contextual continuity resolution for affirmative replies (e.g. "sim", "bora", "quero")
+    if intent == ConversationalIntent.AFFIRMATIVE_CONTEXTUAL and link_id is not None:
+        latest_outbox = session.execute(
+            select(OutboundMessageQueue)
+            .where(OutboundMessageQueue.channel_identity_link_id == str(link_id))
+            .order_by(OutboundMessageQueue.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        latest_text = ""
+        if latest_outbox and isinstance(latest_outbox.message_content, dict):
+            latest_text = str(latest_outbox.message_content.get("text", "")).lower()
+
+        if (
+            "quero me candidatar" in latest_text
+            or "application kit" in latest_text
+            or "oportunidade?" in latest_text
+        ):
+            intent = ConversationalIntent.APPLICATION_REQUEST
+        elif "confirmar" in latest_text and (
+            "fato" in latest_text or "competencia" in latest_text or "informacoes" in latest_text
+        ):
+            intent = ConversationalIntent.FACT_CONFIRM_ALL
+
     # 3. Privacy, LGPD & Data-Rights command handler (Finding 1, Finding 4, Finding 6)
-    if is_privacy_intent(text):
+    if intent in (
+        ConversationalIntent.PRIVACY_INQUIRY,
+        ConversationalIntent.DELETION_REQUEST,
+    ) or is_privacy_intent(text):
         deletion_words = ("excluir", "apagar", "remover", "deletar", "exclusao", "exclusão")
-        if any(w in lower_text for w in deletion_words):
+        if intent == ConversationalIntent.DELETION_REQUEST or any(
+            w in lower_text for w in deletion_words
+        ):
             response_text = (
                 "Solicitação de Exclusão de Dados (LGPD):\n\n"
                 "Respeitamos integralmente seus direitos de privacidade e exclusão de dados.\n\n"
@@ -1114,10 +1153,13 @@ def dispatch_inbound_message(
         )
     )
 
+    action_type, extracted_idx, extracted_val = extract_single_action_details(normalize_text(text))
+
     is_confirm_all = (
         not has_privacy_or_deletion_terms
         and (
-            any(
+            intent == ConversationalIntent.FACT_CONFIRM_ALL
+            or any(
                 k in lower_text
                 for k in (
                     "confirmar fatos",
@@ -1133,19 +1175,25 @@ def dispatch_inbound_message(
         )
     )
 
-    is_reject_all = not has_privacy_or_deletion_terms and any(
-        k in lower_text
-        for k in ("rejeitar todos", "ignorar todos", "descartar todos", "rejeitar fatos")
+    is_reject_all = not has_privacy_or_deletion_terms and (
+        intent == ConversationalIntent.FACT_REJECT_ALL
+        or any(
+            k in lower_text
+            for k in ("rejeitar todos", "ignorar todos", "descartar todos", "rejeitar fatos")
+        )
     )
 
-    is_single_reject = not has_privacy_or_deletion_terms and any(
-        k in lower_text for k in ("rejeitar fato", "ignorar fato", "descartar fato")
+    is_single_reject = not has_privacy_or_deletion_terms and (
+        (intent == ConversationalIntent.FACT_SINGLE_ACTION and action_type == "reject")
+        or any(k in lower_text for k in ("rejeitar fato", "ignorar fato", "descartar fato"))
     )
-    is_single_accept = not has_privacy_or_deletion_terms and any(
-        k in lower_text for k in ("aceitar fato",)
+    is_single_accept = not has_privacy_or_deletion_terms and (
+        (intent == ConversationalIntent.FACT_SINGLE_ACTION and action_type == "accept")
+        or any(k in lower_text for k in ("aceitar fato",))
     )
-    is_single_edit = not has_privacy_or_deletion_terms and any(
-        k in lower_text for k in ("editar fato", "corrigir fato")
+    is_single_edit = not has_privacy_or_deletion_terms and (
+        (intent == ConversationalIntent.FACT_SINGLE_ACTION and action_type == "edit")
+        or any(k in lower_text for k in ("editar fato", "corrigir fato"))
     )
 
     if is_confirm_all or is_reject_all or is_single_reject or is_single_accept or is_single_edit:
@@ -1344,7 +1392,11 @@ def dispatch_inbound_message(
 
             elif is_single_reject or is_single_accept:
                 match_num = re.search(r"(?:fato\s+|fatos\s+)?(\d+)", lower_text)
-                target_idx = int(match_num.group(1)) if match_num else None
+                target_idx = (
+                    extracted_idx
+                    if extracted_idx is not None
+                    else (int(match_num.group(1)) if match_num else None)
+                )
                 if target_idx is not None and 1 <= target_idx <= len(ordered_candidates):
                     target_cand = ordered_candidates[target_idx - 1]
                     dec_val = (
@@ -1394,11 +1446,27 @@ def dispatch_inbound_message(
                     )
 
             elif is_single_edit:
-                # Syntax: editar fato <N>: <novo_valor>
-                match_edit = re.search(r"(?:fato\s+)?(\d+)\s*[:=]\s*(.+)$", text, re.IGNORECASE)
+                # Syntax: editar fato <N>: <novo_valor> or muda o 1 para <novo_valor>
+                target_idx = extracted_idx
+                new_val_str = extracted_val
+                # Extract value directly from raw text to preserve exact case and accents
+                match_edit = re.search(
+                    r"(?:edit\w*|corrig\w*|mud\w*|troc\w*)\s+(?:o\s+|a\s+|do\s+|da\s+)?(?:fato\s+|item\s+)?#?(\d+)\s*(?:[:=]|para)\s*(.+)$",
+                    text,
+                    re.IGNORECASE,
+                )
                 if match_edit:
                     target_idx = int(match_edit.group(1))
                     new_val_str = match_edit.group(2).strip()
+                elif target_idx is None or new_val_str is None:
+                    match_fallback = re.search(
+                        r"(?:fato\s+)?(\d+)\s*[:=]\s*(.+)$", text, re.IGNORECASE
+                    )
+                    if match_fallback:
+                        target_idx = int(match_fallback.group(1))
+                        new_val_str = match_fallback.group(2).strip()
+
+                if target_idx is not None and new_val_str is not None:
                     if 1 <= target_idx <= len(ordered_candidates):
                         target_cand = ordered_candidates[target_idx - 1]
                         if target_cand.candidate_kind == "skill":
@@ -1543,7 +1611,7 @@ def dispatch_inbound_message(
         return queued_keys
 
     # 4. Job URL intake
-    if "http://" in text or "https://" in text:
+    if intent == ConversationalIntent.JOB_URL_INTAKE or "http://" in text or "https://" in text:
         words = text.split()
         job_url = next((w for w in words if w.startswith(("http://", "https://"))), None)
         if job_url:
@@ -1585,16 +1653,19 @@ def dispatch_inbound_message(
             return queued_keys
 
     # 5. Pasted Job Description intake
-    if is_pasted_job_text(text) and not any(
-        cmd in lower_text
-        for cmd in (
-            "analisa",
-            "candidatar",
-            "lembra",
-            "status",
-            "confirmar",
-            "privac",
-            "excluir",
+    if intent == ConversationalIntent.JOB_TEXT_INTAKE or (
+        is_pasted_job_text(text)
+        and not any(
+            cmd in lower_text
+            for cmd in (
+                "analisa",
+                "candidatar",
+                "lembra",
+                "status",
+                "confirmar",
+                "privac",
+                "excluir",
+            )
         )
     ):
         clean_text = text.split(":", 1)[1].strip() if ":" in text[:15] else text
@@ -1628,8 +1699,32 @@ def dispatch_inbound_message(
         queued_keys.append(msg.idempotency_key)
         return queued_keys
 
-    # 6. Match analysis & explanation request ("analisa essa vaga") (Finding 2)
-    if any(q in lower_text for q in ("analisa", "analisar", "vale a pena", "explicar")):
+    # 5.5 Candidate text experience intake (J-03)
+    if intent == ConversationalIntent.TEXT_EXPERIENCE:
+        skills = extract_skills_from_text(text)
+        skills_str = ", ".join(skills) if skills else "Gerais"
+        clean_headline = text.splitlines()[0][:60]
+        response_text = (
+            f"Recebemos suas experiências profissionais com sucesso!\n"
+            f"• Perfil / Resumo: {clean_headline}\n"
+            f"• Competências identificadas: {skills_str}\n\n"
+            "Deseja confirmar e adicionar essas informações ao seu perfil profissional?\n"
+            "Envie: 'pode confirmar' ou 'confirmar todos'."
+        )
+        msg = queue_response_message(
+            session,
+            channel_identity_link_id=link_id,
+            recipient_external_id=external_id,
+            message_text=response_text,
+            idempotency_key=f"exp_text_{inbound.provider_message_id}",
+        )
+        queued_keys.append(msg.idempotency_key)
+        return queued_keys
+
+    # 6. Match analysis & explanation request (Finding 2, J-08, J-09)
+    if intent == ConversationalIntent.MATCH_EXPLANATION or any(
+        q in lower_text for q in ("analisa", "analisar", "vale a pena", "explicar")
+    ):
         latest_job = resolve_user_target_job(session, user=user)
 
         if latest_job:
@@ -1681,8 +1776,8 @@ def dispatch_inbound_message(
         queued_keys.append(msg.idempotency_key)
         return queued_keys
 
-    # 7. Application Kit & Tailoring preparation ("quero me candidatar") (Findings 2, 3)
-    if any(
+    # 7. Application Kit & Tailoring preparation (Findings 2, 3, J-10, J-11)
+    if intent == ConversationalIntent.APPLICATION_REQUEST or any(
         q in lower_text
         for q in ("quero me candidatar", "candidatar", "gerar kit", "preparar candidatura")
     ):
@@ -1768,8 +1863,8 @@ def dispatch_inbound_message(
         queued_keys.append(msg.idempotency_key)
         return queued_keys
 
-    # 8. Application Status update ("já me candidatei", "candidatura enviada") (Finding 3)
-    if any(
+    # 8. Application Status update (Finding 3, J-12)
+    if intent == ConversationalIntent.APPLICATION_STATUS_UPDATE or any(
         q in lower_text
         for q in ("já me candidatei", "me candidatei", "candidatura enviada", "marcar aplicada")
     ):
@@ -1808,8 +1903,43 @@ def dispatch_inbound_message(
         queued_keys.append(msg.idempotency_key)
         return queued_keys
 
-    # 9. Reminder scheduling ("me lembra", "lembrete", "follow-up") (Finding 4)
-    if any(q in lower_text for q in ("me lembra", "lembrete", "follow-up", "acompanhar")):
+    # 8.5 Application Status query (J-13)
+    if intent == ConversationalIntent.APPLICATION_STATUS_QUERY:
+        app_rows = session.execute(
+            select(Application, Job)
+            .join(Job, Application.job_id == Job.id)
+            .where(Application.user_id == user.id)
+            .order_by(Application.created_at.desc())
+            .limit(5)
+        ).all()
+        if app_rows:
+            lines = ["Suas candidaturas registradas:"]
+            for app, job in app_rows:
+                job_title = job.title if job else "Vaga"
+                status_str = app.status.value if hasattr(app.status, "value") else str(app.status)
+                lines.append(f"• {job_title} — Status: {status_str}")
+            lines.append("\nPara marcar uma candidatura como enviada, envie: 'já me candidatei'.")
+            response_text = "\n".join(lines)
+        else:
+            response_text = (
+                "Você ainda não possui nenhuma candidatura registrada. "
+                "Envie o link de uma vaga para prepararmos seu Application Kit!"
+            )
+
+        msg = queue_response_message(
+            session,
+            channel_identity_link_id=link_id,
+            recipient_external_id=external_id,
+            message_text=response_text,
+            idempotency_key=f"status_query_{inbound.provider_message_id}",
+        )
+        queued_keys.append(msg.idempotency_key)
+        return queued_keys
+
+    # 9. Reminder scheduling (Finding 4, J-14)
+    if intent == ConversationalIntent.REMINDER_FOLLOWUP or any(
+        q in lower_text for q in ("me lembra", "lembrete", "follow-up", "acompanhar")
+    ):
         latest_app = session.execute(
             select(Application)
             .where(Application.user_id == user.id)
@@ -1858,7 +1988,10 @@ def dispatch_inbound_message(
         return queued_keys
 
     # 10. Recommendations list
-    if any(cmd in lower_text for cmd in ("vaga", "vagas", "oportunidade", "recomendar")):
+    if intent == ConversationalIntent.JOB_RECOMMENDATIONS or (
+        any(cmd in lower_text for cmd in ("vagas recomendadas", "recomendar vagas", "outras vagas"))
+        or lower_text.strip() in ("vaga", "vagas", "oportunidade", "oportunidades")
+    ):
         recs = tool_recommend_jobs(session, redis_client, user=user, limit=3)
         if recs:
             lines = ["Oportunidades recomendadas para o seu perfil:"]
@@ -1882,7 +2015,61 @@ def dispatch_inbound_message(
         queued_keys.append(msg.idempotency_key)
         return queued_keys
 
-    # 11. Profile readiness & Default Fallback
+    # 10.5 Help menu (J-17)
+    if intent == ConversationalIntent.HELP_MENU:
+        config = get_product_config()
+        response_text = (
+            f"Como posso te ajudar no {config.product_name}:\n\n"
+            "📄 Currículo: envie seu currículo em PDF ou escreva suas experiências aqui no chat.\n"
+            "🔍 Vagas & Match: envie o link ou cole o texto de uma vaga para analisarmos o match.\n"
+            "✨ Candidatura: diga 'quero me candidatar' para gerar seu Application Kit adaptado.\n"
+            "📌 Acompanhamento: diga 'já me candidatei' após submeter para atualizar o status.\n"
+            "⏰ Lembretes: diga 'me lembra de acompanhar' para agendar um lembrete de follow-up.\n"
+            "🔒 Privacidade: envie 'privacidade' para consultar como cuidamos dos seus dados."
+        )
+        msg = queue_response_message(
+            session,
+            channel_identity_link_id=link_id,
+            recipient_external_id=external_id,
+            message_text=response_text,
+            idempotency_key=f"help_{inbound.provider_message_id}",
+        )
+        queued_keys.append(msg.idempotency_key)
+        return queued_keys
+
+    # 10.6 Greeting or Return (J-01, J-18)
+    if intent == ConversationalIntent.GREETING_OR_RETURN:
+        config = get_product_config()
+        status = get_user_profile_status(session, user_id=user.id)
+        if status["has_facts"]:
+            v_num = status["profile_version"]
+            f_cnt = status["fact_count"]
+            response_text = (
+                f"Olá! Bom ter você de volta ao {config.product_name}. "
+                f"Seu perfil está ativo (Versão {v_num}, {f_cnt} competências confirmadas).\n\n"
+                "Como posso te ajudar agora?\n"
+                "• Envie o link de uma vaga para analisarmos o match;\n"
+                "• Envie 'vagas' para ver oportunidades recomendadas;\n"
+                "• Ou envie 'ajuda' para ver todas as opções."
+            )
+        else:
+            response_text = (
+                f"Olá! Sou seu assistente de carreira no {config.product_name}.\n\n"
+                "Para começar a analisar oportunidades e preparar candidaturas, "
+                "envie seu currículo em PDF ou compartilhe um resumo das suas "
+                "experiências profissionais aqui!"
+            )
+        msg = queue_response_message(
+            session,
+            channel_identity_link_id=link_id,
+            recipient_external_id=external_id,
+            message_text=response_text,
+            idempotency_key=f"greet_{inbound.provider_message_id}",
+        )
+        queued_keys.append(msg.idempotency_key)
+        return queued_keys
+
+    # 11. Profile readiness & Default Fallback (J-20)
     status = get_user_profile_status(session, user_id=user.id)
     if not status["has_facts"]:
         missing = tool_get_profile_missing_information(session, user=user)
