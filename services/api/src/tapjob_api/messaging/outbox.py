@@ -53,9 +53,7 @@ class OutboundMessageQueue(Base):
         ),
     )
 
-    id: Mapped[int] = mapped_column(
-        sa.BigInteger().with_variant(sa.Integer, "sqlite"), primary_key=True, autoincrement=True
-    )
+    id: Mapped[int] = mapped_column(sa.BigInteger, primary_key=True, autoincrement=True)
     channel_identity_link_id: Mapped[str | None] = mapped_column(
         sa.String(64), nullable=True, index=True
     )

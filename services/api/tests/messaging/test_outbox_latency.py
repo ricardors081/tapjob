@@ -28,6 +28,7 @@ from tapjob_api.ports.messaging_channel import MessagingChannel, SendReceipt
 
 def _create_in_memory_session_factory() -> sessionmaker[Session]:
     engine = sa.create_engine("sqlite:///:memory:")
+    OutboundMessageQueue.__table__.c.id.type = sa.BigInteger().with_variant(sa.Integer, "sqlite")
     OutboundMessageQueue.__table__.create(engine)
     return sessionmaker(bind=engine)
 
