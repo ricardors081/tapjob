@@ -369,6 +369,85 @@ def assemble_candidate_review_decisions(
     return decisions
 
 
+def format_tailored_application_kit_messages(
+    job_title: str,
+    kit_info: dict[str, Any],
+    status_desc: str,
+    cta_text: str,
+    max_single_message_chars: int = 1500,
+) -> list[str]:
+    """Formats tailored application kit into sequential Portuguese-BR text messages.
+
+    Includes tailored professional summary, key experience bullets, and matched skills.
+    If the combined text exceeds max_single_message_chars, breaks deterministically
+    into two sequential messages while preserving logical section boundaries.
+    """
+    draft = kit_info.get("tailored_draft") or {}
+    sections = draft.get("sections") or {}
+
+    summary = (
+        sections.get("summary", "").strip()
+        or "Perfil profissional adaptado com base no seu histórico confirmado."
+    )
+    skills = sections.get("skills", "").strip()
+    exp_highlights = sections.get("experience_highlights", "").strip()
+
+    # Format experiences as clean bullet points
+    exp_bullets: list[str] = []
+    if exp_highlights and exp_highlights != "Nenhuma experiência registrada":
+        for part in exp_highlights.split(";"):
+            cleaned = part.strip()
+            if cleaned:
+                exp_bullets.append(f"• {cleaned}")
+    exp_block = (
+        "\n".join(exp_bullets)
+        if exp_bullets
+        else "• Experiências alinhadas com os requisitos da oportunidade."
+    )
+
+    # Format skills as clean bullet points
+    skills_bullets: list[str] = []
+    if skills and skills != "Nenhuma competência registrada":
+        for skill in skills.split(","):
+            cleaned = skill.strip()
+            if cleaned:
+                skills_bullets.append(f"• {cleaned}")
+    skills_block = (
+        "\n".join(skills_bullets)
+        if skills_bullets
+        else "• Competências verificadas no perfil profissional."
+    )
+
+    single_message = (
+        f"Application Kit preparado com sucesso para {job_title}!\n"
+        f"• ID do Kit: {kit_info['kit_id']}\n"
+        f"• Currículo adaptado com grounding 100% verificado no seu perfil.\n"
+        f"• {status_desc}.\n\n"
+        f"📄 Resumo Profissional:\n{summary}\n\n"
+        f"💼 Experiências em Destaque:\n{exp_block}\n\n"
+        f"🎯 Competências-Chave:\n{skills_block}\n\n"
+        f"{cta_text}"
+    )
+
+    if len(single_message) <= max_single_message_chars:
+        return [single_message]
+
+    # Deterministic split into two sequential messages
+    part1 = (
+        f"Application Kit preparado com sucesso para {job_title}!\n"
+        f"• ID do Kit: {kit_info['kit_id']}\n"
+        f"• Currículo adaptado com grounding 100% verificado no seu perfil.\n"
+        f"• {status_desc}.\n\n"
+        f"📄 Resumo Profissional:\n{summary}"
+    )
+    part2 = (
+        f"💼 Experiências em Destaque ({job_title}):\n{exp_block}\n\n"
+        f"🎯 Competências-Chave:\n{skills_block}\n\n"
+        f"{cta_text}"
+    )
+    return [part1, part2]
+
+
 def dispatch_inbound_message(
     session: Session,
     redis_client: redis.Redis | None,
@@ -423,15 +502,29 @@ def dispatch_inbound_message(
         )
         has_job_url = "http://" in text or "https://" in text
         has_pasted_job = is_pasted_job_text(text) and not any(
-            cmd in lower_text for cmd in ("analisa", "candidatar", "lembra", "status", "confirmar")
+            cmd in lower_text
+            for cmd in (
+                "analisa",
+                "candidatar",
+                "lembra",
+                "status",
+                "confirmar",
+                "privac",
+                "excluir",
+            )
         )
 
         if not (has_document or has_job_url or has_pasted_job):
             greeting_text = (
                 f"Olá! Bem-vindo ao {config.product_name}. "
-                "Sou seu assistente de carreira pessoal.\n"
+                "Sou seu assistente de carreira pessoal.\n\n"
                 "Para começar, envie seu currículo em PDF ou compartilhe "
-                "suas principais experiências e competências."
+                "suas principais experiências e competências.\n\n"
+                "🔒 Privacidade & Seus Dados (LGPD):\n"
+                f"O {config.product_name} processa suas informações exclusivamente para encontrar "
+                "e adaptar oportunidades profissionais para o seu perfil. "
+                "Para saber como tratamos seus dados ou solicitar exclusão a qualquer momento, "
+                "envie o comando 'privacidade'."
             )
             msg = queue_response_message(
                 session,
@@ -445,7 +538,9 @@ def dispatch_inbound_message(
 
         # First contact has content: send greeting first and continue same inbound (Finding 9)
         greeting_text = (
-            f"Olá! Bem-vindo ao {config.product_name}. Sou seu assistente de carreira pessoal."
+            f"Olá! Bem-vindo ao {config.product_name}. Sou seu assistente de carreira pessoal. "
+            "(Tratamos seus dados de forma segura sob a LGPD. "
+            "Envie 'privacidade' a qualquer momento para detalhes)."
         )
         msg = queue_response_message(
             session,
@@ -1235,9 +1330,63 @@ def dispatch_inbound_message(
             queued_keys.append(msg.idempotency_key)
             return queued_keys
 
+    # 4.5. Privacy & LGPD command handler ("privacidade", "lgpd", "excluir meus dados")
+    if any(
+        q in lower_text
+        for q in (
+            "privacidade",
+            "lgpd",
+            "meus dados",
+            "excluir dados",
+            "politica de privacidade",
+            "politica",
+        )
+    ):
+        if any(w in lower_text for w in ("excluir", "apagar", "remover", "deletar")):
+            response_text = (
+                "Exclusão de Dados Pessoais (LGPD):\n\n"
+                "Respeitamos integralmente seu direito à eliminação dos dados (LGPD, Art. 18).\n"
+                "Para solicitar a exclusão definitiva do seu cadastro, currículos e histórico, "
+                "envie uma mensagem confirmando: 'confirmar exclusao' ou fale com o suporte.\n\n"
+                "Após a confirmação, seus dados serão permanentemente desvinculados e excluídos."
+            )
+        else:
+            response_text = (
+                "Privacidade e Proteção de Dados (LGPD) — TapJob:\n\n"
+                "• Finalidade: O TapJob coleta e trata seus dados profissionais exclusivamente "
+                "para buscar vagas, calcular afinidade (match) e gerar kits de candidatura.\n"
+                "• Bases Legais: O tratamento fundamenta-se na Execução de Contrato a seu pedido "
+                "(Art. 7º, V da LGPD) e no Legítimo Interesse para desenvolvimento profissional "
+                "(Art. 7º, IX da LGPD), sem exigir consentimento prévio para a conversa inicial.\n"
+                "• Retenção: Suas informações permanecem protegidas e são mantidas apenas enquanto "
+                "sua conta estiver ativa ou até você solicitar a exclusão.\n"
+                "• Seus Direitos: Você pode consultar seus dados, pedir correções "
+                "ou solicitar a exclusão total enviando 'excluir meus dados'.\n\n"
+                "Para continuar, envie seu currículo, envie um link de vaga ou digite 'vagas'."
+            )
+
+        msg = queue_response_message(
+            session,
+            channel_identity_link_id=link_id,
+            recipient_external_id=external_id,
+            message_text=response_text,
+            idempotency_key=f"privacy_{inbound.provider_message_id}",
+        )
+        queued_keys.append(msg.idempotency_key)
+        return queued_keys
+
     # 5. Pasted Job Description intake
     if is_pasted_job_text(text) and not any(
-        cmd in lower_text for cmd in ("analisa", "candidatar", "lembra", "status", "confirmar")
+        cmd in lower_text
+        for cmd in (
+            "analisa",
+            "candidatar",
+            "lembra",
+            "status",
+            "confirmar",
+            "privac",
+            "excluir",
+        )
     ):
         clean_text = text.split(":", 1)[1].strip() if ":" in text[:15] else text
         first_line = clean_text.splitlines()[0][:60]
@@ -1332,10 +1481,13 @@ def dispatch_inbound_message(
 
         if target_job:
             try:
-                tool_tailor_resume(session, user=user, job_id=target_job.id)
+                tailored_info = tool_tailor_resume(session, user=user, job_id=target_job.id)
                 kit_info = tool_build_application_kit(
                     session, redis_client, user=user, job_id=target_job.id
                 )
+                if "tailored_draft" not in kit_info and isinstance(tailored_info, dict):
+                    kit_info["tailored_draft"] = tailored_info
+
                 app_status_display = kit_info.get("status", ApplicationStatus.PREPARING.value)
                 if app_status_display == ApplicationStatus.APPLIED.value:
                     status_desc = "Candidatura já enviada (Status: applied)"
@@ -1365,13 +1517,23 @@ def dispatch_inbound_message(
                         "'já me candidatei'."
                     )
 
-                response_text = (
-                    f"Application Kit preparado com sucesso para {target_job.title}!\n"
-                    f"• ID do Kit: {kit_info['kit_id']}\n"
-                    f"• Currículo adaptado com grounding 100% verificado no seu perfil.\n"
-                    f"• {status_desc}.\n\n"
-                    f"{cta_text}"
+                kit_messages = format_tailored_application_kit_messages(
+                    job_title=target_job.title,
+                    kit_info=kit_info,
+                    status_desc=status_desc,
+                    cta_text=cta_text,
                 )
+                for idx, text_chunk in enumerate(kit_messages):
+                    suffix = f"_part{idx + 1}" if len(kit_messages) > 1 else ""
+                    msg = queue_response_message(
+                        session,
+                        channel_identity_link_id=link_id,
+                        recipient_external_id=external_id,
+                        message_text=text_chunk,
+                        idempotency_key=f"kit_{inbound.provider_message_id}{suffix}",
+                    )
+                    queued_keys.append(msg.idempotency_key)
+                return queued_keys
             except SoftTimeLimitExceeded:
                 raise
             except Exception as exc:
@@ -1530,7 +1692,8 @@ def dispatch_inbound_message(
             "- Envie um link ou texto de vaga para analisar match\n"
             "- 'Quero me candidatar': gerar Application Kit\n"
             "- 'Já me candidatei': atualizar status da candidatura\n"
-            "- 'Me lembra de acompanhar': agendar lembrete"
+            "- 'Me lembra de acompanhar': agendar lembrete\n"
+            "- 'Privacidade': consultar política de dados LGPD"
         )
 
     msg = queue_response_message(

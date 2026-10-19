@@ -52,6 +52,24 @@ Required product capabilities:
 - deletion;
 - data retention policy.
 
+### 3.1. Bases Legais e Privacidade no Canal WhatsApp (LGPD)
+
+Para as interações conversacionais e onboarding de pessoas candidatas no WhatsApp:
+
+1. **Bases Legais Primárias (LGPD Art. 7º)**:
+   - **Art. 7º, V (Execução de Contrato e Procedimentos Preliminares)**: O tratamento de dados do currículo, experiências profissionais, competências e vagas-alvo ocorre a pedido expresso do titular (candidato) para execução dos serviços de assistência de carreira (análise de match, adaptação de currículo e geração de Application Kit).
+   - **Art. 7º, IX (Legítimo Interesse)**: Apoio e promoção do desenvolvimento profissional e descoberta de oportunidades para o candidato, respeitando suas legítimas expectativas e direitos fundamentais.
+
+2. **Inexistência de Consentimento Obrigatório para Contato Inicial**:
+   - A interação conversacional inicial (ex.: candidato iniciando conversa ou enviando currículo pelo WhatsApp) não exige opt-in formal prévio, pois enquadra-se como procedimento preliminar a pedido do titular (Art. 7º, V).
+   - O TapJob fornece **transparência ativa imediata** na primeira mensagem de saudação, informando a finalidade estrita de carreira e disponibilizando acesso direto às regras de privacidade.
+
+3. **Mecanismos de Transparência, Consulta e Exclusão**:
+   - O candidato pode a qualquer momento consultar detalhes do tratamento enviando o comando `privacidade`.
+   - O candidato pode solicitar a exclusão definitiva do seu cadastro e dados enviando `excluir meus dados`.
+   - O consentimento expresso (Art. 7º, I) permanece reservado para tratamento de dados sensíveis (Art. 11) ou para eventuais submissões externas automatizadas em portais terceiros que exijam representação formal.
+
+
 ## 4. Gmail special handling
 
 `gmail.readonly` is a Google Restricted Scope.
