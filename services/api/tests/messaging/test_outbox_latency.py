@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import sqlalchemy as sa
+from sqlalchemy import Table
 from sqlalchemy.orm import Session, sessionmaker
 
 from tapjob_api.messaging.outbox import OutboundMessageQueue, OutboundMessageStatus
@@ -28,8 +30,9 @@ from tapjob_api.ports.messaging_channel import MessagingChannel, SendReceipt
 
 def _create_in_memory_session_factory() -> sessionmaker[Session]:
     engine = sa.create_engine("sqlite:///:memory:")
-    OutboundMessageQueue.__table__.c.id.type = sa.BigInteger().with_variant(sa.Integer, "sqlite")
-    OutboundMessageQueue.__table__.create(engine)
+    table = cast(Table, OutboundMessageQueue.__table__)
+    table.c.id.type = sa.BigInteger().with_variant(sa.Integer, "sqlite")
+    table.create(engine)
     return sessionmaker(bind=engine)
 
 
