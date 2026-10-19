@@ -60,10 +60,11 @@ class MissionContract:
         if (
             not isinstance(self.human_gate_required, bool)
             or type(self.human_gate_required) is not bool
+            or self.human_gate_required is not True
         ):
             err = (
-                f"MissionContract '{self.mission_id}' 'human_gate_required' "
-                "must be a strict boolean."
+                f"MissionContract '{self.mission_id}' human_gate_required must be strictly True. "
+                "AF-2 consolidation/merge governance cannot be disabled by contract input."
             )
             raise InvalidMissionContractError(err)
 
@@ -160,10 +161,14 @@ class MissionContract:
 
         # Strict bool check for human_gate_required if present
         human_gate = data.get("human_gate_required", True)
-        if not isinstance(human_gate, bool) or type(human_gate) is not bool:
+        if (
+            not isinstance(human_gate, bool)
+            or type(human_gate) is not bool
+            or human_gate is not True
+        ):
             raise InvalidMissionContractError(
-                f"MissionContract field 'human_gate_required' must be a strict boolean, "
-                f"got {type(human_gate).__name__}"
+                "MissionContract 'human_gate_required' must be strictly True; "
+                "AF-2 consolidation/merge governance cannot be disabled by contract input."
             )
 
         tasks_raw = data["tasks"]

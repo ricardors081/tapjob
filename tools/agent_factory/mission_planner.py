@@ -7,6 +7,7 @@ from typing import Any
 
 from tools.agent_factory.mission_contract import MissionContract
 from tools.agent_factory.task_contract import TaskContract
+from tools.agent_factory.team import load_profile
 
 
 class PlannerError(Exception):
@@ -19,6 +20,14 @@ class DependencyCycleError(PlannerError):
 
 class MissingDependencyError(PlannerError):
     """Raised when a task depends on a task_id that is not in the mission."""
+
+
+class RolePermissionError(PlannerError):
+    """Raised when a role lacks required permissions."""
+
+
+class RoleOwnershipViolationError(PlannerError):
+    """Raised when a role attempts to modify paths outside its authorized ownership."""
 
 
 @dataclass
@@ -59,6 +68,10 @@ class MissionPlanner:
         Fails closed on missing dependencies, dependency cycles, or invalid contracts.
         """
         mission.validate()
+
+        # Validate role permissions and path ownership for each task before planning
+        for task in mission.tasks:
+            cls._validate_role_ownership(task)
 
         tasks_by_id: dict[str, TaskContract] = {t.task_id: t for t in mission.tasks}
         all_task_ids = set(tasks_by_id.keys())
@@ -196,3 +209,36 @@ class MissionPlanner:
             groups=groups,
             task_count=len(mission.tasks),
         )
+
+    @classmethod
+    def _validate_role_ownership(cls, contract: TaskContract) -> None:
+        """Validate that the contract conforms to owner_role's permissions and ownership paths."""
+        try:
+            profile = load_profile(contract.owner_role)
+        except Exception as exc:
+            raise RolePermissionError(
+                f"Failed to load agent profile for owner_role '{contract.owner_role}': {exc}"
+            ) from exc
+
+        if not profile.enable_write_tools and contract.allowed_paths:
+            raise RolePermissionError(
+                f"Role '{contract.owner_role}' is read-only (enable_write_tools=False) "
+                "and cannot receive write tasks with allowed_paths."
+            )
+
+        for path in contract.allowed_paths:
+            norm_allowed = TaskContract._normalize_path(path).strip("/")
+            covered = False
+            for op in profile.ownership_paths:
+                norm_op = TaskContract._normalize_path(op).strip("/")
+                if norm_op in ("", "."):
+                    covered = True
+                    break
+                if norm_allowed == norm_op or norm_allowed.startswith(norm_op + "/"):
+                    covered = True
+                    break
+            if not covered:
+                raise RoleOwnershipViolationError(
+                    f"Role '{contract.owner_role}' is not authorized to modify path '{path}'. "
+                    f"Authorized ownership paths: {profile.ownership_paths}"
+                )

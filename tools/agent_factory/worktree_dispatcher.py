@@ -320,32 +320,58 @@ class WorktreeDispatcher:
             except FileExistsError:
                 # Lock directory exists. Check if owner process is dead.
                 if owner_file.exists():
-                    with contextlib.suppress(Exception):
-                        owner_data = json.loads(owner_file.read_text(encoding="utf-8"))
-                        owner_pid = owner_data.get("pid")
-                        if isinstance(owner_pid, int) and not _is_pid_alive(owner_pid):
-                            # Deterministically recover stale lock from dead process
-                            owner_file.unlink(missing_ok=True)
-                            with contextlib.suppress(Exception):
-                                self.lock_path.rmdir()
-                            continue
+                    try:
+                        owner_raw = owner_file.read_text(encoding="utf-8")
+                        owner_data = json.loads(owner_raw)
+                    except Exception as exc:
+                        raise CorruptRegistryError(
+                            f"Corrupt lock owner metadata at '{owner_file}': {exc}"
+                        ) from exc
+
+                    if type(owner_data) is not dict:
+                        raise CorruptRegistryError(
+                            f"Lock owner metadata at '{owner_file}' must be a JSON object."
+                        ) from None
+
+                    owner_pid = owner_data.get("pid")
+                    if type(owner_pid) is not int or owner_pid <= 0:
+                        raise CorruptRegistryError(
+                            f"Malformed PID in lock owner metadata: {owner_pid!r}"
+                        ) from None
+
+                    if not _is_pid_alive(owner_pid):
+                        # Deterministically recover stale lock from dead process
+                        owner_file.unlink(missing_ok=True)
+                        with contextlib.suppress(OSError):
+                            self.lock_path.rmdir()
+                        continue
                 time.sleep(0.05)
 
         if not acquired:
-            raise LockTimeoutError(
+            msg = (
                 f"Timed out acquiring registry lock at '{self.lock_path}' after {timeout_seconds}s."
             )
+            raise LockTimeoutError(msg)
 
         try:
             yield
         finally:
-            if acquired:
-                with contextlib.suppress(Exception):
-                    if owner_file.exists():
-                        cur_data = json.loads(owner_file.read_text(encoding="utf-8"))
-                        if cur_data.get("token") == token:
-                            owner_file.unlink(missing_ok=True)
-                            self.lock_path.rmdir()
+            if acquired and owner_file.exists():
+                try:
+                    cur_raw = owner_file.read_text(encoding="utf-8")
+                    cur_data = json.loads(cur_raw)
+                except Exception as exc:
+                    raise WorktreeDispatchError(
+                        f"Failed to read lock owner file on release: {exc}"
+                    ) from exc
+                if type(cur_data) is dict and cur_data.get("token") == token:
+                    owner_file.unlink(missing_ok=True)
+                    try:
+                        self.lock_path.rmdir()
+                    except OSError as exc:
+                        raise WorktreeDispatchError(
+                            f"Failed to remove lock dir '{self.lock_path}': {exc}"
+                        ) from exc
 
     def _read_registry_file(self) -> dict[str, Any]:
         """Read and validate the persistent registry file. Fails closed on corruption."""
@@ -940,6 +966,132 @@ class WorktreeDispatcher:
             is_clean=self.is_worktree_clean(wpath),
         )
         return (contract, winfo)
+
+    def validate_task_consolidation_evidence(
+        self,
+        contract: TaskContract,
+        expected_head_sha: str,
+    ) -> list[str]:
+        """Validate canonical AF-1 evidence for consolidation readiness."""
+        blockers: list[str] = []
+        tid = contract.task_id
+
+        if not expected_head_sha or not bool(re.match(r"^[0-9a-fA-F]{40}$", expected_head_sha)):
+            blockers.append(
+                f"Task '{tid}' lacks valid scope_verified_head_sha: {expected_head_sha!r}"
+            )
+            return blockers
+
+        with self._registry_lock():
+            reg_data = self._read_registry_file()
+
+        if tid not in reg_data:
+            blockers.append(f"Task '{tid}' has no persistent entry in WorktreeDispatcher registry.")
+            return blockers
+
+        entry = reg_data[tid]
+
+        # 1. Dispatcher entry status must be scope_verified
+        if entry.get("status") != "scope_verified":
+            msg = (
+                f"Task '{tid}' dispatcher registry status is '{entry.get('status')}', "
+                "expected 'scope_verified'."
+            )
+            blockers.append(msg)
+
+        # 2. scope_verified boolean must be strict True
+        if entry.get("scope_verified") is not True:
+            blockers.append(f"Task '{tid}' dispatcher registry scope_verified is not True.")
+
+        # 3. scope_verified_head_sha must match expected
+        disp_head = entry.get("scope_verified_head_sha")
+        if disp_head != expected_head_sha:
+            msg = (
+                f"Task '{tid}' dispatcher verified HEAD mismatch: "
+                f"expected '{expected_head_sha}', got '{disp_head}'."
+            )
+            blockers.append(msg)
+
+        # 4. Consistency of owner_role and target_branch
+        if entry.get("owner_role") != contract.owner_role:
+            msg = (
+                f"Task '{tid}' owner_role mismatch: "
+                f"expected '{contract.owner_role}', got '{entry.get('owner_role')}'."
+            )
+            blockers.append(msg)
+        if entry.get("target_branch") != contract.target_branch:
+            msg = (
+                f"Task '{tid}' target_branch mismatch: "
+                f"expected '{contract.target_branch}', got '{entry.get('target_branch')}'."
+            )
+            blockers.append(msg)
+
+        # 5. Nested TaskContract must match exactly
+        nested_contract_dict = entry.get("contract")
+        if not isinstance(nested_contract_dict, dict) or nested_contract_dict != contract.to_dict():
+            blockers.append(
+                f"Task '{tid}' nested TaskContract in dispatcher registry "
+                "does not match mission contract."
+            )
+
+        # 6. Live worktree checks
+        wpath_str = entry.get("worktree_path")
+        if not wpath_str:
+            blockers.append(f"Task '{tid}' has no worktree_path recorded.")
+            return blockers
+
+        wpath = Path(wpath_str).resolve()
+        if not wpath.exists():
+            blockers.append(f"Task '{tid}' worktree path '{wpath}' does not exist on disk.")
+            return blockers
+
+        registered_worktrees = {w.worktree_path.resolve() for w in self.list_worktrees()}
+        if wpath not in registered_worktrees:
+            blockers.append(f"Task '{tid}' worktree '{wpath}' is not a registered Git worktree.")
+
+        # 7. Current branch must match contract.target_branch
+        br_proc = subprocess.run(  # noqa: S603
+            [GIT_EXE, "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(wpath),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if br_proc.returncode != 0:
+            blockers.append(f"Task '{tid}' failed to inspect branch in worktree.")
+        else:
+            cur_branch = br_proc.stdout.strip()
+            if cur_branch != contract.target_branch:
+                msg = (
+                    f"Task '{tid}' current branch '{cur_branch}' does not match "
+                    f"target_branch '{contract.target_branch}'."
+                )
+                blockers.append(msg)
+
+        # 8. Worktree must be clean
+        if not self.is_worktree_clean(wpath):
+            blockers.append(f"Task '{tid}' worktree contains uncommitted/dirty changes.")
+
+        # 9. Live HEAD must match expected_head_sha
+        head_proc = subprocess.run(  # noqa: S603
+            [GIT_EXE, "rev-parse", "HEAD"],
+            cwd=str(wpath),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if head_proc.returncode != 0:
+            blockers.append(f"Task '{tid}' failed to inspect live HEAD in worktree.")
+        else:
+            live_head = head_proc.stdout.strip()
+            if live_head != expected_head_sha:
+                msg = (
+                    f"Task '{tid}' HEAD changed after scope verification "
+                    f"({live_head} != {expected_head_sha})."
+                )
+                blockers.append(msg)
+
+        return blockers
 
     def verify_task_scope(self, task_id: str) -> None:
         """Canonical verification: validate contract, worktree binding, branch, and scope."""
