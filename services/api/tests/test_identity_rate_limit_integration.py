@@ -3,7 +3,9 @@ user-account.md "rate limit"), proving the fail-closed wiring end to end -- not 
 `RedisFixedWindowRateLimiter` logic already covered by test_identity_rate_limit.py's unit tests.
 """
 
+from datetime import UTC, datetime
 from http import HTTPStatus
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,6 +18,15 @@ pytestmark = pytest.mark.integration
 
 BOOTSTRAP_PATH = "/api/v1/auth/bootstrap"
 DELETION_PATH = "/api/v1/me/deletion-request"
+
+
+@pytest.fixture(autouse=True)
+def freeze_rate_limit_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Freeze datetime in rate limiter so requests never cross minute boundaries during test."""
+    frozen_now = datetime(2026, 10, 19, 12, 0, 15, tzinfo=UTC)
+    mock_dt = MagicMock(wraps=datetime)
+    mock_dt.now.return_value = frozen_now
+    monkeypatch.setattr("tapjob_api.core.rate_limit.datetime", mock_dt)
 
 
 def test_bootstrap_is_rejected_once_the_real_limit_is_exceeded(
