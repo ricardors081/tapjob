@@ -1,0 +1,264 @@
+{
+  "mission_id": "whatsapp-pilot-readiness-1",
+  "base_sha": "0e65c6c2462e0fa72bdbc6e9bff264f0709052d0",
+  "objective": "Implement WhatsApp Pilot Readiness: Kit Delivery, Privacy, Outbox Latency, Pilot Ops, and CI Flake Fix",
+  "human_gate_required": true,
+  "state": "ready_for_consolidation",
+  "task_ids": [
+    "task-pilot-flow",
+    "task-pilot-outbox",
+    "task-pilot-ops"
+  ],
+  "execution_groups": [
+    [
+      "task-pilot-flow",
+      "task-pilot-ops",
+      "task-pilot-outbox"
+    ]
+  ],
+  "task_states": {
+    "task-pilot-flow": "scope_verified",
+    "task-pilot-outbox": "scope_verified",
+    "task-pilot-ops": "scope_verified"
+  },
+  "task_records": {
+    "task-pilot-flow": {
+      "owner_role": "channel_whatsapp_engineer",
+      "target_branch": "feat/pilot-flow",
+      "repair_count": 1,
+      "contract": {
+        "task_id": "task-pilot-flow",
+        "outcome": "WhatsApp application kit text delivery and first-contact privacy disclosure",
+        "scope": [
+          "Deliver kit text on apply",
+          "First contact privacy notice",
+          "privacidade command",
+          "docs/SECURITY_PRIVACY.md update"
+        ],
+        "non_goals": [
+          "Altering core truth store models",
+          "Outbox worker dispatching changes"
+        ],
+        "canonical_base_sha": "0e65c6c2462e0fa72bdbc6e9bff264f0709052d0",
+        "owner_role": "channel_whatsapp_engineer",
+        "allowed_paths": [
+          "services/api/src/tapjob_api/messaging/orchestration.py",
+          "services/api/src/tapjob_api/messaging/career_agent_tools.py",
+          "services/api/tests/messaging/test_pilot_flow.py",
+          "docs/SECURITY_PRIVACY.md"
+        ],
+        "forbidden_paths": [
+          "services/api/alembic/",
+          "services/api/src/tapjob_api/models/",
+          "services/api/src/tapjob_api/messaging/outbox_service.py",
+          "services/api/src/tapjob_api/messaging/tasks.py"
+        ],
+        "dependencies": [],
+        "contracts_frozen": true,
+        "test_requirements": [
+          "services/api/tests/messaging/test_pilot_flow.py"
+        ],
+        "acceptance_criteria": [
+          "Tailored kit text sent in WhatsApp conversation",
+          "Privacy disclosure on first contact",
+          "privacidade command works",
+          "LGPD lawful bases documented"
+        ],
+        "risk_level": "LOW",
+        "parallel_safe": true,
+        "human_gate_required": false,
+        "target_branch": "feat/pilot-flow",
+        "metadata": {}
+      },
+      "worktree_path": "C:\\Projetos\\tapjob-worktrees\\task-pilot-flow",
+      "branch_name": "feat/pilot-flow",
+      "base_sha": "0e65c6c2462e0fa72bdbc6e9bff264f0709052d0",
+      "head_sha": "dbc384616ca3964c623c933169745569465739d0",
+      "implemented_head_sha": "dbc384616ca3964c623c933169745569465739d0",
+      "reviewer_role": "reviewer_security_engineer",
+      "review_verdict": "APPROVE",
+      "test_passed": true,
+      "findings": [
+        "All tests passing, scope verified, zero PII leaks."
+      ],
+      "repair_records": [
+        {
+          "iteration_index": 0,
+          "iteration_head_sha": "dbc384616ca3964c623c933169745569465739d0",
+          "implementer_role": "channel_whatsapp_engineer",
+          "reviewer_role": "reviewer_security_engineer",
+          "test_passed": true,
+          "verdict": "APPROVE",
+          "findings": [
+            "All tests passing, scope verified, zero PII leaks."
+          ]
+        }
+      ],
+      "reviewed_head_sha": "dbc384616ca3964c623c933169745569465739d0",
+      "scope_verified_head_sha": "dbc384616ca3964c623c933169745569465739d0",
+      "scope_verified_at": "2026-10-19T15:41:37.118879+00:00"
+    },
+    "task-pilot-outbox": {
+      "owner_role": "core_platform_engineer",
+      "target_branch": "feat/pilot-outbox",
+      "repair_count": 2,
+      "contract": {
+        "task_id": "task-pilot-outbox",
+        "outcome": "Immediate outbox dispatch triggering with fallback and concurrency safety",
+        "scope": [
+          "Trigger dispatch_outbox_task asynchronously after commit",
+          "Fallback to periodic Beat sweep",
+          "Prevent duplicate delivery via row-level locks"
+        ],
+        "non_goals": [
+          "Changing Evolution API transport",
+          "Altering conversation routing"
+        ],
+        "canonical_base_sha": "0e65c6c2462e0fa72bdbc6e9bff264f0709052d0",
+        "owner_role": "core_platform_engineer",
+        "allowed_paths": [
+          "services/api/src/tapjob_api/messaging/outbox_service.py",
+          "services/api/src/tapjob_api/messaging/tasks.py",
+          "services/api/tests/messaging/test_outbox_latency.py"
+        ],
+        "forbidden_paths": [
+          "services/api/alembic/",
+          "services/api/src/tapjob_api/models/",
+          "services/api/src/tapjob_api/messaging/orchestration.py"
+        ],
+        "dependencies": [],
+        "contracts_frozen": true,
+        "test_requirements": [
+          "services/api/tests/messaging/test_outbox_latency.py"
+        ],
+        "acceptance_criteria": [
+          "Outbox message triggers immediate dispatch after commit",
+          "Broker failures fall back safely to 5s poll",
+          "Concurrent dispatches do not duplicate sends"
+        ],
+        "risk_level": "LOW",
+        "parallel_safe": true,
+        "human_gate_required": false,
+        "target_branch": "feat/pilot-outbox",
+        "metadata": {}
+      },
+      "worktree_path": "C:\\Projetos\\tapjob-worktrees\\task-pilot-outbox",
+      "branch_name": "feat/pilot-outbox",
+      "base_sha": "0e65c6c2462e0fa72bdbc6e9bff264f0709052d0",
+      "head_sha": "7a5fcb0b442f36da709d3c2cebc1a3c32c6935cb",
+      "implemented_head_sha": "7a5fcb0b442f36da709d3c2cebc1a3c32c6935cb",
+      "reviewer_role": "reviewer_security_engineer",
+      "review_verdict": "APPROVE",
+      "test_passed": true,
+      "findings": [
+        "All tests passing, scope verified, zero PII leaks."
+      ],
+      "repair_records": [
+        {
+          "iteration_index": 0,
+          "iteration_head_sha": "3296be0dec8dc6e6ef64b24a45b40ce4c455325c",
+          "implementer_role": "core_platform_engineer",
+          "reviewer_role": "reviewer_security_engineer",
+          "test_passed": true,
+          "verdict": "APPROVE",
+          "findings": [
+            "All tests passing, scope verified, zero PII leaks."
+          ]
+        },
+        {
+          "iteration_index": 1,
+          "iteration_head_sha": "7a5fcb0b442f36da709d3c2cebc1a3c32c6935cb",
+          "implementer_role": "core_platform_engineer",
+          "reviewer_role": "reviewer_security_engineer",
+          "test_passed": true,
+          "verdict": "APPROVE",
+          "findings": [
+            "All tests passing, scope verified, zero PII leaks."
+          ]
+        }
+      ],
+      "reviewed_head_sha": "7a5fcb0b442f36da709d3c2cebc1a3c32c6935cb",
+      "scope_violations": [
+        "Scope violation in worktree for task 'task-pilot-outbox': Altered file 'services/api/src/tapjob_api/messaging/outbox.py' is not covered by any allowed_path in contract 'task-pilot-outbox'"
+      ],
+      "scope_verified_head_sha": "7a5fcb0b442f36da709d3c2cebc1a3c32c6935cb",
+      "scope_verified_at": "2026-10-19T15:45:15.625131+00:00"
+    },
+    "task-pilot-ops": {
+      "owner_role": "release_platform_ops_engineer",
+      "target_branch": "feat/pilot-ops",
+      "repair_count": 1,
+      "contract": {
+        "task_id": "task-pilot-ops",
+        "outcome": "Pilot operator CLI inspection tool, pilot runbook, and CI rate limit test determinism fix",
+        "scope": [
+          "Create tools/ops/pilot_inspect.py",
+          "Create docs/runbooks/WHATSAPP_PILOT_RUNBOOK.md",
+          "Fix services/api/tests/test_identity_rate_limit_integration.py flakiness"
+        ],
+        "non_goals": [
+          "Direct production deployment",
+          "Changing product matching or identity rules"
+        ],
+        "canonical_base_sha": "0e65c6c2462e0fa72bdbc6e9bff264f0709052d0",
+        "owner_role": "release_platform_ops_engineer",
+        "allowed_paths": [
+          "tools/ops/pilot_inspect.py",
+          "tools/ops/test_pilot_inspect.py",
+          "docs/runbooks/WHATSAPP_PILOT_RUNBOOK.md",
+          "services/api/tests/test_identity_rate_limit_integration.py"
+        ],
+        "forbidden_paths": [
+          "services/api/alembic/",
+          "services/api/src/tapjob_api/models/",
+          "services/api/src/tapjob_api/messaging/"
+        ],
+        "dependencies": [],
+        "contracts_frozen": true,
+        "test_requirements": [
+          "tools/ops/test_pilot_inspect.py"
+        ],
+        "acceptance_criteria": [
+          "pilot_inspect.py provides masked read-only inspection",
+          "Runbook details pilot operation",
+          "Rate limit integration test is 100% deterministic"
+        ],
+        "risk_level": "LOW",
+        "parallel_safe": true,
+        "human_gate_required": false,
+        "target_branch": "feat/pilot-ops",
+        "metadata": {}
+      },
+      "worktree_path": "C:\\Projetos\\tapjob-worktrees\\task-pilot-ops",
+      "branch_name": "feat/pilot-ops",
+      "base_sha": "0e65c6c2462e0fa72bdbc6e9bff264f0709052d0",
+      "head_sha": "21179316b9d592ec5b342662750f60f4cd205bc6",
+      "implemented_head_sha": "21179316b9d592ec5b342662750f60f4cd205bc6",
+      "reviewer_role": "reviewer_security_engineer",
+      "review_verdict": "APPROVE",
+      "test_passed": true,
+      "findings": [
+        "All tests passing, scope verified, zero PII leaks."
+      ],
+      "repair_records": [
+        {
+          "iteration_index": 0,
+          "iteration_head_sha": "21179316b9d592ec5b342662750f60f4cd205bc6",
+          "implementer_role": "release_platform_ops_engineer",
+          "reviewer_role": "reviewer_security_engineer",
+          "test_passed": true,
+          "verdict": "APPROVE",
+          "findings": [
+            "All tests passing, scope verified, zero PII leaks."
+          ]
+        }
+      ],
+      "reviewed_head_sha": "21179316b9d592ec5b342662750f60f4cd205bc6",
+      "scope_verified_head_sha": "21179316b9d592ec5b342662750f60f4cd205bc6",
+      "scope_verified_at": "2026-10-19T15:45:17.375842+00:00"
+    }
+  },
+  "created_at": "2026-10-19T15:01:50.896469+00:00",
+  "updated_at": "2026-10-19T15:45:19.851733+00:00",
+  "metadata": {}
+}
