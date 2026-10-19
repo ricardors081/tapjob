@@ -8,6 +8,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from tools.agent_factory.mission_registry import MissionRegistry
 from tools.agent_factory.team import export_agent_md_files, load_all_profiles, load_profile
 from tools.agent_factory.worktree_dispatcher import WorktreeDispatcher
 
@@ -23,6 +24,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="List all registered agent profiles",
     )
     parser.add_argument("--list-worktrees", action="store_true", help="List active Git worktrees")
+    parser.add_argument("--list-missions", action="store_true", help="List registered missions")
+    parser.add_argument(
+        "--show-mission", type=str, default="", help="Show details for a specific mission_id"
+    )
     parser.add_argument(
         "--export-manifests",
         nargs="?",
@@ -48,7 +53,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.list_team or (
-        not args.list_worktrees and not args.export_manifests and not args.emit_runtime_payload
+        not args.list_worktrees
+        and not args.list_missions
+        and not args.show_mission
+        and not args.export_manifests
+        and not args.emit_runtime_payload
     ):
         profiles = load_all_profiles()
         print(f"TapJob Agent Factory Profiles ({len(profiles)} total):")  # noqa: T201
@@ -73,6 +82,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             clean_str = "CLEAN" if w.is_clean else "DIRTY"
             sha_short = w.head_sha[:8]
             print(f"  • [{clean_str}] {w.branch_name} -> {w.worktree_path} (HEAD: {sha_short})")  # noqa: T201
+
+    if args.list_missions:
+        dispatcher = WorktreeDispatcher()
+        registry = MissionRegistry(worktrees_dir=dispatcher.worktrees_dir)
+        missions = registry.list_missions()
+        print(f"\nRegistered Missions ({len(missions)} total):")  # noqa: T201
+        for m in missions:
+            st = m.state.value.upper()
+            t_cnt = len(m.task_ids)
+            b_short = m.base_sha[:8]
+            desc = f"  • [{st:15}] {m.mission_id} (tasks: {t_cnt}, base: {b_short})"
+            print(desc)  # noqa: T201
+
+    if args.show_mission:
+        dispatcher = WorktreeDispatcher()
+        registry = MissionRegistry(worktrees_dir=dispatcher.worktrees_dir)
+        record = registry.get_mission(args.show_mission)
+        print(json.dumps(record.to_dict(), indent=2))  # noqa: T201
 
     if args.export_manifests:
         target = Path(args.export_manifests).resolve()
