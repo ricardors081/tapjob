@@ -3,20 +3,25 @@
 Verifies:
 1. Strict canary recipient safety gating (forbidden numbers raise RuntimeError).
 2. LGPD phone number masking.
-3. Dry-run multi-turn suite execution and summary metrics.
-4. Intent alignment with the Product Journey Matrix.
+3. Multi-turn dialogue turn structure and reply assertions.
+4. Message text extraction from Evolution API format.
+5. CanaryDbVerifier invariant assertion checks.
+6. Dry-run multi-turn suite execution and summary metrics.
 """
 
 from __future__ import annotations
 
 import unittest
+from unittest.mock import MagicMock
 
 from tools.ops.live_canary_test import (
     CANARY_BOT_PHONE,
     CANARY_CLIENT_PHONE,
     CANARY_DIALOGUE_TURNS,
+    CanaryDbVerifier,
     EvolutionCanaryClient,
     enforce_canary_safety_gate,
+    extract_message_text,
     mask_phone,
     parse_args,
     run_canary_suite,
@@ -54,34 +59,96 @@ class TestLiveCanarySafetyGate(unittest.TestCase):
         self.assertEqual(mask_phone(None), "[EMPTY]")
 
 
-class TestLiveCanaryExecution(unittest.TestCase):
-    """Verifies execution flow and dry run behaviors."""
+class TestLiveCanaryMessageParsingAndTurns(unittest.TestCase):
+    """Verifies turn structure, reply assertions, and message parsing."""
 
     def test_dialogue_turns_structure(self) -> None:
-        self.assertEqual(len(CANARY_DIALOGUE_TURNS), 7)
+        self.assertEqual(len(CANARY_DIALOGUE_TURNS), 10)
         for turn in CANARY_DIALOGUE_TURNS:
             self.assertIn("turn", turn)
             self.assertIn("input", turn)
             self.assertIn("expected_intent", turn)
+            self.assertIn("reply_assertion", turn)
+            self.assertTrue(callable(turn["reply_assertion"]))
             self.assertGreater(len(turn["input"]), 0)
+
+            # Test synthetic reply satisfies its assertion
+            synthetic = turn.get("synthetic_dry_reply", "")
+            self.assertTrue(
+                turn["reply_assertion"](synthetic),
+                f"Synthetic dry reply failed assertion for turn {turn['turn']}",
+            )
+
+    def test_extract_message_text_conversation(self) -> None:
+        raw_rec = {"message": {"conversation": "Olá assistente!"}}
+        self.assertEqual(extract_message_text(raw_rec), "Olá assistente!")
+
+    def test_extract_message_text_extended(self) -> None:
+        raw_rec = {"message": {"extendedTextMessage": {"text": "Texto longo da vaga"}}}
+        self.assertEqual(extract_message_text(raw_rec), "Texto longo da vaga")
+
+    def test_extract_message_text_fallback(self) -> None:
+        raw_rec = {"body": "Fallback body"}
+        self.assertEqual(extract_message_text(raw_rec), "Fallback body")
+
+
+class TestCanaryDbVerifier(unittest.TestCase):
+    """Verifies that database invariant assertions correctly report state."""
+
+    def test_invariants_pass_when_clean(self) -> None:
+        mock_session = MagicMock()
+        mock_session.execute.return_value.scalar.side_effect = [
+            1,  # user_count (1 user = 0 duplicates)
+            0,  # unauthorized_outbox (0 unauthorized sends)
+        ]
+        verifier = CanaryDbVerifier(mock_session)
+        inv = verifier.assert_invariants(CANARY_CLIENT_PHONE)
+        self.assertEqual(inv["duplicate_side_effects"], 0)
+        self.assertEqual(inv["recursive_whatsapp_loops"], 0)
+        self.assertEqual(inv["third_party_sends"], 0)
+
+    def test_invariants_detect_duplicate_and_unauthorized_sends(self) -> None:
+        mock_session = MagicMock()
+        mock_session.execute.return_value.scalar.side_effect = [
+            3,  # user_count (3 users = 2 duplicates)
+            1,  # unauthorized_outbox (1 leak)
+        ]
+        verifier = CanaryDbVerifier(mock_session)
+        inv = verifier.assert_invariants(CANARY_CLIENT_PHONE)
+        self.assertEqual(inv["duplicate_side_effects"], 2)
+        self.assertEqual(inv["third_party_sends"], 1)
+
+
+class TestLiveCanaryExecution(unittest.TestCase):
+    """Verifies execution flow and dry run behaviors."""
 
     def test_dry_run_suite_execution(self) -> None:
         client = EvolutionCanaryClient(dry_run=True)
         summary = run_canary_suite(client, wait_seconds=0.0)
 
-        self.assertEqual(summary["total_turns"], 7)
-        self.assertEqual(summary["successful_turns"], 7)
+        self.assertEqual(summary["total_turns"], 10)
+        self.assertEqual(summary["successful_turns"], 10)
+        self.assertEqual(summary["failed_turns"], 0)
+        self.assertEqual(summary["duplicate_side_effects"], 0)
+        self.assertEqual(summary["recursive_whatsapp_loops"], 0)
         self.assertEqual(summary["third_party_sends"], 0)
-        self.assertEqual(len(summary["turns"]), 7)
+        self.assertEqual(summary["assertions_evaluated"], 20)
+        self.assertEqual(summary["assertions_passed"], 20)
+        self.assertEqual(len(summary["turns"]), 10)
         for r in summary["turns"]:
             self.assertEqual(r["status"], "SUCCESS")
+            self.assertTrue(r["reply_received"])
+            self.assertTrue(r["reply_asserted"])
             self.assertTrue(r["provider_message_id"].startswith("dry_msg_"))
 
     def test_parse_args(self) -> None:
-        args = parse_args(["--dry-run", "--json", "--wait", "1.5"])
+        args = parse_args(
+            ["--dry-run", "--json", "--wait", "1.5", "--db-url", "sqlite:///:memory:"]
+        )
         self.assertTrue(args.dry_run)
         self.assertTrue(args.json)
         self.assertEqual(args.wait, 1.5)
+        self.assertEqual(args.db_url, "sqlite:///:memory:")
 
 
 if __name__ == "__main__":

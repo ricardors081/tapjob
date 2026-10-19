@@ -20,9 +20,14 @@ import pytest
 
 from tapjob_api.messaging.natural_language import (
     ConversationalIntent,
+    ConversationContext,
+    IntentConfidence,
     classify_conversational_intent,
+    classify_url_intent,
     extract_single_action_details,
     extract_skills_from_text,
+    extract_urls,
+    interpret_conversational_message,
     normalize_text,
 )
 
@@ -226,3 +231,113 @@ def test_extract_skills_from_text() -> None:
     assert "Celery" in skills
     assert "AWS" in skills
     assert "Java" not in skills
+
+
+def test_contextual_interpretation_with_job_and_fact_review() -> None:
+    """Verifies that casual/affirmative phrases resolve accurately using ConversationContext."""
+    # 1. 'essa parece boa' with active target job -> APPLICATION_REQUEST
+    ctx_with_job = ConversationContext(
+        has_target_job=True,
+        target_job_title="Dev Python Pleno",
+        target_job_company="TechCorp",
+    )
+    res_with_job = interpret_conversational_message("essa parece boa", context=ctx_with_job)
+    assert res_with_job.intent == ConversationalIntent.APPLICATION_REQUEST
+    assert res_with_job.confidence == IntentConfidence.HIGH
+    assert res_with_job.extracted_entities.get("target_job_title") == "Dev Python Pleno"
+
+    # 2. 'essa parece boa' WITHOUT active target job -> CLARIFICATION_NEEDED
+    ctx_no_job = ConversationContext(has_target_job=False)
+    res_no_job = interpret_conversational_message("essa parece boa", context=ctx_no_job)
+    assert res_no_job.intent == ConversationalIntent.CLARIFICATION_NEEDED
+    assert res_no_job.confidence == IntentConfidence.AMBIGUOUS
+    assert res_no_job.clarification_question is not None
+    assert "link ou o texto da vaga" in res_no_job.clarification_question
+
+    # 3. 'bora' with pending fact review -> FACT_CONFIRM_ALL
+    ctx_facts = ConversationContext(
+        has_pending_fact_review=True,
+        pending_facts_count=3,
+    )
+    res_facts = interpret_conversational_message("bora", context=ctx_facts)
+    assert res_facts.intent == ConversationalIntent.FACT_CONFIRM_ALL
+    assert res_facts.confidence == IntentConfidence.HIGH
+
+    # 4. 'bora' standalone without context -> AFFIRMATIVE_CONTEXTUAL
+    res_standalone = interpret_conversational_message("bora", context=None)
+    assert res_standalone.intent == ConversationalIntent.AFFIRMATIVE_CONTEXTUAL
+    assert res_standalone.confidence == IntentConfidence.MEDIUM
+
+    # 5. 'sim' with kit prompt in outbox -> APPLICATION_REQUEST
+    ctx_prompt_kit = ConversationContext(
+        last_assistant_prompt="Deseja gerar o Application Kit para esta oportunidade?"
+    )
+    res_prompt = interpret_conversational_message("sim", context=ctx_prompt_kit)
+    assert res_prompt.intent == ConversationalIntent.APPLICATION_REQUEST
+    assert res_prompt.confidence == IntentConfidence.HIGH
+
+
+def test_url_classification_and_safeguards() -> None:
+    """Verifies that URLs are categorized accurately and generic URLs trigger safe clarification."""
+    # 1. ATS URLs -> JOB_URL_INTAKE
+    ats_urls = [
+        "https://empresa.gupy.io/job/12345",
+        "https://jobs.lever.co/empresa/abc-def",
+        "https://boards.greenhouse.io/empresa/jobs/999",
+        "https://www.linkedin.com/jobs/view/123456789/",
+        "https://empresa.com/careers/vagas/python-senior",
+    ]
+    for url in ats_urls:
+        interp = classify_url_intent(url)
+        assert interp.intent == ConversationalIntent.JOB_URL_INTAKE, f"Failed for ATS URL: {url}"
+        assert interp.extracted_entities.get("job_url") == url
+
+    # 2. Portfolio / Profile URLs -> TEXT_EXPERIENCE
+    profile_urls = [
+        "https://github.com/candidato-dev",
+        "https://gitlab.com/candidato",
+        "https://www.linkedin.com/in/candidato-tech/",
+        "https://behance.net/designer",
+    ]
+    for url in profile_urls:
+        interp = classify_url_intent(url)
+        assert interp.intent == ConversationalIntent.TEXT_EXPERIENCE, (
+            f"Failed for profile URL: {url}"
+        )
+        assert interp.extracted_entities.get("portfolio_url") == url
+
+    # 3. Privacy Policy URLs -> PRIVACY_INQUIRY
+    priv_urls = [
+        "https://empresa.com/politica-de-privacidade",
+        "https://empresa.com/lgpd",
+        "https://empresa.com/privacy",
+    ]
+    for url in priv_urls:
+        interp = classify_url_intent(url)
+        assert interp.intent == ConversationalIntent.PRIVACY_INQUIRY, (
+            f"Failed for privacy URL: {url}"
+        )
+
+    # 4. Unknown / Generic URLs -> CLARIFICATION_NEEDED
+    unknown_urls = [
+        "https://medium.com/@autor/meu-artigo-tecnico",
+        "https://noticias.globo.com/economia/reportagem.html",
+        "https://exemplo.com/pagina-aleatoria",
+    ]
+    for url in unknown_urls:
+        interp = classify_url_intent(url)
+        assert interp.intent == ConversationalIntent.CLARIFICATION_NEEDED, (
+            f"Failed for generic URL: {url}"
+        )
+        assert interp.confidence == IntentConfidence.AMBIGUOUS
+        assert interp.clarification_question is not None
+        assert "vaga de emprego" in interp.clarification_question
+
+
+def test_extract_urls_cleans_punctuation() -> None:
+    text = "Olha essa vaga: https://empresa.gupy.io/job/12345. E veja https://github.com/dev!"
+    extracted = extract_urls(text)
+    assert extracted == [
+        "https://empresa.gupy.io/job/12345",
+        "https://github.com/dev",
+    ]

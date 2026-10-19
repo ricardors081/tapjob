@@ -46,7 +46,11 @@ from tapjob_api.messaging.career_agent_tools import (
     tool_update_application_status,
 )
 from tapjob_api.messaging.document_intake import confirm_candidates_and_finalize
-from tapjob_api.messaging.inbound import InboundEffectKind, InboundEffectState
+from tapjob_api.messaging.inbound import (
+    InboundEffectKind,
+    InboundEffectState,
+    ProviderEventEnvelope,
+)
 from tapjob_api.messaging.inbound_service import (
     complete_inbound_effect,
     get_inbound_effect,
@@ -55,9 +59,12 @@ from tapjob_api.messaging.inbound_service import (
 )
 from tapjob_api.messaging.natural_language import (
     ConversationalIntent,
-    classify_conversational_intent,
+    ConversationContext,
+    classify_url_intent,
     extract_single_action_details,
     extract_skills_from_text,
+    extract_urls,
+    interpret_conversational_message,
     normalize_text,
 )
 from tapjob_api.messaging.outbox import OutboundMessageQueue
@@ -382,8 +389,111 @@ def resolve_user_target_job(session: Session, *, user: User) -> Job | None:
     job_by_app = session.execute(stmt_app_jobs).scalar_one_or_none()
 
     if job_by_intake is not None and job_by_app is not None:
-        return job_by_intake if job_by_intake.created_at >= job_by_app.created_at else job_by_app
+        try:
+            if hasattr(job_by_intake, "created_at") and hasattr(job_by_app, "created_at"):
+                return (
+                    job_by_intake
+                    if job_by_intake.created_at >= job_by_app.created_at
+                    else job_by_app
+                )
+        except TypeError:
+            pass
+        return job_by_intake
     return job_by_intake or job_by_app
+
+
+def resolve_user_conversation_context(
+    session: Session,
+    *,
+    user: User,
+    link_id: uuid.UUID | None,
+) -> ConversationContext:
+    """Builds conversational and domain context for contextual semantic understanding."""
+    has_active_profile = False
+    profile_version = 0
+    try:
+        profile_status = get_user_profile_status(session, user_id=user.id)
+        if isinstance(profile_status, dict):
+            has_active_profile = bool(profile_status.get("has_facts", False))
+            profile_version = int(profile_status.get("profile_version", 0) or 0)
+    except Exception:
+        logger.debug("Failed resolving user profile status for context")
+
+    has_pending_fact_review = False
+    pending_facts_count = 0
+    try:
+        pending_import = session.execute(
+            select(ResumeImport)
+            .where(
+                ResumeImport.user_id == user.id,
+                ResumeImport.status == ImportStatus.READY_FOR_REVIEW,
+            )
+            .order_by(ResumeImport.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if pending_import is not None and isinstance(pending_import, ResumeImport):
+            has_pending_fact_review = True
+            cands = getattr(pending_import, "candidates", None)
+            pending_facts_count = len(cands) if cands and hasattr(cands, "__len__") else 0
+    except Exception:
+        logger.debug("Failed resolving pending resume import for context")
+
+    has_target_job = False
+    target_job_title = None
+    target_job_company = None
+    try:
+        target_job = resolve_user_target_job(session, user=user)
+        if target_job is not None and getattr(target_job, "id", None) is not None:
+            has_target_job = True
+            target_job_title = getattr(target_job, "title", None)
+            comp = getattr(target_job, "company", None)
+            target_job_company = (
+                getattr(comp, "name", None)
+                if comp
+                else getattr(target_job, "company_name_raw", None)
+            )
+    except Exception:
+        logger.debug("Failed resolving target job for context")
+
+    latest_app_status = None
+    try:
+        latest_app = session.execute(
+            select(Application)
+            .where(Application.user_id == user.id)
+            .order_by(Application.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if latest_app is not None and getattr(latest_app, "status", None) is not None:
+            st = latest_app.status
+            latest_app_status = st.value if hasattr(st, "value") else str(st)
+    except Exception:
+        logger.debug("Failed resolving latest application for context")
+
+    last_prompt = None
+    if link_id is not None:
+        try:
+            latest_outbox = session.execute(
+                select(OutboundMessageQueue)
+                .where(OutboundMessageQueue.channel_identity_link_id == str(link_id))
+                .order_by(OutboundMessageQueue.created_at.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if latest_outbox and isinstance(getattr(latest_outbox, "message_content", None), dict):
+                last_prompt = str(latest_outbox.message_content.get("text", ""))
+        except Exception:
+            logger.debug("Failed resolving latest outbox for context")
+
+    return ConversationContext(
+        has_active_profile=has_active_profile,
+        profile_version=profile_version,
+        has_pending_fact_review=has_pending_fact_review,
+        pending_facts_count=pending_facts_count,
+        has_target_job=has_target_job,
+        target_job_title=target_job_title,
+        target_job_company=target_job_company,
+        latest_application_status=latest_app_status,
+        last_assistant_prompt=last_prompt,
+    )
 
 
 class IncompleteCandidateReviewError(Exception):
@@ -696,7 +806,14 @@ def dispatch_inbound_message(
         has_document = bool(
             inbound.attachments and any(a.kind == "document" for a in inbound.attachments)
         )
-        has_job_url = "http://" in text or "https://" in text
+        urls = extract_urls(text)
+        url_interp = classify_url_intent(urls[0], text) if urls else None
+        has_job_url = (
+            url_interp is not None and url_interp.intent == ConversationalIntent.JOB_URL_INTAKE
+        )
+        has_portfolio_url = (
+            url_interp is not None and url_interp.intent == ConversationalIntent.TEXT_EXPERIENCE
+        )
         has_pasted_job = is_pasted_job_text(text) and not any(
             cmd in lower_text
             for cmd in (
@@ -710,7 +827,7 @@ def dispatch_inbound_message(
             )
         )
 
-        if not (has_document or has_job_url or has_pasted_job):
+        if not (has_document or has_job_url or has_portfolio_url or has_pasted_job):
             greeting_text = (
                 f"Olá! Bem-vindo ao {config.product_name}. "
                 "Sou seu assistente de carreira pessoal.\n\n"
@@ -1064,31 +1181,51 @@ def dispatch_inbound_message(
             queued_keys.append(msg.idempotency_key)
             return queued_keys
 
-    # 2.5 Classify Conversational Intent using natural language engine
-    intent = classify_conversational_intent(text)
+    # 2.5 Resolve Conversation Context & Interpret Message
+    # Fast path: evaluate message with standalone heuristics
+    interpretation = interpret_conversational_message(text, context=None)
 
-    # Contextual continuity resolution for affirmative replies (e.g. "sim", "bora", "quero")
-    if intent == ConversationalIntent.AFFIRMATIVE_CONTEXTUAL and link_id is not None:
-        latest_outbox = session.execute(
-            select(OutboundMessageQueue)
-            .where(OutboundMessageQueue.channel_identity_link_id == str(link_id))
-            .order_by(OutboundMessageQueue.created_at.desc())
-            .limit(1)
-        ).scalar_one_or_none()
-        latest_text = ""
-        if latest_outbox and isinstance(latest_outbox.message_content, dict):
-            latest_text = str(latest_outbox.message_content.get("text", "")).lower()
+    # For affirmative, casual, or ambiguous messages, consult conversation context
+    if interpretation.intent in (
+        ConversationalIntent.AFFIRMATIVE_CONTEXTUAL,
+        ConversationalIntent.CLARIFICATION_NEEDED,
+        ConversationalIntent.UNKNOWN,
+    ):
+        conv_ctx = resolve_user_conversation_context(session, user=user, link_id=link_id)
+        interpretation = interpret_conversational_message(text, context=conv_ctx)
 
-        if (
-            "quero me candidatar" in latest_text
-            or "application kit" in latest_text
-            or "oportunidade?" in latest_text
-        ):
-            intent = ConversationalIntent.APPLICATION_REQUEST
-        elif "confirmar" in latest_text and (
-            "fato" in latest_text or "competencia" in latest_text or "informacoes" in latest_text
-        ):
-            intent = ConversationalIntent.FACT_CONFIRM_ALL
+    intent = interpretation.intent
+
+    # Observability: update envelope with routed intent, confidence and context used
+    if envelope_id is not None:
+        try:
+            envelope_rec = session.get(ProviderEventEnvelope, envelope_id)
+            if envelope_rec and isinstance(getattr(envelope_rec, "normalized_event", None), dict):
+                updated_norm = dict(envelope_rec.normalized_event)
+                updated_norm["routed_intent"] = intent.value
+                updated_norm["intent_confidence"] = interpretation.confidence.value
+                if interpretation.context_used:
+                    updated_norm["context_used"] = interpretation.context_used
+                envelope_rec.normalized_event = updated_norm
+                session.flush()
+        except Exception:
+            logger.debug("Failed updating envelope with routed intent observability")
+
+    # Ambiguous input clarification handling
+    if intent == ConversationalIntent.CLARIFICATION_NEEDED:
+        clarification_msg = interpretation.clarification_question or (
+            "Não compreendi com clareza. Você gostaria de analisar uma vaga ou "
+            "atualizar seu perfil? Envie 'ajuda' para ver as opções disponíveis."
+        )
+        msg = queue_response_message(
+            session,
+            channel_identity_link_id=link_id,
+            recipient_external_id=external_id,
+            message_text=clarification_msg,
+            idempotency_key=f"clarify_{inbound.provider_message_id}",
+        )
+        queued_keys.append(msg.idempotency_key)
+        return queued_keys
 
     # 3. Privacy, LGPD & Data-Rights command handler (Finding 1, Finding 4, Finding 6)
     if intent in (
@@ -1611,9 +1748,14 @@ def dispatch_inbound_message(
         return queued_keys
 
     # 4. Job URL intake
-    if intent == ConversationalIntent.JOB_URL_INTAKE or "http://" in text or "https://" in text:
-        words = text.split()
-        job_url = next((w for w in words if w.startswith(("http://", "https://"))), None)
+    if intent == ConversationalIntent.JOB_URL_INTAKE:
+        extracted_job_url = interpretation.extracted_entities.get("job_url")
+        if not extracted_job_url:
+            words = text.split()
+            extracted_job_url = next(
+                (w for w in words if w.startswith(("http://", "https://"))), None
+            )
+        job_url = extracted_job_url
         if job_url:
             try:
                 job_info = tool_ingest_job_url(session, user=user, url=job_url)
@@ -1701,9 +1843,13 @@ def dispatch_inbound_message(
 
     # 5.5 Candidate text experience intake (J-03)
     if intent == ConversationalIntent.TEXT_EXPERIENCE:
+        portfolio_url = interpretation.extracted_entities.get("portfolio_url")
         skills = extract_skills_from_text(text)
         skills_str = ", ".join(skills) if skills else "Gerais"
-        clean_headline = text.splitlines()[0][:60]
+        if portfolio_url:
+            clean_headline = f"Portfólio / Perfil Online: {portfolio_url}"
+        else:
+            clean_headline = text.splitlines()[0][:60]
         response_text = (
             f"Recebemos suas experiências profissionais com sucesso!\n"
             f"• Perfil / Resumo: {clean_headline}\n"

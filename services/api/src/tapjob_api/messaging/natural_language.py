@@ -1,15 +1,25 @@
 """Natural Language Understanding and Conversational Intent Engine for TapJob Messaging.
 
-Designed for natural, colloquial, formal, and informal Brazilian Portuguese (PT-BR) interactions.
-Replaces rigid, fragile keyword/substring checks with robust semantic classification,
-eliminating routing collisions (e.g. asking about a job triggering recommendations).
+Layered architecture:
+1. Untrusted NL Input ->
+2. Conversational Understanding (Semantic Interpretation with ConversationContext) ->
+3. Structured Typed Result (SemanticInterpretation with intent/confidence/entities) ->
+4. Deterministic Validation / Policy Gate ->
+5. Safe Domain Action.
+
+Supports colloquial, formal, informal, slang, and typo variations of Brazilian Portuguese (PT-BR).
+Avoids brittle hardcoded keyword lists through semantic categorization, context awareness,
+URL classification, and safe disambiguation fallbacks.
 """
 
 from __future__ import annotations
 
 import re
 import unicodedata
+from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
+from urllib.parse import urlparse
 
 COMMON_TECH_SKILLS: tuple[str, ...] = (
     "Python",
@@ -46,6 +56,50 @@ COMMON_TECH_SKILLS: tuple[str, ...] = (
     "CI/CD",
 )
 
+KNOWN_ATS_DOMAINS: frozenset[str] = frozenset(
+    {
+        "gupy.io",
+        "greenhouse.io",
+        "lever.co",
+        "ashbyhq.com",
+        "workable.com",
+        "vagas.com.br",
+        "catho.com.br",
+        "infojobs.com.br",
+        "trampos.co",
+        "kenoby.com",
+        "bamboohr.com",
+        "rippling.com",
+        "smartrecruiters.com",
+        "indeed.com",
+        "glassdoor.com",
+        "jobvite.com",
+        "breezy.hr",
+        "recruitee.com",
+    }
+)
+
+KNOWN_PORTFOLIO_DOMAINS: frozenset[str] = frozenset(
+    {
+        "github.com",
+        "gitlab.com",
+        "behance.net",
+        "dribbble.com",
+        "notion.site",
+        "readcv.com",
+        "portfoliobox.net",
+    }
+)
+
+
+class IntentConfidence(StrEnum):
+    """Confidence levels for conversational semantic interpretation."""
+
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+    AMBIGUOUS = "AMBIGUOUS"
+
 
 class ConversationalIntent(StrEnum):
     """Categorized conversational intents for WhatsApp pilot interactions."""
@@ -67,7 +121,35 @@ class ConversationalIntent(StrEnum):
     TEXT_EXPERIENCE = "TEXT_EXPERIENCE"
     JOB_TEXT_INTAKE = "JOB_TEXT_INTAKE"
     JOB_URL_INTAKE = "JOB_URL_INTAKE"
+    CLARIFICATION_NEEDED = "CLARIFICATION_NEEDED"
     UNKNOWN = "UNKNOWN"
+
+
+@dataclass(frozen=True)
+class ConversationContext:
+    """Conversational and domain state for context-aware interpretation."""
+
+    has_active_profile: bool = False
+    profile_version: int = 0
+    has_pending_fact_review: bool = False
+    pending_facts_count: int = 0
+    has_target_job: bool = False
+    target_job_title: str | None = None
+    target_job_company: str | None = None
+    latest_application_status: str | None = None
+    last_assistant_prompt: str | None = None
+    last_routed_intent: ConversationalIntent | None = None
+
+
+@dataclass(frozen=True)
+class SemanticInterpretation:
+    """Structured result of conversational semantic understanding."""
+
+    intent: ConversationalIntent
+    confidence: IntentConfidence
+    extracted_entities: dict[str, Any] = field(default_factory=dict)
+    clarification_question: str | None = None
+    context_used: str | None = None
 
 
 def normalize_text(text: str) -> str:
@@ -78,6 +160,123 @@ def normalize_text(text: str) -> str:
     norm = unicodedata.normalize("NFKD", text).encode("ASCII", "ignore").decode("ASCII")
     clean = re.sub(r"[^\w\s:=]", " ", norm)
     return " ".join(clean.split())
+
+
+def extract_urls(text: str) -> list[str]:
+    """Extracts HTTP and HTTPS URLs from raw text."""
+    url_pattern = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+    matches = url_pattern.findall(text or "")
+    # Clean trailing punctuation commonly appended in chat (e.g. '.', ',', ')')
+    cleaned_urls = []
+    for u in matches:
+        cleaned = re.sub(r"[.,;!?\)]+$", "", u)
+        if cleaned:
+            cleaned_urls.append(cleaned)
+    return cleaned_urls
+
+
+def classify_url_intent(url: str, full_text: str = "") -> SemanticInterpretation:
+    """Classifies the semantic intent of an inbound URL.
+
+    Distinguishes:
+    - JOB_POSTING (ATS domains or job paths) -> JOB_URL_INTAKE
+    - PORTFOLIO_OR_PROFILE (GitHub, LinkedIn personal profile, Behance) -> TEXT_EXPERIENCE
+    - PRIVACY_POLICY (Privacy, LGPD, terms) -> PRIVACY_INQUIRY
+    - UNKNOWN -> CLARIFICATION_NEEDED with safe question.
+    """
+    try:
+        parsed = urlparse(url)
+        netloc = (parsed.netloc or "").lower().split(":")[0]
+        path = (parsed.path or "").lower()
+    except Exception:
+        return SemanticInterpretation(
+            intent=ConversationalIntent.CLARIFICATION_NEEDED,
+            confidence=IntentConfidence.AMBIGUOUS,
+            extracted_entities={"invalid_url": url},
+            clarification_question=(
+                "Não consegui acessar esse endereço. "
+                "Poderia reenviar o link completo da vaga ou do seu currículo?"
+            ),
+        )
+
+    # 1. ATS and Known Job Boards
+    is_ats_domain = any(netloc == d or netloc.endswith("." + d) for d in KNOWN_ATS_DOMAINS)
+    is_job_path = any(
+        seg in path
+        for seg in (
+            "/jobs/",
+            "/job/",
+            "/vagas/",
+            "/vaga/",
+            "/careers/",
+            "/carreiras/",
+            "/oportunidades/",
+            "/apply/",
+            "/candidatura/",
+            "/positions/",
+        )
+    )
+    is_linkedin_job = "linkedin.com" in netloc and ("/jobs/" in path or "/view/" in path)
+
+    clean_text = normalize_text(full_text)
+    text_has_job_cues = any(
+        cue in clean_text for cue in ("vaga", "oportunidade", "cargo", "requisitos", "salario")
+    )
+
+    if is_ats_domain or is_job_path or is_linkedin_job or text_has_job_cues:
+        conf = IntentConfidence.HIGH if (is_ats_domain or is_job_path) else IntentConfidence.MEDIUM
+        return SemanticInterpretation(
+            intent=ConversationalIntent.JOB_URL_INTAKE,
+            confidence=conf,
+            extracted_entities={"job_url": url},
+            context_used="ats_domain_or_job_path",
+        )
+
+    # 2. Portfolio or Personal Profile
+    is_portfolio_domain = any(
+        netloc == d or netloc.endswith("." + d) for d in KNOWN_PORTFOLIO_DOMAINS
+    )
+    is_linkedin_profile = "linkedin.com" in netloc and "/in/" in path
+    text_has_profile_cues = any(
+        cue in clean_text
+        for cue in ("portfolio", "meu github", "meu perfil", "meu linkedin", "meu curriculo")
+    )
+
+    if is_portfolio_domain or is_linkedin_profile or text_has_profile_cues:
+        conf = (
+            IntentConfidence.HIGH
+            if (is_portfolio_domain or is_linkedin_profile)
+            else IntentConfidence.MEDIUM
+        )
+        return SemanticInterpretation(
+            intent=ConversationalIntent.TEXT_EXPERIENCE,
+            confidence=conf,
+            extracted_entities={"portfolio_url": url},
+            context_used="portfolio_or_profile_domain",
+        )
+
+    # 3. Privacy / Legal Links
+    is_privacy_path = any(
+        kw in path for kw in ("privacidade", "privacy", "lgpd", "termos", "terms")
+    )
+    if is_privacy_path or "privacidade" in clean_text or "lgpd" in clean_text:
+        return SemanticInterpretation(
+            intent=ConversationalIntent.PRIVACY_INQUIRY,
+            confidence=IntentConfidence.HIGH,
+            extracted_entities={"privacy_url": url},
+            context_used="privacy_policy_url",
+        )
+
+    # 4. Generic / Unknown URL Fallback -> Request Clarification
+    return SemanticInterpretation(
+        intent=ConversationalIntent.CLARIFICATION_NEEDED,
+        confidence=IntentConfidence.AMBIGUOUS,
+        extracted_entities={"unknown_url": url},
+        clarification_question=(
+            "Recebi seu link! Para te atender melhor: este link é de uma vaga de emprego "
+            "ou do seu perfil/portfólio profissional? (Envie 'vaga' ou 'perfil')."
+        ),
+    )
 
 
 def is_pasted_job_text_normalized(clean: str, raw_len: int) -> bool:
@@ -140,13 +339,13 @@ def is_candidate_text_experience(clean: str, raw_len: int) -> bool:
 
 def extract_single_action_details(clean: str) -> tuple[str, int | None, str | None]:
     """Extracts (action, index, edited_value) from a single-item fact action.
+
     Returns:
         ("edit", index, new_value)
         ("reject", index, None)
         ("accept", index, None)
         ("unknown", None, None)
     """
-    # Edit pattern: editar fato 1: Dev Python / muda o 1 para Dev Python
     m_edit = re.search(
         r"(?:edit\w*|corrig\w*|mud\w*)\s+(?:o\s+|a\s+|do\s+|da\s+)?(?:fato\s+|item\s+)?#?(\d+)\s*(?:[:=]|para)\s*(.+)$",
         clean,
@@ -154,7 +353,6 @@ def extract_single_action_details(clean: str) -> tuple[str, int | None, str | No
     if m_edit:
         return ("edit", int(m_edit.group(1)), m_edit.group(2).strip())
 
-    # Reject pattern: rejeita o 2 / descarta fato 3 / tira o fato 2 fora
     m_rej = re.search(
         r"(?:rejeit\w*|descart\w*|ignor\w*|tir\w*|remov\w*|recus\w*)\s+(?:o\s+|a\s+|do\s+|da\s+)?(?:fato\s+|item\s+)?#?(\d+)",
         clean,
@@ -162,7 +360,6 @@ def extract_single_action_details(clean: str) -> tuple[str, int | None, str | No
     if m_rej:
         return ("reject", int(m_rej.group(1)), None)
 
-    # Accept pattern: aceita o 1 / confirma o 2 / aprova o 3
     m_acc = re.search(
         r"(?:aceit\w*|aprov\w*|confirm\w*)\s+(?:o\s+|a\s+|do\s+|da\s+)?(?:fato\s+|item\s+)?#?(\d+)",
         clean,
@@ -184,20 +381,38 @@ def extract_skills_from_text(text: str) -> list[str]:
     return found
 
 
-def classify_conversational_intent(raw: str) -> ConversationalIntent:
-    """Classifies an inbound Brazilian Portuguese text into a ConversationalIntent.
-    Ensures safe precedence (e.g. deletion before fact confirmation; job inquiry before recs).
+def interpret_conversational_message(
+    text: str,
+    context: ConversationContext | None = None,
+) -> SemanticInterpretation:
+    """Interprets untrusted inbound conversational message into a structured SemanticInterpretation.
+
+    Execution Pipeline:
+    1. Normalization & Sanity
+    2. Deterministic Privacy & LGPD Gates (always take precedence)
+    3. Context-Aware URL Classification
+    4. Deterministic Fact Single Actions (indexed edits/accepts/rejects)
+    5. Fact Confirmation / Rejection
+    6. Application Query & Lifecycle Updates
+    7. Match Explanations & Compatibility Inquiries
+    8. Application Kit Requests
+    9. Follow-up Reminders
+    10. Job Recommendations Inquiries
+    11. Contextual Affirmative / Casual Follow-ups (using ConversationContext)
+    12. Help & Commands
+    13. Greetings & Return Welcome
+    14. Job Description & Candidate Experience Intake
+    15. Ambiguity & Clarification Fallback
     """
-    clean = normalize_text(raw)
-    raw_len = len(raw.strip())
+    clean = normalize_text(text)
+    raw_len = len(text.strip())
     if not clean:
-        return ConversationalIntent.UNKNOWN
+        return SemanticInterpretation(
+            intent=ConversationalIntent.UNKNOWN,
+            confidence=IntentConfidence.LOW,
+        )
 
-    # 1. URL check
-    if "http://" in raw or "https://" in raw:
-        return ConversationalIntent.JOB_URL_INTAKE
-
-    # 2. Deletion (LGPD) — must take precedence over privacy and fact confirmation
+    # 1. Deterministic LGPD Deletion Gate (Highest Precedence)
     del_terms = (
         "excluir meus dados",
         "excluir dados",
@@ -232,9 +447,13 @@ def classify_conversational_intent(raw: str) -> ConversationalIntent:
         "apagar conta",
         "apaga tudo",
     ):
-        return ConversationalIntent.DELETION_REQUEST
+        return SemanticInterpretation(
+            intent=ConversationalIntent.DELETION_REQUEST,
+            confidence=IntentConfidence.HIGH,
+            context_used="lgpd_deletion_gate",
+        )
 
-    # 3. Privacy (LGPD) — must not trigger on pasted job text containing incidental 'politica'
+    # 2. Deterministic LGPD Privacy Inquiry Gate
     priv_terms = (
         "privacidade",
         "lgpd",
@@ -245,9 +464,30 @@ def classify_conversational_intent(raw: str) -> ConversationalIntent:
         "como tratam meus dados",
     )
     if any(t in clean for t in priv_terms) and not is_pasted_job_text_normalized(clean, raw_len):
-        return ConversationalIntent.PRIVACY_INQUIRY
+        return SemanticInterpretation(
+            intent=ConversationalIntent.PRIVACY_INQUIRY,
+            confidence=IntentConfidence.HIGH,
+            context_used="lgpd_privacy_gate",
+        )
 
-    # 4. Fact Reject All
+    # 3. Context-Aware URL Classification (Finding 3)
+    urls = extract_urls(text)
+    if urls:
+        # Evaluate primary URL with context
+        url_interp = classify_url_intent(urls[0], full_text=text)
+        return url_interp
+
+    # 4. Fact Single Action (e.g. 'rejeita o 2', 'editar fato 1: Python', 'aceita o 3')
+    action, idx, val = extract_single_action_details(clean)
+    if action != "unknown" and idx is not None:
+        return SemanticInterpretation(
+            intent=ConversationalIntent.FACT_SINGLE_ACTION,
+            confidence=IntentConfidence.HIGH,
+            extracted_entities={"action": action, "index": idx, "value": val},
+            context_used="single_fact_action_pattern",
+        )
+
+    # 5. Fact Rejection (All)
     rej_terms = (
         "rejeitar todos",
         "descartar todos",
@@ -262,16 +502,13 @@ def classify_conversational_intent(raw: str) -> ConversationalIntent:
         "nao quero nada disso",
     )
     if any(t in clean for t in rej_terms):
-        return ConversationalIntent.FACT_REJECT_ALL
+        return SemanticInterpretation(
+            intent=ConversationalIntent.FACT_REJECT_ALL,
+            confidence=IntentConfidence.HIGH,
+            context_used="reject_all_pattern",
+        )
 
-    # 5. Fact Single Action (reject/accept/edit with number)
-    if re.search(
-        r"\b(rejeit|descart|ignor|tir|remov|recus|aceit|aprov|confirm|edit|corrig|mud)\w*\s+(?:o\s+|a\s+|do\s+|da\s+)?(?:fato\s+|item\s+)?#?(\d+)",
-        clean,
-    ):
-        return ConversationalIntent.FACT_SINGLE_ACTION
-
-    # 6. Fact Confirm All
+    # 6. Fact Confirmation (All)
     conf_terms = (
         "confirmar todos",
         "confirmar fatos",
@@ -307,9 +544,13 @@ def classify_conversational_intent(raw: str) -> ConversationalIntent:
         "confirmo",
         "ok salvar",
     ):
-        return ConversationalIntent.FACT_CONFIRM_ALL
+        return SemanticInterpretation(
+            intent=ConversationalIntent.FACT_CONFIRM_ALL,
+            confidence=IntentConfidence.HIGH,
+            context_used="confirm_all_pattern",
+        )
 
-    # 7. Application Status Query ('como estão minhas vagas?', 'onde me candidatei?')
+    # 7. Application Status Query
     status_query_terms = (
         "minhas candidaturas",
         "status da candidatura",
@@ -322,9 +563,13 @@ def classify_conversational_intent(raw: str) -> ConversationalIntent:
     if any(t in clean for t in status_query_terms) or (
         clean.startswith("como est") and "candidatura" in clean
     ):
-        return ConversationalIntent.APPLICATION_STATUS_QUERY
+        return SemanticInterpretation(
+            intent=ConversationalIntent.APPLICATION_STATUS_QUERY,
+            confidence=IntentConfidence.HIGH,
+            context_used="status_query_pattern",
+        )
 
-    # 8. Application Status Update ('já me candidatei')
+    # 8. Application Status Update (Candidate already submitted)
     status_upd_terms = (
         "ja me candidatei",
         "me candidatei",
@@ -344,10 +589,13 @@ def classify_conversational_intent(raw: str) -> ConversationalIntent:
         "mandei cv",
     )
     if any(t in clean for t in status_upd_terms):
-        return ConversationalIntent.APPLICATION_STATUS_UPDATE
+        return SemanticInterpretation(
+            intent=ConversationalIntent.APPLICATION_STATUS_UPDATE,
+            confidence=IntentConfidence.HIGH,
+            context_used="status_update_pattern",
+        )
 
-    # 9. Match Explanation ('analisa essa vaga', 'o que acha da vaga?')
-    # Takes precedence over general recommendations
+    # 9. Match Explanation / Compatibility Analysis
     match_terms = (
         "analisa",
         "analisar",
@@ -371,9 +619,13 @@ def classify_conversational_intent(raw: str) -> ConversationalIntent:
         "sera que tenho chance",
     )
     if any(t in clean for t in match_terms):
-        return ConversationalIntent.MATCH_EXPLANATION
+        return SemanticInterpretation(
+            intent=ConversationalIntent.MATCH_EXPLANATION,
+            confidence=IntentConfidence.HIGH,
+            context_used="match_explanation_pattern",
+        )
 
-    # 10. Reminder / Follow-up
+    # 10. Reminder / Follow-up Scheduling
     rem_terms = (
         "me lembra",
         "lembrete",
@@ -386,10 +638,13 @@ def classify_conversational_intent(raw: str) -> ConversationalIntent:
         "me avisa",
     )
     if any(t in clean for t in rem_terms):
-        return ConversationalIntent.REMINDER_FOLLOWUP
+        return SemanticInterpretation(
+            intent=ConversationalIntent.REMINDER_FOLLOWUP,
+            confidence=IntentConfidence.HIGH,
+            context_used="reminder_pattern",
+        )
 
-    # 11. Application Request ('quero me candidatar', 'curti essa vaga, como faço?')
-    # Takes precedence over general recommendations
+    # 11. Conversational Application Request
     apply_terms = (
         "quero me candidatar",
         "quero me candidata",
@@ -434,9 +689,13 @@ def classify_conversational_intent(raw: str) -> ConversationalIntent:
         ("curti" in clean or "gostei" in clean)
         and ("como faco" in clean or "como aplicar" in clean or "como que faz" in clean)
     ):
-        return ConversationalIntent.APPLICATION_REQUEST
+        return SemanticInterpretation(
+            intent=ConversationalIntent.APPLICATION_REQUEST,
+            confidence=IntentConfidence.HIGH,
+            context_used="apply_request_pattern",
+        )
 
-    # 12. Recommendations (General job search)
+    # 12. General Recommendations
     rec_terms = (
         "vagas recomendadas",
         "recomendar vagas",
@@ -456,9 +715,13 @@ def classify_conversational_intent(raw: str) -> ConversationalIntent:
         "oportunidades",
         "oportunidade",
     ):
-        return ConversationalIntent.JOB_RECOMMENDATIONS
+        return SemanticInterpretation(
+            intent=ConversationalIntent.JOB_RECOMMENDATIONS,
+            confidence=IntentConfidence.HIGH,
+            context_used="job_recommendations_pattern",
+        )
 
-    # 13. Affirmative (Contextual continuity)
+    # 13. Contextual Continuity / Affirmative & Casual Follow-ups
     aff_terms = (
         "sim",
         "quero",
@@ -472,13 +735,83 @@ def classify_conversational_intent(raw: str) -> ConversationalIntent:
         "beleza",
         "combinado",
         "vamos la",
+        "essa parece boa",
+        "gostei dessa",
+        "curti essa",
+        "curti",
+        "gostei",
     )
-    if clean in aff_terms or any(
-        clean.startswith(t + " ") for t in ("sim", "com certeza", "por favor")
-    ):
-        return ConversationalIntent.AFFIRMATIVE_CONTEXTUAL
+    is_affirmative_or_casual = clean in aff_terms or any(
+        clean.startswith(t + " ") for t in ("sim", "com certeza", "por favor", "bora", "claro")
+    )
 
-    # 14. Help
+    if is_affirmative_or_casual:
+        # Check context for resolution
+        if context is not None:
+            # Context Case A: Pending Fact Review waiting for confirmation
+            if context.has_pending_fact_review:
+                return SemanticInterpretation(
+                    intent=ConversationalIntent.FACT_CONFIRM_ALL,
+                    confidence=IntentConfidence.HIGH,
+                    context_used="context:pending_fact_review",
+                )
+
+            # Context Case B: Active Target Job present
+            if context.has_target_job:
+                return SemanticInterpretation(
+                    intent=ConversationalIntent.APPLICATION_REQUEST,
+                    confidence=IntentConfidence.HIGH,
+                    extracted_entities={
+                        "target_job_title": context.target_job_title,
+                        "target_job_company": context.target_job_company,
+                    },
+                    context_used=f"context:target_job:{context.target_job_title}",
+                )
+
+            # Context Case C: Assistant recently prompted about application kit or facts
+            if context.last_assistant_prompt:
+                prompt_lower = context.last_assistant_prompt.lower()
+                if (
+                    "quero me candidatar" in prompt_lower
+                    or "application kit" in prompt_lower
+                    or "oportunidade?" in prompt_lower
+                ):
+                    return SemanticInterpretation(
+                        intent=ConversationalIntent.APPLICATION_REQUEST,
+                        confidence=IntentConfidence.HIGH,
+                        context_used="context:last_prompt_kit",
+                    )
+                if "confirmar" in prompt_lower and (
+                    "fato" in prompt_lower
+                    or "competencia" in prompt_lower
+                    or "informacoes" in prompt_lower
+                ):
+                    return SemanticInterpretation(
+                        intent=ConversationalIntent.FACT_CONFIRM_ALL,
+                        confidence=IntentConfidence.HIGH,
+                        context_used="context:last_prompt_confirm",
+                    )
+
+        # Ambiguous casual input without decisive context
+        if clean in ("essa parece boa", "gostei dessa", "curti essa"):
+            return SemanticInterpretation(
+                intent=ConversationalIntent.CLARIFICATION_NEEDED,
+                confidence=IntentConfidence.AMBIGUOUS,
+                clarification_question=(
+                    "Fico feliz que você tenha gostado! "
+                    "Envie o link ou o texto da vaga para que eu possa analisar o match "
+                    "e preparar seu Application Kit."
+                ),
+                context_used="casual_interest_no_target_job",
+            )
+
+        return SemanticInterpretation(
+            intent=ConversationalIntent.AFFIRMATIVE_CONTEXTUAL,
+            confidence=IntentConfidence.MEDIUM,
+            context_used="affirmative_standalone",
+        )
+
+    # 14. Help Menu & Assistance
     help_terms = (
         "ajuda",
         "help",
@@ -492,9 +825,13 @@ def classify_conversational_intent(raw: str) -> ConversationalIntent:
         "como que mexe",
     )
     if any(t in clean for t in help_terms):
-        return ConversationalIntent.HELP_MENU
+        return SemanticInterpretation(
+            intent=ConversationalIntent.HELP_MENU,
+            confidence=IntentConfidence.HIGH,
+            context_used="help_menu_pattern",
+        )
 
-    # 15. Greeting or Return
+    # 15. Greeting & Returning Welcome
     greet_terms = (
         "oi",
         "ola",
@@ -511,14 +848,38 @@ def classify_conversational_intent(raw: str) -> ConversationalIntent:
         "meu consagrado",
     )
     if clean in greet_terms or any(clean.startswith(t + " ") for t in greet_terms):
-        return ConversationalIntent.GREETING_OR_RETURN
+        return SemanticInterpretation(
+            intent=ConversationalIntent.GREETING_OR_RETURN,
+            confidence=IntentConfidence.HIGH,
+            context_used="greeting_pattern",
+        )
 
     # 16. Pasted Job Description
     if is_pasted_job_text_normalized(clean, raw_len):
-        return ConversationalIntent.JOB_TEXT_INTAKE
+        return SemanticInterpretation(
+            intent=ConversationalIntent.JOB_TEXT_INTAKE,
+            confidence=IntentConfidence.HIGH,
+            context_used="pasted_job_description",
+        )
 
-    # 17. Candidate text experience intake
+    # 17. Candidate Text Experience Intake
     if is_candidate_text_experience(clean, raw_len):
-        return ConversationalIntent.TEXT_EXPERIENCE
+        return SemanticInterpretation(
+            intent=ConversationalIntent.TEXT_EXPERIENCE,
+            confidence=IntentConfidence.HIGH,
+            context_used="candidate_experience_text",
+        )
 
-    return ConversationalIntent.UNKNOWN
+    # 18. Unknown Fallback
+    return SemanticInterpretation(
+        intent=ConversationalIntent.UNKNOWN,
+        confidence=IntentConfidence.LOW,
+    )
+
+
+def classify_conversational_intent(
+    raw: str,
+    context: ConversationContext | None = None,
+) -> ConversationalIntent:
+    """Facade for backward-compatibility. Classifies text into ConversationalIntent."""
+    return interpret_conversational_message(raw, context).intent
