@@ -76,7 +76,9 @@ Invariants:
 - `workflow_dispatch` with explicit `pr_number` input.
 - Resolves PR number -> exact remote HEAD commit SHA from GitHub API (`tools/deploy/require_pr_ci_success.mjs`).
 - Validates the PR belongs to the canonical repository (`ricardors081/tapjob`), rejecting external forks for preview security.
+- Validates the PR targets canonical base branch `main` (`pr.base.ref == "main"`), rejecting PRs targeting any non-main branch.
 - Requires that exact commit's own CI run to have completed with `status: completed` and `conclusion: success`.
+- Enforces TOCTOU build-time verification (`tools/deploy/require_pr_ci_success.mjs --verify-head`): immediately before building, re-fetches PR metadata from GitHub and asserts `CURRENT_REMOTE_PR_HEAD == PREFLIGHT_VERIFIED_PR_HEAD_SHA`. Fails closed if the remote PR HEAD moved after preflight.
 - Pushes to GHCR with tags `pr-<number>-sha-<shortsha>` and `pr-<number>-preview`.
 - Labels the image with `tapjob.preview_only=true` and `tapjob.production_promotion_allowed=false`.
 - Generates an immutable image digest (`sha256:...`) used as the promotion unit exclusively for staging validation.

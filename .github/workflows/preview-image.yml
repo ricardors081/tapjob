@@ -68,6 +68,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      pull-requests: read
     env:
       PR_HEAD_SHA: ${{ needs.preflight.outputs.pr-head-sha }}
       PR_NUMBER: ${{ needs.preflight.outputs.pr-number }}
@@ -77,6 +78,10 @@ jobs:
         with:
           ref: ${{ env.PR_HEAD_SHA }}
 
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
       - name: Confirm this checkout matches the SHA the preflight verified
         run: |
           actual="$(git rev-parse HEAD)"
@@ -84,6 +89,12 @@ jobs:
             echo "checked-out commit ($actual) does not match preflight-verified commit ($PR_HEAD_SHA)" >&2
             exit 1
           fi
+
+      - name: Re-fetch PR metadata and verify HEAD has not moved (TOCTOU guard)
+        id: toctou_check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node tools/deploy/require_pr_ci_success.mjs --verify-head "${{ env.PR_NUMBER }}" "${{ github.repository }}" "${{ env.PR_HEAD_SHA }}" "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
@@ -125,6 +136,9 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- **PR_NUMBER:** \`${{ env.PR_NUMBER }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- **PR_HEAD_SHA:** \`${{ env.PR_HEAD_SHA }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **PREFLIGHT_VERIFIED_HEAD:** \`${{ steps.toctou_check.outputs.preflight_verified_head }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **BUILD_TIME_REMOTE_HEAD:** \`${{ steps.toctou_check.outputs.build_time_remote_head }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **HEADS_MATCH:** \`YES\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- **CI_VERIFIED:** \`YES\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- **IMAGE_NAME:** \`${{ env.IMAGE_NAME }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- **IMAGE_DIGEST:** \`${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"

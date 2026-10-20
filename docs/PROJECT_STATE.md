@@ -488,13 +488,16 @@ Executed using the verified AF-2 multi-agent architecture (parent mission `whats
 - State: IMPLEMENTED, REVIEWED, SCOPE_VERIFIED, and CONSOLIDATED into `feat/whatsapp-pilot-readiness`. AF-3 remains unstarted and unauthorized. Zero staging or production mutations.
 
 ### PR Preview Image Workflow (IMPLEMENTED, PENDING INDEPENDENT REVIEW)
-Executed on branch `feat/pr-preview-image-workflow` branched from canonical `main`:
+Executed on branch `feat/pr-preview-image-workflow` (PR #21) branched from canonical `main`:
 - Added `.github/workflows/preview-image.yml` providing an isolated, safe, non-production container image workflow for staging validation of open Pull Requests.
-- Added `tools/deploy/require_pr_ci_success.mjs` and 18 unit tests in `tools/deploy/require_pr_ci_success.test.mjs` verifying:
+- Added `tools/deploy/require_pr_ci_success.mjs` and 26 unit tests in `tools/deploy/require_pr_ci_success.test.mjs` verifying:
   - PR must belong to canonical repository (`ricardors081/tapjob`), rejecting external forks for preview security;
+  - PR must target canonical base branch `main` (`pr.base.ref == "main"`), rejecting PRs targeting any other base branch;
   - PR must be in `open` state;
   - Resolves PR number -> exact remote HEAD commit SHA from GitHub API;
   - Proves the exact commit's own CI run completed with conclusion `success`;
+  - TOCTOU build-time verification (`--verify-head`) immediately before building re-fetches PR metadata from GitHub and asserts `CURRENT_REMOTE_PR_HEAD == PREFLIGHT_VERIFIED_PR_HEAD_SHA`, failing closed if the remote PR HEAD moved after preflight;
+  - Workflow step summary emits `PREFLIGHT_VERIFIED_HEAD`, `BUILD_TIME_REMOTE_HEAD`, and `HEADS_MATCH=YES`;
   - Non-production image tagging (`pr-<num>-sha-<shortsha>`, `pr-<num>-preview`) and labels (`tapjob.preview_only=true`, `tapjob.production_promotion_allowed=false`).
 - Updated `docs/DEPLOYMENT.md` §3.2 documenting PR preview image invariants.
 - Updated `.github/workflows/ci.yml` `deploy-contract` job to run the PR preview CI gate unit tests.

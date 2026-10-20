@@ -7,6 +7,7 @@ import {
   evaluatePrCiRequirement,
   validatePrPayload,
   validateWorkflowRunShape,
+  verifyPrHeadMatch,
 } from "./require_pr_ci_success.mjs";
 
 const REPO = "ricardors081/tapjob";
@@ -20,6 +21,7 @@ function makePr({
   sha = SHA,
   headRepo = REPO,
   baseRepo = REPO,
+  baseRef = "main",
 } = {}) {
   return {
     number,
@@ -29,6 +31,7 @@ function makePr({
       repo: { full_name: headRepo },
     },
     base: {
+      ref: baseRef,
       repo: { full_name: baseRepo },
     },
   };
@@ -78,6 +81,28 @@ describe("validatePrPayload", () => {
     const res = validatePrPayload(pr, { expectedRepo: REPO });
     assert.equal(res.ok, false);
     assert.match(res.problems[0], /must be a 40-character commit hex string/);
+  });
+
+  test("non-main base branch fails closed", () => {
+    const pr = makePr({ baseRef: "develop" });
+    const res = validatePrPayload(pr, { expectedRepo: REPO, expectedBaseRef: "main" });
+    assert.equal(res.ok, false);
+    assert.match(res.problems[0], /base branch must be 'main', got 'develop'/);
+  });
+
+  test("mismatched base repository fails closed", () => {
+    const pr = makePr({ baseRepo: "attacker/tapjob" });
+    const res = validatePrPayload(pr, { expectedRepo: REPO });
+    assert.equal(res.ok, false);
+    assert.match(res.problems[0], /base repository \('attacker\/tapjob'\) does not match canonical repository/);
+  });
+
+  test("missing pr.base fails closed", () => {
+    const pr = makePr();
+    delete pr.base;
+    const res = validatePrPayload(pr, { expectedRepo: REPO });
+    assert.equal(res.ok, false);
+    assert.match(res.problems[0], /pr\.base must be an object/);
   });
 });
 
@@ -191,5 +216,63 @@ describe("buildPrApiArgs & buildWorkflowRunsApiArgs", () => {
     assert.ok(args.includes("GET"));
     assert.ok(args.includes(`repos/${REPO}/actions/workflows/ci.yml/runs`));
     assert.ok(args.includes(`head_sha=${SHA}`));
+  });
+});
+
+describe("verifyPrHeadMatch (TOCTOU guard)", () => {
+  test("passes when current remote PR HEAD equals preflight SHA", () => {
+    const pr = makePr({ sha: SHA });
+    const res = verifyPrHeadMatch(pr, SHA, {
+      expectedRepo: REPO,
+      expectedPrNumber: PR_NUM,
+      expectedBaseRef: "main",
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.headsMatch, true);
+    assert.equal(res.preflightVerifiedHead, SHA);
+    assert.equal(res.buildTimeRemoteHead, SHA);
+    assert.match(res.reason, /remote HEAD matches preflight-verified commit/);
+  });
+
+  test("fails closed when current remote PR HEAD moved after preflight", () => {
+    const pr = makePr({ sha: OTHER_SHA });
+    const res = verifyPrHeadMatch(pr, SHA, {
+      expectedRepo: REPO,
+      expectedPrNumber: PR_NUM,
+      expectedBaseRef: "main",
+    });
+    assert.equal(res.ok, false);
+    assert.equal(res.headsMatch, false);
+    assert.equal(res.preflightVerifiedHead, SHA);
+    assert.equal(res.buildTimeRemoteHead, OTHER_SHA);
+    assert.match(res.reason, /TOCTOU check failed: PR #20 remote HEAD moved/);
+  });
+
+  test("fails closed if PR was closed after preflight", () => {
+    const pr = makePr({ state: "closed", sha: SHA });
+    const res = verifyPrHeadMatch(pr, SHA, { expectedRepo: REPO, expectedPrNumber: PR_NUM });
+    assert.equal(res.ok, false);
+    assert.equal(res.headsMatch, false);
+    assert.match(res.reason, /must be in 'open' state/);
+  });
+
+  test("fails closed if PR base branch is not main", () => {
+    const pr = makePr({ baseRef: "feature-branch", sha: SHA });
+    const res = verifyPrHeadMatch(pr, SHA, {
+      expectedRepo: REPO,
+      expectedPrNumber: PR_NUM,
+      expectedBaseRef: "main",
+    });
+    assert.equal(res.ok, false);
+    assert.equal(res.headsMatch, false);
+    assert.match(res.reason, /base branch must be 'main'/);
+  });
+
+  test("fails closed on repo mismatch", () => {
+    const pr = makePr({ headRepo: "other/repo", sha: SHA });
+    const res = verifyPrHeadMatch(pr, SHA, { expectedRepo: REPO, expectedPrNumber: PR_NUM });
+    assert.equal(res.ok, false);
+    assert.equal(res.headsMatch, false);
+    assert.match(res.reason, /Fork builds are rejected for preview security/);
   });
 });

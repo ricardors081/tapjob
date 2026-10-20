@@ -1,13 +1,16 @@
 #!/usr/bin/env node
-// Verifies that a specific Pull Request belongs to the canonical repository, is currently open,
-// resolves its exact remote HEAD commit SHA, and proves that exact commit's own CI run completed
-// with SUCCESS.
+// Verifies that a specific Pull Request belongs to the canonical repository, targets canonical main,
+// is currently open, resolves its exact remote HEAD commit SHA, and proves that exact commit's own
+// CI run completed with SUCCESS.
+//
+// Also provides TOCTOU build-time verification (--verify-head) immediately before image build to
+// prove the remote PR HEAD has not moved since preflight.
 //
 // Designed strictly for .github/workflows/preview-image.yml to build non-production preview images
 // for controlled staging validation.
 //
-// Evaluates pure logic in evaluatePrCiRequirement and validatePrPayload for deterministic unit testing
-// without live network calls.
+// Evaluates pure logic in evaluatePrCiRequirement, validatePrPayload, and verifyPrHeadMatch for
+// deterministic unit testing without live network calls.
 
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
@@ -26,10 +29,13 @@ function describeType(value) {
  * Validates the exact shape of a GitHub Pull Request payload.
  *
  * @param {unknown} pr - parsed JSON from GET /repos/{owner}/{repo}/pulls/{pull_number}
- * @param {{ expectedRepo?: string, expectedPrNumber?: number }} [options]
+ * @param {{ expectedRepo?: string, expectedPrNumber?: number, expectedBaseRef?: string }} [options]
  * @returns {{ ok: boolean, problems: string[], headSha?: string }}
  */
-export function validatePrPayload(pr, { expectedRepo, expectedPrNumber } = {}) {
+export function validatePrPayload(
+  pr,
+  { expectedRepo, expectedPrNumber, expectedBaseRef = "main" } = {},
+) {
   const problems = [];
   if (typeof pr !== "object" || pr === null) {
     return { ok: false, problems: [`PR payload must be an object, got ${describeType(pr)}`] };
@@ -46,6 +52,26 @@ export function validatePrPayload(pr, { expectedRepo, expectedPrNumber } = {}) {
     problems.push(`PR #${prNum ?? "unknown"} must be in 'open' state, got '${pr.state}'`);
   }
 
+  const base = pr.base;
+  if (typeof base !== "object" || base === null) {
+    problems.push(`pr.base must be an object, got ${describeType(base)}`);
+  } else {
+    if (expectedBaseRef && base.ref !== expectedBaseRef) {
+      problems.push(
+        `PR #${prNum ?? "unknown"} base branch must be '${expectedBaseRef}', got '${base.ref}'`,
+      );
+    }
+
+    const baseRepo = base.repo;
+    if (typeof baseRepo !== "object" || baseRepo === null) {
+      problems.push(`pr.base.repo must be an object, got ${describeType(baseRepo)}`);
+    } else if (expectedRepo && baseRepo.full_name !== expectedRepo) {
+      problems.push(
+        `PR #${prNum ?? "unknown"} base repository ('${baseRepo.full_name}') does not match canonical repository ('${expectedRepo}')`,
+      );
+    }
+  }
+
   const head = pr.head;
   if (typeof head !== "object" || head === null) {
     problems.push(`pr.head must be an object, got ${describeType(head)}`);
@@ -59,7 +85,7 @@ export function validatePrPayload(pr, { expectedRepo, expectedPrNumber } = {}) {
       problems.push(`pr.head.repo must be an object, got ${describeType(headRepo)}`);
     } else if (expectedRepo && headRepo.full_name !== expectedRepo) {
       problems.push(
-        `PR #${prNum} head repository ('${headRepo.full_name}') does not match canonical repository ('${expectedRepo}'). Fork builds are rejected for preview security.`,
+        `PR #${prNum ?? "unknown"} head repository ('${headRepo.full_name}') does not match canonical repository ('${expectedRepo}'). Fork builds are rejected for preview security.`,
       );
     }
   }
@@ -100,11 +126,15 @@ export function validateWorkflowRunShape(run, index) {
  *
  * @param {unknown} prPayload
  * @param {unknown} workflowRuns
- * @param {{ expectedRepo?: string, expectedPrNumber?: number }} [options]
+ * @param {{ expectedRepo?: string, expectedPrNumber?: number, expectedBaseRef?: string }} [options]
  * @returns {{ ok: boolean, reason: string, prNumber?: number, headSha?: string, runNumber?: number, runId?: number }}
  */
-export function evaluatePrCiRequirement(prPayload, workflowRuns, { expectedRepo, expectedPrNumber } = {}) {
-  const prValidation = validatePrPayload(prPayload, { expectedRepo, expectedPrNumber });
+export function evaluatePrCiRequirement(
+  prPayload,
+  workflowRuns,
+  { expectedRepo, expectedPrNumber, expectedBaseRef = "main" } = {},
+) {
+  const prValidation = validatePrPayload(prPayload, { expectedRepo, expectedPrNumber, expectedBaseRef });
   if (!prValidation.ok) {
     return {
       ok: false,
@@ -167,6 +197,56 @@ export function evaluatePrCiRequirement(prPayload, workflowRuns, { expectedRepo,
   };
 }
 
+/**
+ * Pure evaluation function for TOCTOU build-time re-check.
+ * Proves that remote PR HEAD has not moved since preflight verification.
+ *
+ * @param {unknown} prPayload
+ * @param {string} expectedHeadSha
+ * @param {{ expectedRepo?: string, expectedPrNumber?: number, expectedBaseRef?: string }} [options]
+ * @returns {{ ok: boolean, headsMatch: boolean, reason: string, prNumber?: number, preflightVerifiedHead: string, buildTimeRemoteHead?: string }}
+ */
+export function verifyPrHeadMatch(
+  prPayload,
+  expectedHeadSha,
+  { expectedRepo, expectedPrNumber, expectedBaseRef = "main" } = {},
+) {
+  const prValidation = validatePrPayload(prPayload, {
+    expectedRepo,
+    expectedPrNumber,
+    expectedBaseRef,
+  });
+  if (!prValidation.ok) {
+    return {
+      ok: false,
+      headsMatch: false,
+      preflightVerifiedHead: expectedHeadSha,
+      buildTimeRemoteHead: prPayload?.head?.sha,
+      reason: `PR validation failed (fail-closed): ${prValidation.problems.join("; ")}`,
+    };
+  }
+
+  const currentHeadSha = prValidation.headSha;
+  if (currentHeadSha !== expectedHeadSha) {
+    return {
+      ok: false,
+      headsMatch: false,
+      preflightVerifiedHead: expectedHeadSha,
+      buildTimeRemoteHead: currentHeadSha,
+      reason: `TOCTOU check failed: PR #${prPayload.number} remote HEAD moved from ${expectedHeadSha} to ${currentHeadSha} after preflight`,
+    };
+  }
+
+  return {
+    ok: true,
+    headsMatch: true,
+    prNumber: prPayload.number,
+    preflightVerifiedHead: expectedHeadSha,
+    buildTimeRemoteHead: currentHeadSha,
+    reason: `PR #${prPayload.number} remote HEAD matches preflight-verified commit ${expectedHeadSha}`,
+  };
+}
+
 export function buildPrApiArgs(prNumber, repo) {
   return [
     "api",
@@ -207,13 +287,78 @@ function fetchWorkflowRuns(sha, repo) {
 }
 
 export function main() {
+  if (process.argv[2] === "--verify-head") {
+    const prNumberArg = process.argv[3];
+    const repo = process.argv[4];
+    const expectedHeadSha = process.argv[5];
+    const outputPath = process.argv[6];
+    const prNumber = Number.parseInt(prNumberArg, 10);
+
+    if (
+      Number.isNaN(prNumber) ||
+      typeof repo !== "string" ||
+      repo.length === 0 ||
+      typeof expectedHeadSha !== "string" ||
+      expectedHeadSha.length === 0
+    ) {
+      console.error(
+        "REQUIRE PR CI SUCCESS: usage: node tools/deploy/require_pr_ci_success.mjs --verify-head <pr-number> <owner/repo> <expected-head-sha> [output-file]",
+      );
+      process.exitCode = 1;
+      return;
+    }
+
+    let pr;
+    try {
+      pr = fetchPr(prNumber, repo);
+    } catch (err) {
+      console.error(
+        `REQUIRE PR CI SUCCESS (TOCTOU): failed to fetch PR #${prNumber} from ${repo}: ${err.message}`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+
+    const check = verifyPrHeadMatch(pr, expectedHeadSha, {
+      expectedRepo: repo,
+      expectedPrNumber: prNumber,
+      expectedBaseRef: "main",
+    });
+
+    if (!check.ok) {
+      console.error(`REQUIRE PR CI SUCCESS (TOCTOU): FAIL (${check.reason})`);
+      console.error(`PREFLIGHT_VERIFIED_HEAD=${expectedHeadSha}`);
+      console.error(`BUILD_TIME_REMOTE_HEAD=${check.buildTimeRemoteHead ?? "unknown"}`);
+      console.error("HEADS_MATCH=NO");
+      process.exitCode = 1;
+      return;
+    }
+
+    console.log(`REQUIRE PR CI SUCCESS (TOCTOU): PASS (${check.reason})`);
+    console.log(`PREFLIGHT_VERIFIED_HEAD=${check.preflightVerifiedHead}`);
+    console.log(`BUILD_TIME_REMOTE_HEAD=${check.buildTimeRemoteHead}`);
+    console.log("HEADS_MATCH=YES");
+
+    if (outputPath && typeof outputPath === "string" && outputPath.length > 0) {
+      const lines = [
+        `preflight_verified_head=${check.preflightVerifiedHead}`,
+        `build_time_remote_head=${check.buildTimeRemoteHead}`,
+        "heads_match=true",
+      ].join("\n") + "\n";
+      appendFileSync(outputPath, lines, "utf8");
+    }
+    return;
+  }
+
+  // Preflight mode
   const prNumberArg = process.argv[2];
   const repo = process.argv[3];
+  const outputPath = process.argv[4];
   const prNumber = Number.parseInt(prNumberArg, 10);
 
   if (Number.isNaN(prNumber) || typeof repo !== "string" || repo.length === 0) {
     console.error(
-      "REQUIRE PR CI SUCCESS: usage: node tools/deploy/require_pr_ci_success.mjs <pr-number> <owner/repo>",
+      "REQUIRE PR CI SUCCESS: usage: node tools/deploy/require_pr_ci_success.mjs <pr-number> <owner/repo> [output-file]",
     );
     process.exitCode = 1;
     return;
@@ -228,7 +373,11 @@ export function main() {
     return;
   }
 
-  const prValidation = validatePrPayload(pr, { expectedRepo: repo, expectedPrNumber: prNumber });
+  const prValidation = validatePrPayload(pr, {
+    expectedRepo: repo,
+    expectedPrNumber: prNumber,
+    expectedBaseRef: "main",
+  });
   if (!prValidation.ok) {
     console.error(`REQUIRE PR CI SUCCESS: FAIL (${prValidation.problems.join("; ")})`);
     process.exitCode = 1;
@@ -246,7 +395,11 @@ export function main() {
     return;
   }
 
-  const evaluation = evaluatePrCiRequirement(pr, workflowRuns, { expectedRepo: repo, expectedPrNumber: prNumber });
+  const evaluation = evaluatePrCiRequirement(pr, workflowRuns, {
+    expectedRepo: repo,
+    expectedPrNumber: prNumber,
+    expectedBaseRef: "main",
+  });
   if (!evaluation.ok) {
     console.error(`REQUIRE PR CI SUCCESS: FAIL (${evaluation.reason})`);
     process.exitCode = 1;
@@ -260,7 +413,6 @@ export function main() {
   console.log("PREVIEW_ONLY=YES");
   console.log("PRODUCTION_PROMOTION_ALLOWED=NO");
 
-  const outputPath = process.argv[4];
   if (outputPath && typeof outputPath === "string" && outputPath.length > 0) {
     const lines = [
       `pr_number=${evaluation.prNumber}`,
