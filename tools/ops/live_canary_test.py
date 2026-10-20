@@ -27,6 +27,7 @@ VERIFICATION REQUIREMENTS (WP-PILOT-2):
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import os
@@ -79,7 +80,13 @@ def mask_phone(phone: str | None) -> str:
 
 def _emit(line: str = "") -> None:
     """Emits output line to stdout."""
-    sys.stdout.write(f"{line}\n")
+    try:
+        sys.stdout.write(f"{line}\n")
+    except UnicodeEncodeError:
+        safe_line = line.encode(sys.stdout.encoding or "utf-8", errors="replace").decode(
+            sys.stdout.encoding or "utf-8", errors="replace"
+        )
+        sys.stdout.write(f"{safe_line}\n")
     sys.stdout.flush()
 
 
@@ -1244,4 +1251,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    if sys.platform == "win32":
+        with contextlib.suppress(Exception):
+            if hasattr(sys.stdout, "reconfigure"):
+                sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.exit(main())

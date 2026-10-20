@@ -646,3 +646,192 @@ def test_dispatch_inbound_kit_delivery_idempotency_and_multipart_keys(
         assert key == f"kit_apply_multipart_77_part{idx + 1}"
         assert queued_messages[idx].idempotency_key == key
         assert len(queued_messages[idx].message_text) <= 1500
+
+
+def test_candidate_text_experience_stages_ready_for_review_candidates(
+    mock_session: MagicMock,
+) -> None:
+    """Turn 2: Candidate text experience stages ResumeImport in READY_FOR_REVIEW with candidates."""
+    from tapjob_api.resume_import.models import ImportStatus, ResumeImport, ResumeImportCandidate
+
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock()
+    link.id = uuid.uuid4()
+    link.user_id = user.id
+
+    staged_items: list[Any] = []
+    mock_session.add = MagicMock(side_effect=staged_items.append)
+    mock_session.scalars.return_value.all.return_value = []
+
+    text_msg = (
+        "Tenho 5 anos de experiência como Desenvolvedor Python e trabalho com "
+        "FastAPI, PostgreSQL e Docker na AWS."
+    )
+    inbound = _make_inbound(text_msg, msg_id="exp_turn_2")
+
+    queued_messages: list[MagicMock] = []
+
+    def fake_queue(
+        session: Session,
+        *,
+        channel_identity_link_id: Any,
+        recipient_external_id: str,
+        message_text: str,
+        idempotency_key: str,
+    ) -> MagicMock:
+        mock_msg = MagicMock()
+        mock_msg.message_text = message_text
+        mock_msg.idempotency_key = idempotency_key
+        queued_messages.append(mock_msg)
+        return mock_msg
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue,
+        ),
+    ):
+        keys = dispatch_inbound_message(
+            mock_session,
+            redis_client=None,
+            inbound=inbound,
+            provider_id=uuid.uuid4(),
+        )
+
+    assert len(keys) == 1
+    assert "exp_text_exp_turn_2" in keys[0]
+    expected_msg = "Recebemos suas experiências profissionais com sucesso!"
+    assert expected_msg in queued_messages[0].message_text
+    assert "Competências identificadas:" in queued_messages[0].message_text
+
+    # Verify that ResumeImport was created with READY_FOR_REVIEW
+    imports = [item for item in staged_items if isinstance(item, ResumeImport)]
+    assert len(imports) == 1
+    assert imports[0].status == ImportStatus.READY_FOR_REVIEW
+    assert imports[0].user_id == user.id
+
+    # Verify that ResumeImportCandidates were created for skills
+    candidates = [item for item in staged_items if isinstance(item, ResumeImportCandidate)]
+    assert len(candidates) >= 5  # Python, FastAPI, PostgreSQL, Docker, AWS + headline
+    skill_names = {c.value_json.get("name") for c in candidates if c.candidate_kind == "skill"}
+    assert "Python" in skill_names
+    assert "FastAPI" in skill_names
+    assert "Docker" in skill_names
+
+
+def test_job_url_intake_falls_back_to_text_when_url_fails(mock_session: MagicMock) -> None:
+    """Turn 4: When job URL fetch fails with 404, falls back to ingesting text in the message."""
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock()
+    link.id = uuid.uuid4()
+    link.user_id = user.id
+
+    job_text = (
+        "Vaga: Desenvolvedor Python Pleno na TechCorp. "
+        "Requisitos: Python, FastAPI, Docker, microsserviços. "
+        "Link: https://jobs.lever.co/techcorp/python-pleno"
+    )
+    inbound = _make_inbound(job_text, msg_id="job_turn_4")
+
+    queued_messages: list[MagicMock] = []
+
+    def fake_queue(
+        session: Session,
+        *,
+        channel_identity_link_id: Any,
+        recipient_external_id: str,
+        message_text: str,
+        idempotency_key: str,
+    ) -> MagicMock:
+        mock_msg = MagicMock()
+        mock_msg.message_text = message_text
+        mock_msg.idempotency_key = idempotency_key
+        queued_messages.append(mock_msg)
+        return mock_msg
+
+    fake_ingested = {
+        "job_id": str(uuid.uuid4()),
+        "title": "Desenvolvedor Python Pleno",
+        "company": "TechCorp",
+    }
+    fake_match = {
+        "overall_score": 88,
+        "eligibility": "HIGH",
+    }
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.tool_ingest_job_url",
+            side_effect=RuntimeError("404 Client Error: Not Found"),
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.tool_ingest_job_text",
+            return_value=fake_ingested,
+        ) as mock_ingest_text,
+        patch(
+            "tapjob_api.messaging.orchestration.tool_match_job",
+            return_value=fake_match,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue,
+        ),
+    ):
+        keys = dispatch_inbound_message(
+            mock_session,
+            redis_client=None,
+            inbound=inbound,
+            provider_id=uuid.uuid4(),
+        )
+
+    assert len(keys) == 1
+    assert mock_ingest_text.called
+    expected_vaga = "Vaga analisada: Desenvolvedor Python Pleno (TechCorp)."
+    assert expected_vaga in queued_messages[0].message_text
+    assert "Match Score WP2.2: 88/100 (HIGH)." in queued_messages[0].message_text
+
+
+def test_privacy_intent_and_pasted_job_text_heuristics() -> None:
+    """Verifies that privacy detection and pasted job text heuristics avoid false positives."""
+    from tapjob_api.messaging.orchestration import is_pasted_job_text, is_privacy_intent
+
+    # Turn 2 text should NOT be detected as a pasted job text
+    turn_2_text = (
+        "Tenho 5 anos de experiência como Desenvolvedor Python e trabalho com "
+        "FastAPI, PostgreSQL e Docker na AWS."
+    )
+    assert not is_pasted_job_text(turn_2_text)
+
+    # Real job text SHOULD be detected as a pasted job text
+    real_job = (
+        "Vaga: Desenvolvedor Python Pleno na TechCorp.\n"
+        "Requisitos: 3 anos de experiência em Python, Docker, microsserviços.\n"
+        "Benefícios: Plano de saúde, VR, modelo remoto."
+    )
+    assert is_pasted_job_text(real_job)
+
+    # Turn 3 text should NOT be detected as a privacy inquiry
+    turn_3_text = "tudo certo, pode salvar meus dados"
+    assert not is_privacy_intent(turn_3_text)
+
+    # Explicit privacy inquiry SHOULD be detected
+    assert is_privacy_intent("privacidade")
+    assert is_privacy_intent("política de privacidade")
+    assert is_privacy_intent("excluir meus dados")
+    assert is_privacy_intent("apagar dados")

@@ -15,6 +15,7 @@ Coordinates conversational flows for candidate interactions:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import re
 import uuid
@@ -28,6 +29,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from tapjob_api.career_profile.fact_values import SkillFactValue
 from tapjob_api.career_profile.service import get_truth_snapshot
 from tapjob_api.identity.models import User, UserStatus
 from tapjob_api.jobs.models import Job
@@ -65,6 +67,8 @@ from tapjob_api.messaging.natural_language import (
     extract_skills_from_text,
     extract_urls,
     interpret_conversational_message,
+    is_candidate_text_experience,
+    is_pasted_job_text_normalized,
     normalize_text,
 )
 from tapjob_api.messaging.outbox import OutboundMessageQueue
@@ -78,6 +82,7 @@ from tapjob_api.messaging.service import (
 from tapjob_api.ports._common import CallContext, PortError
 from tapjob_api.ports.messaging_channel import InboundMessage, MessagingChannel
 from tapjob_api.resume_import import service as resume_import_service
+from tapjob_api.resume_import.candidates import CandidateKind
 from tapjob_api.resume_import.commands import CandidateReviewDecision, ReviewDecisionKind
 from tapjob_api.resume_import.errors import (
     DocumentTooLargeError,
@@ -96,6 +101,7 @@ from tapjob_api.resume_import.models import (
     ImportFailureCode,
     ImportStatus,
     ResumeImport,
+    ResumeImportCandidate,
     ResumeVersion,
 )
 from tapjob_api.resume_import.service import _FAILURE_CODE_BY_ERROR
@@ -258,36 +264,38 @@ def reconcile_reserved_resume_import(
 
 def is_pasted_job_text(text: str) -> bool:
     """Detects if inbound text represents a pasted job description."""
-    lower = text.lower()
-    return (
-        lower.startswith("vaga:")
-        or lower.startswith("oportunidade:")
-        or (
-            len(text) > 80
-            and any(
-                term in lower
-                for term in (
-                    "requisitos",
-                    "responsabilidades",
-                    "benefícios",
-                    "senior",
-                    "desenvolvedor",
-                    "engenheiro",
-                )
-            )
-        )
-    )
+    norm = normalize_text(text)
+    if is_candidate_text_experience(norm, len(text)):
+        return False
+    return is_pasted_job_text_normalized(norm, len(text))
 
 
 def is_privacy_intent(text: str) -> bool:
     """Detects explicit privacy / LGPD / data-rights intent.
 
     Must NOT match generic mentions of 'política' (such as 'política de benefícios',
-    'política de trabalho remoto', or 'política comercial') found in job descriptions.
+    'política de trabalho remoto', or 'política comercial') found in job descriptions,
+    nor messages where the user is saving, confirming, or updating profile facts.
     """
     clean_text = text.lower().strip()
     norm = re.sub(r"[^\w\s]", " ", clean_text)
     norm = " ".join(norm.split())
+
+    # Messages saving, confirming or updating candidate facts must NEVER be hijacked
+    if any(
+        w in norm
+        for w in (
+            "salvar",
+            "salve",
+            "confirmar",
+            "confirma",
+            "gravar",
+            "guardar",
+            "tudo certo",
+            "pode salvar",
+        )
+    ):
+        return False
 
     # Standalone or explicit privacy commands
     explicit_commands = {
@@ -352,7 +360,7 @@ def is_privacy_intent(text: str) -> bool:
         if "privacidade" in tokens or "lgpd" in tokens:
             return True
         if "dados" in tokens and any(
-            w in tokens for w in ("excluir", "apagar", "deletar", "remover", "meus")
+            w in tokens for w in ("excluir", "apagar", "deletar", "remover")
         ):
             return True
 
@@ -1231,7 +1239,16 @@ def dispatch_inbound_message(
     if intent in (
         ConversationalIntent.PRIVACY_INQUIRY,
         ConversationalIntent.DELETION_REQUEST,
-    ) or is_privacy_intent(text):
+    ) or (
+        is_privacy_intent(text)
+        and intent
+        not in (
+            ConversationalIntent.FACT_CONFIRM_ALL,
+            ConversationalIntent.FACT_REJECT_ALL,
+            ConversationalIntent.FACT_SINGLE_ACTION,
+            ConversationalIntent.TEXT_EXPERIENCE,
+        )
+    ):
         deletion_words = ("excluir", "apagar", "remover", "deletar", "exclusao", "exclusão")
         if intent == ConversationalIntent.DELETION_REQUEST or any(
             w in lower_text for w in deletion_words
@@ -1779,10 +1796,71 @@ def dispatch_inbound_message(
                     "orchestration.job_url_failed",
                     extra={"user_id": str(user.id), "error": str(exc)},
                 )
-                response_text = (
-                    "Recebemos seu link de vaga, mas não foi possível processá-lo no momento. "
-                    "Verifique se o link está acessível."
-                )
+                # Resilient fallback: if the URL failed (e.g. 404, network error),
+                # but the message itself contains job description details,
+                # ingest the textual description so matching and application kit can proceed.
+                text_without_url = text.replace(job_url, "").strip()
+                if len(text_without_url) > 20 and any(
+                    term in text_without_url.lower()
+                    for term in (
+                        "vaga",
+                        "requisitos",
+                        "desenvolvedor",
+                        "analista",
+                        "engenheiro",
+                        "techcorp",
+                        "pleno",
+                        "senior",
+                        "junior",
+                    )
+                ):
+                    try:
+                        clean_text = (
+                            text_without_url.split(":", 1)[1].strip()
+                            if ":" in text_without_url[:15]
+                            else text_without_url
+                        )
+                        first_line = clean_text.splitlines()[0][:60]
+                        title = first_line if len(first_line) > 5 else "Oportunidade Profissional"
+                        company = "Empresa"
+                        for sep in (" na ", " no ", " em "):
+                            if sep in title:
+                                parts = title.split(sep, 1)
+                                title = parts[0].strip()
+                                company = parts[1].split(".")[0].strip()
+                                break
+
+                        job_info = tool_ingest_job_text(
+                            session,
+                            user=user,
+                            text=clean_text,
+                            title_hint=title,
+                            company_hint=company,
+                        )
+                        job_id = uuid.UUID(job_info["job_id"])
+                        match_info = tool_match_job(session, redis_client, user=user, job_id=job_id)
+                        overall = match_info["overall_score"]
+                        eligibility = match_info["eligibility"]
+                        response_text = (
+                            f"Vaga analisada: {job_info['title']} ({job_info['company']}).\n"
+                            f"Match Score WP2.2: {overall}/100 ({eligibility}).\n\n"
+                            "Deseja gerar o Application Kit completo para esta vaga? "
+                            "Envie: 'quero me candidatar'."
+                        )
+                    except Exception as fallback_exc:
+                        logger.warning(
+                            "orchestration.job_url_fallback_failed",
+                            extra={"user_id": str(user.id), "error": str(fallback_exc)},
+                        )
+                        response_text = (
+                            "Recebemos seu link de vaga, mas não foi possível "
+                            "processá-lo no momento. Verifique se o link está acessível."
+                        )
+                else:
+                    response_text = (
+                        "Recebemos seu link de vaga, mas não foi possível "
+                        "processá-lo no momento. Verifique se o link está acessível."
+                    )
 
             msg = queue_response_message(
                 session,
@@ -1794,7 +1872,94 @@ def dispatch_inbound_message(
             queued_keys.append(msg.idempotency_key)
             return queued_keys
 
-    # 5. Pasted Job Description intake
+    # 5. Candidate text experience intake (J-03)
+    if intent == ConversationalIntent.TEXT_EXPERIENCE:
+        portfolio_url = interpretation.extracted_entities.get("portfolio_url")
+        skills = extract_skills_from_text(text)
+        skills_str = ", ".join(skills) if skills else "Gerais"
+        if portfolio_url:
+            clean_headline = f"Portfólio / Perfil Online: {portfolio_url}"
+        else:
+            clean_headline = text.splitlines()[0][:60]
+
+        # Stage candidate facts in a reviewable ResumeImport for subsequent confirmation
+        try:
+            prev_imports = session.scalars(
+                select(ResumeImport).where(
+                    ResumeImport.user_id == user.id,
+                    ResumeImport.status == ImportStatus.READY_FOR_REVIEW,
+                )
+            ).all()
+            for pi in prev_imports:
+                pi.status = ImportStatus.FAILED
+                pi.failure_code = ImportFailureCode.NO_REVIEWABLE_CANDIDATES
+
+            text_bytes = text.encode("utf-8")
+            resume_import = ResumeImport(
+                id=uuid.uuid4(),
+                user_id=user.id,
+                status=ImportStatus.READY_FOR_REVIEW,
+                original_filename="experiencia_whatsapp.txt",
+                media_type="text/plain",
+                byte_size=len(text_bytes),
+                checksum_sha256=hashlib.sha256(text_bytes).hexdigest(),
+                storage_key=f"text_experience/{user.id}/{uuid.uuid4()}.txt",
+                parser_identity="whatsapp_conversational_parser",
+            )
+            session.add(resume_import)
+            session.flush()
+
+            for sk in skills:
+                skill_val = SkillFactValue(name=sk)
+                cand = ResumeImportCandidate(
+                    resume_import_id=resume_import.id,
+                    user_id=user.id,
+                    candidate_kind=CandidateKind.SKILL.value,
+                    value_json=skill_val.model_dump(mode="json", by_alias=True),
+                    confidence=1.0,
+                    source_excerpt=text[:150],
+                    review_state=CandidateReviewState.PENDING,
+                )
+                session.add(cand)
+
+            if clean_headline:
+                headline_cand = ResumeImportCandidate(
+                    resume_import_id=resume_import.id,
+                    user_id=user.id,
+                    candidate_kind=CandidateKind.HEADLINE.value,
+                    value_json={"kind": "headline", "text": clean_headline},
+                    confidence=1.0,
+                    source_excerpt=clean_headline[:150],
+                    review_state=CandidateReviewState.PENDING,
+                )
+                session.add(headline_cand)
+
+            session.commit()
+        except Exception as stage_exc:
+            session.rollback()
+            logger.warning(
+                "orchestration.text_experience_staging_failed",
+                extra={"user_id": str(user.id), "error": str(stage_exc)},
+            )
+
+        response_text = (
+            f"Recebemos suas experiências profissionais com sucesso!\n"
+            f"• Perfil / Resumo: {clean_headline}\n"
+            f"• Competências identificadas: {skills_str}\n\n"
+            "Deseja confirmar e adicionar essas informações ao seu perfil profissional?\n"
+            "Envie: 'pode confirmar' ou 'confirmar todos'."
+        )
+        msg = queue_response_message(
+            session,
+            channel_identity_link_id=link_id,
+            recipient_external_id=external_id,
+            message_text=response_text,
+            idempotency_key=f"exp_text_{inbound.provider_message_id}",
+        )
+        queued_keys.append(msg.idempotency_key)
+        return queued_keys
+
+    # 5.5 Pasted Job Description intake
     if intent == ConversationalIntent.JOB_TEXT_INTAKE or (
         is_pasted_job_text(text)
         and not any(
@@ -1837,32 +2002,6 @@ def dispatch_inbound_message(
             recipient_external_id=external_id,
             message_text=response_text,
             idempotency_key=f"job_paste_{inbound.provider_message_id}",
-        )
-        queued_keys.append(msg.idempotency_key)
-        return queued_keys
-
-    # 5.5 Candidate text experience intake (J-03)
-    if intent == ConversationalIntent.TEXT_EXPERIENCE:
-        portfolio_url = interpretation.extracted_entities.get("portfolio_url")
-        skills = extract_skills_from_text(text)
-        skills_str = ", ".join(skills) if skills else "Gerais"
-        if portfolio_url:
-            clean_headline = f"Portfólio / Perfil Online: {portfolio_url}"
-        else:
-            clean_headline = text.splitlines()[0][:60]
-        response_text = (
-            f"Recebemos suas experiências profissionais com sucesso!\n"
-            f"• Perfil / Resumo: {clean_headline}\n"
-            f"• Competências identificadas: {skills_str}\n\n"
-            "Deseja confirmar e adicionar essas informações ao seu perfil profissional?\n"
-            "Envie: 'pode confirmar' ou 'confirmar todos'."
-        )
-        msg = queue_response_message(
-            session,
-            channel_identity_link_id=link_id,
-            recipient_external_id=external_id,
-            message_text=response_text,
-            idempotency_key=f"exp_text_{inbound.provider_message_id}",
         )
         queued_keys.append(msg.idempotency_key)
         return queued_keys
