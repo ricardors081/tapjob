@@ -487,3 +487,26 @@ Executed using the verified AF-2 multi-agent architecture (parent mission `whats
 - Updated role profiles: `tools/agent_factory/profiles/channel_whatsapp_engineer.json` and `tools/agent_factory/profiles/release_platform_ops_engineer.json`.
 - State: IMPLEMENTED, REVIEWED, SCOPE_VERIFIED, and CONSOLIDATED into `feat/whatsapp-pilot-readiness`. AF-3 remains unstarted and unauthorized. Zero staging or production mutations.
 
+### PR Preview Image Workflow (IMPLEMENTED, PENDING INDEPENDENT REVIEW)
+Executed on branch `feat/pr-preview-image-workflow` (PR #21) branched from canonical `main`:
+- Added `.github/workflows/preview-image.yml` providing an isolated, safe, non-production container image workflow for staging validation of open Pull Requests.
+- Requires workflow dispatch strictly from canonical `refs/heads/main` (`github.ref == 'refs/heads/main'`), failing closed immediately on any other ref (mirroring `release-image.yml`).
+- Added `tools/deploy/require_pr_ci_success.mjs` and 26 unit tests in `tools/deploy/require_pr_ci_success.test.mjs` verifying:
+  - PR must belong to canonical repository (`ricardors081/tapjob`), rejecting external forks for preview security;
+  - PR must target canonical base branch `main` (`pr.base.ref == "main"`), rejecting PRs targeting any other base branch;
+  - PR must be in `open` state;
+  - Resolves PR number -> exact remote HEAD commit SHA from GitHub API;
+  - Proves the exact commit's own CI run completed with conclusion `success`;
+  - TOCTOU build-time verification (`--verify-head`) immediately before building re-fetches PR metadata from GitHub and asserts `CURRENT_REMOTE_PR_HEAD == PREFLIGHT_VERIFIED_PR_HEAD_SHA`, failing closed if the remote PR HEAD moved after preflight;
+  - Workflow step summary emits `PREFLIGHT_VERIFIED_HEAD`, `BUILD_TIME_REMOTE_HEAD`, `HEADS_MATCH=YES`, and `CONTROL_PLANE_SEPARATED=YES`;
+  - Non-production image tagging (`pr-<num>-sha-<shortsha>`, `pr-<num>-preview`) and labels (`tapjob.preview_only=true`, `tapjob.production_promotion_allowed=false`).
+- Control-plane vs target source separation:
+  - Preflight captures `control-plane-sha` directly from the actual checked-out HEAD working tree via `git rev-parse HEAD` and passes it to the build job;
+  - Build job checks out control plane into `_preview_control` and target PR into `_preview_source`;
+  - TOCTOU verification and node configuration execute strictly from `_preview_control`, enabling target PRs that lack preview tooling (such as PR #20) to validate and build cleanly;
+  - Docker build context (`_preview_source`) and Dockerfile (`_preview_source/infra/docker/backend.Dockerfile`) build strictly from target source.
+- Added `tools/deploy/preview_workflow_contract.test.mjs` (12 contract tests) verifying dispatch ref governance, static structure, and proving target PR lacking preview tooling succeeds structurally.
+- Updated `docs/DEPLOYMENT.md` §3.2 documenting PR preview image invariants.
+- Updated `.github/workflows/ci.yml` `deploy-contract` job to run both the PR preview CI gate unit tests and workflow contract tests.
+- Canonical production release workflow `.github/workflows/release-image.yml` remains completely unchanged.
+

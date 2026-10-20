@@ -1,0 +1,188 @@
+name: Build PR preview backend image
+
+# Non-production preview image workflow: builds and pushes an immutable preview container image
+# for controlled staging validation of an open Pull Request BEFORE merge.
+#
+# Governance & Invariants:
+# - Manual-only (workflow_dispatch) with explicit PR number.
+# - Requires workflow dispatch from canonical refs/heads/main (fails closed on any other ref).
+# - Validates PR belongs to the canonical repository (no external forks).
+# - Validates PR targets canonical base branch main (pr.base.ref == "main").
+# - Resolves PR number -> exact remote HEAD commit SHA from GitHub API.
+# - Requires the exact PR HEAD commit's CI run to have completed with SUCCESS.
+# - Enforces TOCTOU build-time verification re-checking remote PR HEAD before image build.
+# - Isolates control plane (_preview_control) from target PR source (_preview_source) so target
+#   PR is not required to contain preview workflow tooling.
+# - Captures CONTROL_PLANE_SHA from actual checked-out HEAD (git rev-parse HEAD).
+# - Clearly labels the resulting image as NON-PRODUCTION / PREVIEW ONLY.
+# - NEVER promotes or deploys to production.
+# - Leaves the official release-image.yml completely unchanged.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull Request number to build preview image for (e.g. 20)"
+        required: true
+        type: number
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/tapjob-backend
+
+concurrency:
+  group: preview-image-${{ inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Validate PR, resolve exact HEAD SHA, require CI success
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      pr-number: ${{ steps.verify.outputs.pr_number }}
+      pr-head-sha: ${{ steps.verify.outputs.pr_head_sha }}
+      short-sha: ${{ steps.short_sha.outputs.short_sha }}
+      control-plane-sha: ${{ steps.control_sha.outputs.control_plane_sha }}
+    steps:
+      - name: Require preview control plane dispatch from refs/heads/main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "This workflow may only be run against refs/heads/main; got '${{ github.ref }}'." >&2
+          echo "workflow_dispatch can be triggered via the API against any ref containing this" >&2
+          echo "workflow file -- this check enforces main even when the UI restriction is bypassed." >&2
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Capture actual checked-out control-plane commit SHA
+        id: control_sha
+        run: echo "control_plane_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Verify PR validity and require exact commit CI success
+        id: verify
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node tools/deploy/require_pr_ci_success.mjs "${{ inputs.pr_number }}" "${{ github.repository }}" "$GITHUB_OUTPUT"
+
+      - name: Compute short SHA for preview tag
+        id: short_sha
+        run: |
+          sha="${{ steps.verify.outputs.pr_head_sha }}"
+          echo "short_sha=${sha:0:7}" >> "$GITHUB_OUTPUT"
+
+  build-and-push:
+    name: Build preview image, push to GHCR by digest
+    needs: preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: read
+    env:
+      CONTROL_PLANE_SHA: ${{ needs.preflight.outputs.control-plane-sha }}
+      PR_HEAD_SHA: ${{ needs.preflight.outputs.pr-head-sha }}
+      PR_NUMBER: ${{ needs.preflight.outputs.pr-number }}
+      SHORT_SHA: ${{ needs.preflight.outputs.short-sha }}
+    steps:
+      - name: Checkout canonical control plane
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.CONTROL_PLANE_SHA }}
+          path: _preview_control
+
+      - name: Confirm control-plane checkout matches the pinned dispatch SHA
+        run: |
+          actual="$(git -C _preview_control rev-parse HEAD)"
+          if [ "$actual" != "$CONTROL_PLANE_SHA" ]; then
+            echo "control-plane commit ($actual) does not match dispatch commit ($CONTROL_PLANE_SHA)" >&2
+            exit 1
+          fi
+
+      - name: Checkout target PR source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.PR_HEAD_SHA }}
+          path: _preview_source
+
+      - name: Confirm target PR checkout matches the preflight verified SHA
+        run: |
+          actual="$(git -C _preview_source rev-parse HEAD)"
+          if [ "$actual" != "$PR_HEAD_SHA" ]; then
+            echo "checked-out commit ($actual) does not match preflight-verified commit ($PR_HEAD_SHA)" >&2
+            exit 1
+          fi
+
+      - name: Setup Node using control-plane configuration
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: _preview_control/.nvmrc
+
+      - name: Re-fetch PR metadata and verify HEAD has not moved (TOCTOU guard)
+        id: toctou_check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node _preview_control/tools/deploy/require_pr_ci_success.mjs --verify-head "${{ env.PR_NUMBER }}" "${{ github.repository }}" "${{ env.PR_HEAD_SHA }}" "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        id: meta
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=pr-${{ env.PR_NUMBER }}-sha-${{ env.SHORT_SHA }}
+            type=raw,value=pr-${{ env.PR_NUMBER }}-preview
+          labels: |
+            org.opencontainers.image.title=tapjob-backend-preview
+            org.opencontainers.image.description=TapJob Career Core backend preview image (NON-PRODUCTION / STAGING VALIDATION ONLY)
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ env.PR_HEAD_SHA }}
+            tapjob.environment=preview
+            tapjob.pr_number=${{ env.PR_NUMBER }}
+            tapjob.preview_only=true
+            tapjob.production_promotion_allowed=false
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        id: build
+        with:
+          context: _preview_source
+          file: _preview_source/infra/docker/backend.Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Record the immutable preview digest and security declarations
+        run: |
+          echo "## PR Preview Image" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **PR_NUMBER:** \`${{ env.PR_NUMBER }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **PR_HEAD_SHA:** \`${{ env.PR_HEAD_SHA }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **CONTROL_PLANE_SHA:** \`${{ env.CONTROL_PLANE_SHA }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **PREFLIGHT_VERIFIED_HEAD:** \`${{ steps.toctou_check.outputs.preflight_verified_head }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **BUILD_TIME_REMOTE_HEAD:** \`${{ steps.toctou_check.outputs.build_time_remote_head }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **HEADS_MATCH:** \`YES\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **CONTROL_PLANE_SEPARATED:** \`YES\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **CI_VERIFIED:** \`YES\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **IMAGE_NAME:** \`${{ env.IMAGE_NAME }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **IMAGE_DIGEST:** \`${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **PREVIEW_ONLY:** \`YES\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **PRODUCTION_PROMOTION_ALLOWED:** \`NO\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **STAGING_REFERENCE:** \`${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "NON-PRODUCTION ARTIFACT. For controlled staging validation only. Never deploy to production." >> "$GITHUB_STEP_SUMMARY"
