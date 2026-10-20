@@ -177,7 +177,14 @@ class EvolutionCanaryClient:
                 if isinstance(data, list):
                     return data
                 if isinstance(data, dict):
-                    records = data.get("messages") or data.get("records") or []
+                    msgs = data.get("messages")
+                    if isinstance(msgs, dict):
+                        records = msgs.get("records")
+                        if isinstance(records, list):
+                            return records
+                    elif isinstance(msgs, list):
+                        return msgs
+                    records = data.get("records")
                     if isinstance(records, list):
                         return records
                 return []
@@ -191,9 +198,17 @@ class EvolutionCanaryClient:
             logger.warning("Error fetching messages on %s: %s", instance_name, exc)
             return []
 
+    def get_recent_message_ids(self, instance_name: str, count: int = 20) -> set[str]:
+        """Fetches set of recent message IDs on an instance."""
+        if self.dry_run:
+            return set()
+        msgs = self.find_recent_messages(instance_name, count=count)
+        return {str(m.get("key", {}).get("id")) for m in msgs if m.get("key", {}).get("id")}
+
     def poll_reply_on_canary_client(
         self,
         since_timestamp_ms: int,
+        seen_message_ids: set[str] | None = None,
         timeout_sec: float = 15.0,
         poll_interval: float = 1.0,
         synthetic_dry_reply: str | None = None,
@@ -207,6 +222,8 @@ class EvolutionCanaryClient:
                 }
             return None
 
+        seen = seen_message_ids or set()
+        buffer_ms = since_timestamp_ms - 5000  # 5s clock skew tolerance
         deadline = time.time() + timeout_sec
         while time.time() < deadline:
             msgs = self.find_recent_messages(CANARY_CLIENT_INSTANCE, count=10)
@@ -214,10 +231,17 @@ class EvolutionCanaryClient:
                 key = m.get("key", {})
                 from_me = key.get("fromMe", False)
                 remote_jid = key.get("remoteJid", "")
-                msg_timestamp = m.get("messageTimestamp", 0)
+                remote_jid_alt = key.get("remoteJidAlt", "")
+                msg_id = str(key.get("id") or "")
+                msg_timestamp = int(m.get("messageTimestamp") or 0)
                 ts_ms = msg_timestamp * 1000 if msg_timestamp < 10000000000 else msg_timestamp
 
-                if not from_me and CANARY_BOT_PHONE in remote_jid and ts_ms >= since_timestamp_ms:
+                is_from_bot = not from_me and (
+                    CANARY_BOT_PHONE in remote_jid or CANARY_BOT_PHONE in remote_jid_alt
+                )
+                is_new = (msg_id not in seen) if seen else (ts_ms >= buffer_ms)
+
+                if is_from_bot and is_new:
                     return m
             time.sleep(poll_interval)
         return None
@@ -251,6 +275,30 @@ class CanaryDbVerifier:
             {"pattern": f"%{sender_digits}%"},
         ).fetchone()
         return str(row[0]) if row else None
+
+    def get_application_ids(self, user_id: str) -> set[str]:
+        """Returns set of application UUIDs for a given user."""
+        rows = self.session.execute(
+            sa.text("SELECT id FROM applications WHERE user_id = :uid"),
+            {"uid": user_id},
+        ).fetchall()
+        return {str(r[0]) for r in rows}
+
+    def get_kit_ids(self, user_id: str) -> set[str]:
+        """Returns set of application kit UUIDs for a given user."""
+        rows = self.session.execute(
+            sa.text("SELECT id FROM application_kits WHERE user_id = :uid"),
+            {"uid": user_id},
+        ).fetchall()
+        return {str(r[0]) for r in rows}
+
+    def get_reminder_ids(self, user_id: str) -> set[str]:
+        """Returns set of reminder UUIDs for a given user."""
+        rows = self.session.execute(
+            sa.text("SELECT id FROM reminders WHERE user_id = :uid"),
+            {"uid": user_id},
+        ).fetchall()
+        return {str(r[0]) for r in rows}
 
     def verify_envelope_processed(
         self,
@@ -455,10 +503,45 @@ class CanaryDbVerifier:
     def assert_invariants(
         self,
         sender_digits: str,
+        initial_app_ids: set[str] | None = None,
+        initial_kit_ids: set[str] | None = None,
+        initial_reminder_ids: set[str] | None = None,
         min_outbox_id: int = 0,
         min_envelope_id: int = 0,
     ) -> dict[str, int]:
-        """Asserts DUPLICATE_SIDE_EFFECTS=0, RECURSIVE_WHATSAPP_LOOPS=0, THIRD_PARTY_SENDS=0."""
+        """Asserts domain duplication, recursive loops, and third-party sends."""
+        user_id = self.resolve_user_id(sender_digits)
+
+        duplicate_applications = 0
+        duplicate_application_kits = 0
+        duplicate_reminders = 0
+
+        if user_id:
+            current_app_ids = self.get_application_ids(user_id)
+            new_app_ids = current_app_ids - (initial_app_ids or set())
+            duplicate_applications = max(0, len(new_app_ids) - 1)
+
+            current_kit_ids = self.get_kit_ids(user_id)
+            new_kit_ids = current_kit_ids - (initial_kit_ids or set())
+            duplicate_application_kits = max(0, len(new_kit_ids) - 1)
+
+            current_reminder_ids = self.get_reminder_ids(user_id)
+            new_reminder_ids = current_reminder_ids - (initial_reminder_ids or set())
+            duplicate_reminders = max(0, len(new_reminder_ids) - 1)
+
+        outbox_canary_sql = (
+            "SELECT count(*) FROM outbound_message_queue "
+            "WHERE message_content->>'recipient_external_id' LIKE :pattern"
+        )
+        params: dict[str, Any] = {"pattern": f"%{sender_digits}%"}
+        if min_outbox_id > 0:
+            outbox_canary_sql += " AND id > :min_out"
+            params["min_out"] = min_outbox_id
+        new_canary_outbox_count = (
+            self.session.execute(sa.text(outbox_canary_sql), params).scalar() or 0
+        )
+        duplicate_outbound = max(0, new_canary_outbox_count - len(CANARY_DIALOGUE_TURNS))
+
         user_count = (
             self.session.execute(
                 sa.text(
@@ -472,6 +555,14 @@ class CanaryDbVerifier:
             or 0
         )
         duplicate_users = max(0, user_count - 1)
+
+        duplicate_side_effects = (
+            duplicate_applications
+            + duplicate_application_kits
+            + duplicate_reminders
+            + duplicate_outbound
+            + duplicate_users
+        )
 
         # Measurable check for recursive loops: inbound envelopes from bot itself since canary start
         env_sql = (
@@ -497,7 +588,12 @@ class CanaryDbVerifier:
         unauthorized_outbox = self.session.execute(sa.text(outbox_sql), outbox_params).scalar() or 0
 
         return {
-            "duplicate_side_effects": duplicate_users,
+            "duplicate_applications": duplicate_applications,
+            "duplicate_application_kits": duplicate_application_kits,
+            "duplicate_reminders": duplicate_reminders,
+            "duplicate_outbound_effects": duplicate_outbound,
+            "duplicate_users": duplicate_users,
+            "duplicate_side_effects": duplicate_side_effects,
             "recursive_whatsapp_loops": bot_inbound_loops,
             "third_party_sends": unauthorized_outbox,
         }
@@ -616,7 +712,10 @@ CANARY_DIALOGUE_TURNS: list[dict[str, Any]] = [
         ),
         "domain_assertion": lambda v, phone, min_id: (
             lambda env, app: (
-                env["is_processed"] and env["intent_matched"] and app["has_application"],
+                env["is_processed"]
+                and env["intent_matched"]
+                and app["has_application"]
+                and app["has_kit"],
                 f"Envelope={env.get('envelope_id')}, routed={env.get('routed_intent')}, "
                 f"has_app={app.get('has_application')}, has_kit={app.get('has_kit')}",
             )
@@ -624,7 +723,7 @@ CANARY_DIALOGUE_TURNS: list[dict[str, Any]] = [
             v.verify_envelope_processed(
                 phone, expected_intent="APPLICATION_REQUEST", min_envelope_id=min_id
             ),
-            v.verify_application_state(phone),
+            v.verify_application_state(phone, require_kit=True),
         ),
     },
     {
@@ -776,12 +875,36 @@ def run_canary_suite(
 
     initial_outbox_id = 0
     initial_envelope_id = 0
-    if verifier is not None:
+    initial_app_ids: set[str] = set()
+    initial_kit_ids: set[str] = set()
+    initial_reminder_ids: set[str] = set()
+
+    if not client.dry_run:
+        if verifier is None:
+            raise RuntimeError(
+                "Database verification is mandatory for non-dry-run canary execution. Fail closed."
+            )
         try:
             initial_outbox_id = verifier.get_max_outbox_id()
             initial_envelope_id = verifier.get_max_envelope_id()
+            initial_uid = verifier.resolve_user_id(CANARY_CLIENT_PHONE)
+            if initial_uid:
+                initial_app_ids = verifier.get_application_ids(initial_uid)
+                initial_kit_ids = verifier.get_kit_ids(initial_uid)
+                initial_reminder_ids = verifier.get_reminder_ids(initial_uid)
         except Exception as exc:
-            logger.warning("Could not fetch initial outbox/envelope IDs: %s", exc)
+            raise RuntimeError(f"Fail-closed baseline capture failed: {exc}") from exc
+    elif verifier is not None:
+        try:
+            initial_outbox_id = verifier.get_max_outbox_id()
+            initial_envelope_id = verifier.get_max_envelope_id()
+            initial_uid = verifier.resolve_user_id(CANARY_CLIENT_PHONE)
+            if initial_uid:
+                initial_app_ids = verifier.get_application_ids(initial_uid)
+                initial_kit_ids = verifier.get_kit_ids(initial_uid)
+                initial_reminder_ids = verifier.get_reminder_ids(initial_uid)
+        except Exception as exc:
+            logger.warning("Could not fetch dry-run baseline: %s", exc)
 
     for idx, turn in enumerate(CANARY_DIALOGUE_TURNS, start=1):
         _emit(f"\n[{idx}/{len(CANARY_DIALOGUE_TURNS)}] Executing Turn: {turn['turn']}")
@@ -797,6 +920,8 @@ def run_canary_suite(
             except Exception:
                 min_env_id = None
 
+        seen_client_msg_ids = client.get_recent_message_ids(CANARY_CLIENT_INSTANCE)
+
         try:
             # 1. Dispatch outbound test message from canary client to TapJob
             send_res = client.send_text(
@@ -811,7 +936,8 @@ def run_canary_suite(
             # 2. Poll for bot reply reaching the canary client
             reply_record = client.poll_reply_on_canary_client(
                 since_timestamp_ms=t0_ms,
-                timeout_sec=8.0 if not client.dry_run else 0.1,
+                seen_message_ids=seen_client_msg_ids,
+                timeout_sec=15.0 if not client.dry_run else 0.1,
                 synthetic_dry_reply=turn.get("synthetic_dry_reply"),
             )
             if client.dry_run and not reply_record:
@@ -914,15 +1040,28 @@ def run_canary_suite(
             time.sleep(wait_seconds)
 
     # 5. Database Invariants Assertion
+    duplicate_applications = 0
+    duplicate_application_kits = 0
+    duplicate_reminders = 0
+    duplicate_outbound_effects = 0
+    duplicate_users = 0
     duplicate_side_effects = 0
     recursive_loops = 0
     third_party_sends = 0
     if verifier is not None:
         inv = verifier.assert_invariants(
             CANARY_CLIENT_PHONE,
+            initial_app_ids=initial_app_ids,
+            initial_kit_ids=initial_kit_ids,
+            initial_reminder_ids=initial_reminder_ids,
             min_outbox_id=initial_outbox_id,
             min_envelope_id=initial_envelope_id,
         )
+        duplicate_applications = inv["duplicate_applications"]
+        duplicate_application_kits = inv["duplicate_application_kits"]
+        duplicate_reminders = inv["duplicate_reminders"]
+        duplicate_outbound_effects = inv["duplicate_outbound_effects"]
+        duplicate_users = inv["duplicate_users"]
         duplicate_side_effects = inv["duplicate_side_effects"]
         recursive_loops = inv["recursive_whatsapp_loops"]
         third_party_sends = inv["third_party_sends"]
@@ -944,6 +1083,10 @@ def run_canary_suite(
     _emit(f" Domain Assertions  : {domain_assertions_passed}/{domain_total}")
     _emit(f" Total Assertions   : {assertions_passed}/{assertions_evaluated}")
     _emit(f" Total Time         : {total_elapsed:.2f}s")
+    _emit(f" Duplicate Apps     : {duplicate_applications}")
+    _emit(f" Duplicate Kits     : {duplicate_application_kits}")
+    _emit(f" Duplicate Reminders: {duplicate_reminders}")
+    _emit(f" Duplicate Outbound : {duplicate_outbound_effects}")
     _emit(f" Duplicate Effects  : {duplicate_side_effects}")
     _emit(f" Recursive Loops    : {recursive_loops}")
     _emit(f" Third-party Sends  : {third_party_sends} (GUARANTEED)")
@@ -977,6 +1120,11 @@ def run_canary_suite(
         "application_kit_state_verified": "YES" if t5_ok else "NO",
         "application_status_applied_verified": "YES" if t6_ok else "NO",
         "reminder_persistence_verified": "YES" if t7_ok else "NO",
+        "duplicate_applications": duplicate_applications,
+        "duplicate_application_kits": duplicate_application_kits,
+        "duplicate_reminders": duplicate_reminders,
+        "duplicate_outbound_effects": duplicate_outbound_effects,
+        "duplicate_users": duplicate_users,
         "duplicate_side_effects": duplicate_side_effects,
         "recursive_whatsapp_loops": recursive_loops,
         "third_party_sends": third_party_sends,
@@ -1076,7 +1224,18 @@ def main(argv: list[str] | None = None) -> int:
         if args.json:
             _emit(json.dumps(summary, indent=2))
 
-        return 0 if summary["successful_turns"] == summary["total_turns"] else 1
+        is_success = (
+            summary["successful_turns"] == summary["total_turns"]
+            and summary["failed_turns"] == 0
+            and summary["duplicate_side_effects"] == 0
+            and summary["recursive_whatsapp_loops"] == 0
+            and summary["third_party_sends"] == 0
+            and summary["live_reply_assertions_failed"] == 0
+            and summary["live_domain_assertions_failed"] == 0
+            and (summary["db_verifier_connected"] == "YES" if not args.dry_run else True)
+            and (summary["dry_run"] == "NO" if not args.dry_run else True)
+        )
+        return 0 if is_success else 1
     finally:
         if session is not None:
             session.close()

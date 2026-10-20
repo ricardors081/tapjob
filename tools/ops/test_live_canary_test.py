@@ -12,7 +12,7 @@ Verifies:
 from __future__ import annotations
 
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from tools.ops.live_canary_test import (
     CANARY_BOT_PHONE,
@@ -22,6 +22,7 @@ from tools.ops.live_canary_test import (
     EvolutionCanaryClient,
     enforce_canary_safety_gate,
     extract_message_text,
+    main,
     mask_phone,
     parse_args,
     run_canary_suite,
@@ -98,6 +99,7 @@ class TestCanaryDbVerifier(unittest.TestCase):
     def test_invariants_pass_when_clean(self) -> None:
         mock_session = MagicMock()
         mock_session.execute.return_value.scalar.side_effect = [
+            10,  # outbox_canary_count (10 responses for 10 turns = 0 duplicate outbound)
             1,  # user_count (1 user = 0 duplicates)
             0,  # bot_inbound_loops (0 loops)
             0,  # unauthorized_outbox (0 unauthorized sends)
@@ -111,6 +113,7 @@ class TestCanaryDbVerifier(unittest.TestCase):
     def test_invariants_detect_duplicate_and_unauthorized_sends(self) -> None:
         mock_session = MagicMock()
         mock_session.execute.return_value.scalar.side_effect = [
+            10,  # outbox_canary_count (10 responses = 0 duplicate outbound)
             3,  # user_count (3 users = 2 duplicates)
             2,  # bot_inbound_loops (2 loops detected)
             1,  # unauthorized_outbox (1 leak)
@@ -119,6 +122,39 @@ class TestCanaryDbVerifier(unittest.TestCase):
         inv = verifier.assert_invariants(CANARY_CLIENT_PHONE)
         self.assertEqual(inv["duplicate_side_effects"], 2)
         self.assertEqual(inv["recursive_whatsapp_loops"], 2)
+        self.assertEqual(inv["third_party_sends"], 1)
+
+    def test_invariants_measure_domain_duplicates(self) -> None:
+        mock_session = MagicMock()
+        verifier = CanaryDbVerifier(mock_session)
+        verifier.resolve_user_id = MagicMock(return_value="user-123")  # type: ignore[assignment]
+        verifier.get_application_ids = MagicMock(return_value={"app-1", "app-2"})  # type: ignore[assignment]
+        verifier.get_kit_ids = MagicMock(return_value={"kit-1", "kit-2"})  # type: ignore[assignment]
+        verifier.get_reminder_ids = MagicMock(return_value={"rem-1", "rem-2"})  # type: ignore[assignment]
+
+        mock_session.execute.return_value.scalar.side_effect = [
+            12,  # outbox_canary_count (12 responses for 10 turns = 2 duplicate outbound)
+            2,  # user_count (2 users linked = 1 duplicate user)
+            1,  # bot_inbound_loops (1 loop)
+            1,  # unauthorized_outbox (1 leak)
+        ]
+
+        inv = verifier.assert_invariants(
+            CANARY_CLIENT_PHONE,
+            initial_app_ids={"app-0"},
+            initial_kit_ids=set(),
+            initial_reminder_ids=set(),
+            min_outbox_id=10,
+            min_envelope_id=5,
+        )
+
+        self.assertEqual(inv["duplicate_applications"], 1)
+        self.assertEqual(inv["duplicate_application_kits"], 1)
+        self.assertEqual(inv["duplicate_reminders"], 1)
+        self.assertEqual(inv["duplicate_outbound_effects"], 2)
+        self.assertEqual(inv["duplicate_users"], 1)
+        self.assertEqual(inv["duplicate_side_effects"], 6)
+        self.assertEqual(inv["recursive_whatsapp_loops"], 1)
         self.assertEqual(inv["third_party_sends"], 1)
 
 
@@ -150,11 +186,106 @@ class TestLiveCanaryExecution(unittest.TestCase):
             self.assertTrue(r["domain_asserted"])
             self.assertTrue(r["provider_message_id"].startswith("dry_msg_"))
 
+    def test_turn_5_domain_assertion_requires_application_and_kit(self) -> None:
+        turn_5 = CANARY_DIALOGUE_TURNS[4]
+        self.assertEqual(turn_5["turn"], "5. CONVERSATIONAL APPLICATION REQUEST")
+
+        mock_verifier = MagicMock()
+        mock_verifier.verify_envelope_processed.return_value = {
+            "is_processed": True,
+            "intent_matched": True,
+            "envelope_id": 10,
+            "routed_intent": "APPLICATION_REQUEST",
+        }
+
+        # Case A: Application exists, but has_kit is False => MUST FAIL
+        mock_verifier.verify_application_state.return_value = {
+            "has_application": True,
+            "has_kit": False,
+        }
+        passed, detail = turn_5["domain_assertion"](mock_verifier, CANARY_CLIENT_PHONE, 1)
+        self.assertFalse(passed)
+        self.assertIn("has_kit=False", detail)
+
+        # Case B: Application exists, and has_kit is True => MUST PASS
+        mock_verifier.verify_application_state.return_value = {
+            "has_application": True,
+            "has_kit": True,
+        }
+        passed, detail = turn_5["domain_assertion"](mock_verifier, CANARY_CLIENT_PHONE, 1)
+        self.assertTrue(passed)
+        self.assertIn("has_kit=True", detail)
+
     def test_non_dry_run_fails_closed_without_verifier(self) -> None:
         client = EvolutionCanaryClient(dry_run=False, api_token="test_token")  # noqa: S106
         with self.assertRaises(RuntimeError) as ctx:
             run_canary_suite(client, wait_seconds=0.0, verifier=None)
         self.assertIn("Database verification is mandatory", str(ctx.exception))
+
+    def test_non_dry_run_fails_closed_when_baseline_fails(self) -> None:
+        client = EvolutionCanaryClient(dry_run=False, api_token="test_token")  # noqa: S106
+        mock_verifier = MagicMock()
+        mock_verifier.get_max_outbox_id.side_effect = RuntimeError("DB error")
+
+        with self.assertRaises(RuntimeError) as ctx:
+            run_canary_suite(client, wait_seconds=0.0, verifier=mock_verifier)
+        self.assertIn("Fail-closed baseline capture failed", str(ctx.exception))
+
+    @patch("tools.ops.live_canary_test.run_canary_suite")
+    def test_main_safety_invariants_affect_exit_code(self, mock_suite: MagicMock) -> None:
+        base_summary = {
+            "successful_turns": 10,
+            "total_turns": 10,
+            "failed_turns": 0,
+            "duplicate_side_effects": 0,
+            "recursive_whatsapp_loops": 0,
+            "third_party_sends": 0,
+            "live_reply_assertions_failed": 0,
+            "live_domain_assertions_failed": 0,
+            "db_verifier_connected": "YES",
+            "dry_run": "YES",
+        }
+
+        # 1. Clean run exits 0
+        mock_suite.return_value = dict(base_summary)
+        self.assertEqual(main(["--dry-run"]), 0)
+
+        # 2. Duplicate side effects > 0 exits 1
+        s = dict(base_summary)
+        s["duplicate_side_effects"] = 1
+        mock_suite.return_value = s
+        self.assertEqual(main(["--dry-run"]), 1)
+
+        # 3. Recursive loops > 0 exits 1
+        s = dict(base_summary)
+        s["recursive_whatsapp_loops"] = 1
+        mock_suite.return_value = s
+        self.assertEqual(main(["--dry-run"]), 1)
+
+        # 4. Third-party sends > 0 exits 1
+        s = dict(base_summary)
+        s["third_party_sends"] = 1
+        mock_suite.return_value = s
+        self.assertEqual(main(["--dry-run"]), 1)
+
+        # 5. Failed reply assertions > 0 exits 1
+        s = dict(base_summary)
+        s["live_reply_assertions_failed"] = 1
+        mock_suite.return_value = s
+        self.assertEqual(main(["--dry-run"]), 1)
+
+        # 6. Failed domain assertions > 0 exits 1
+        s = dict(base_summary)
+        s["live_domain_assertions_failed"] = 1
+        mock_suite.return_value = s
+        self.assertEqual(main(["--dry-run"]), 1)
+
+        # 7. Failed turns > 0 exits 1
+        s = dict(base_summary)
+        s["successful_turns"] = 9
+        s["failed_turns"] = 1
+        mock_suite.return_value = s
+        self.assertEqual(main(["--dry-run"]), 1)
 
     def test_parse_args(self) -> None:
         args = parse_args(
