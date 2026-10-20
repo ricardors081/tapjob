@@ -234,6 +234,11 @@ class CanaryDbVerifier:
         val = self.session.execute(sa.text("SELECT max(id) FROM provider_event_envelopes")).scalar()
         return int(val) if val is not None else 0
 
+    def get_max_outbox_id(self) -> int:
+        """Returns highest outbox ID currently recorded."""
+        val = self.session.execute(sa.text("SELECT max(id) FROM outbound_message_queue")).scalar()
+        return int(val) if val is not None else 0
+
     def resolve_user_id(self, sender_digits: str) -> str | None:
         """Resolves user UUID via channel_identity_links joined with channel_identities."""
         row = self.session.execute(
@@ -377,8 +382,10 @@ class CanaryDbVerifier:
             }
         app_row = self.session.execute(
             sa.text(
-                "SELECT id, status, tailored_resume_id FROM applications "
-                "WHERE user_id = :uid ORDER BY updated_at DESC LIMIT 1"
+                "SELECT a.id, a.status, "
+                "(SELECT count(*) FROM application_kits k WHERE k.application_id = a.id) "
+                "FROM applications a "
+                "WHERE a.user_id = :uid ORDER BY a.updated_at DESC LIMIT 1"
             ),
             {"uid": uid},
         ).fetchone()
@@ -391,7 +398,8 @@ class CanaryDbVerifier:
                 "has_kit": False,
             }
         st = str(app_row[1]) if app_row[1] else None
-        has_kit = app_row[2] is not None
+        kit_count = int(app_row[2]) if app_row[2] is not None else 0
+        has_kit = kit_count > 0
         status_ok = True
         if expected_status is not None:
             status_ok = st == expected_status
@@ -444,7 +452,12 @@ class CanaryDbVerifier:
             time.sleep(interval_sec)
         return False, last_detail
 
-    def assert_invariants(self, sender_digits: str) -> dict[str, int]:
+    def assert_invariants(
+        self,
+        sender_digits: str,
+        min_outbox_id: int = 0,
+        min_envelope_id: int = 0,
+    ) -> dict[str, int]:
         """Asserts DUPLICATE_SIDE_EFFECTS=0, RECURSIVE_WHATSAPP_LOOPS=0, THIRD_PARTY_SENDS=0."""
         user_count = (
             self.session.execute(
@@ -460,27 +473,28 @@ class CanaryDbVerifier:
         )
         duplicate_users = max(0, user_count - 1)
 
-        # Measurable check for recursive loops: inbound envelopes from bot itself
-        bot_inbound_loops = (
-            self.session.execute(
-                sa.text(
-                    "SELECT count(*) FROM provider_event_envelopes "
-                    "WHERE normalized_event->>'sender_external_id' LIKE '%573137848445%'"
-                )
-            ).scalar()
-            or 0
+        # Measurable check for recursive loops: inbound envelopes from bot itself since canary start
+        env_sql = (
+            "SELECT count(*) FROM provider_event_envelopes "
+            "WHERE normalized_event->>'sender_external_id' LIKE '%573137848445%'"
         )
+        env_params: dict[str, Any] = {}
+        if min_envelope_id > 0:
+            env_sql += " AND id > :min_env"
+            env_params["min_env"] = min_envelope_id
+        bot_inbound_loops = self.session.execute(sa.text(env_sql), env_params).scalar() or 0
 
-        unauthorized_outbox = (
-            self.session.execute(
-                sa.text(
-                    "SELECT count(*) FROM outbound_message_queue "
-                    "WHERE message_content->>'recipient_external_id' NOT LIKE '%573137848445%' "
-                    "AND message_content->>'recipient_external_id' NOT LIKE '%639568348733%'"
-                )
-            ).scalar()
-            or 0
+        # Measurable check for unauthorized outbox sends since canary start
+        outbox_sql = (
+            "SELECT count(*) FROM outbound_message_queue "
+            "WHERE message_content->>'recipient_external_id' NOT LIKE '%573137848445%' "
+            "AND message_content->>'recipient_external_id' NOT LIKE '%639568348733%'"
         )
+        outbox_params: dict[str, Any] = {}
+        if min_outbox_id > 0:
+            outbox_sql += " AND id > :min_out"
+            outbox_params["min_out"] = min_outbox_id
+        unauthorized_outbox = self.session.execute(sa.text(outbox_sql), outbox_params).scalar() or 0
 
         return {
             "duplicate_side_effects": duplicate_users,
@@ -760,6 +774,15 @@ def run_canary_suite(
     domain_assertions_passed = 0
     domain_assertions_failed = 0
 
+    initial_outbox_id = 0
+    initial_envelope_id = 0
+    if verifier is not None:
+        try:
+            initial_outbox_id = verifier.get_max_outbox_id()
+            initial_envelope_id = verifier.get_max_envelope_id()
+        except Exception as exc:
+            logger.warning("Could not fetch initial outbox/envelope IDs: %s", exc)
+
     for idx, turn in enumerate(CANARY_DIALOGUE_TURNS, start=1):
         _emit(f"\n[{idx}/{len(CANARY_DIALOGUE_TURNS)}] Executing Turn: {turn['turn']}")
         _emit(f'  Input text       : "{turn["input"]}"')
@@ -895,7 +918,11 @@ def run_canary_suite(
     recursive_loops = 0
     third_party_sends = 0
     if verifier is not None:
-        inv = verifier.assert_invariants(CANARY_CLIENT_PHONE)
+        inv = verifier.assert_invariants(
+            CANARY_CLIENT_PHONE,
+            min_outbox_id=initial_outbox_id,
+            min_envelope_id=initial_envelope_id,
+        )
         duplicate_side_effects = inv["duplicate_side_effects"]
         recursive_loops = inv["recursive_whatsapp_loops"]
         third_party_sends = inv["third_party_sends"]

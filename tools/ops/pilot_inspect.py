@@ -234,9 +234,9 @@ def inspect_recent_envelopes(session: Session, limit: int = 10) -> list[dict[str
     stmt = sa.text(
         "SELECT id, provider, external_event_id, event_type, status, "
         "normalized_event, processing_attempts, processing_lease_expires_at, "
-        "error_details, created_at "
+        "error_details, received_at "
         "FROM provider_event_envelopes "
-        "ORDER BY created_at DESC "
+        "ORDER BY received_at DESC "
         "LIMIT :limit"
     )
     rows = session.execute(stmt, {"limit": limit}).fetchall()
@@ -297,10 +297,10 @@ def inspect_participant(session: Session, phone_or_jid: str) -> dict[str, Any]:
     # Inbound envelopes for participant
     env_stmt = sa.text(
         "SELECT id, event_type, status, normalized_event, processing_attempts, "
-        "created_at, error_details "
+        "received_at, error_details "
         "FROM provider_event_envelopes "
         "WHERE normalized_event->>'sender_external_id' LIKE :pattern "
-        "ORDER BY created_at DESC LIMIT 50"
+        "ORDER BY received_at DESC LIMIT 50"
     )
     env_rows = session.execute(env_stmt, {"pattern": f"%{clean_digits}%"}).fetchall()
     inbound_events = []
@@ -394,9 +394,10 @@ def inspect_participant(session: Session, phone_or_jid: str) -> dict[str, Any]:
         app_row = session.execute(
             sa.text(
                 "SELECT a.id, a.status, a.apply_mode, a.submitted_at, a.updated_at, "
-                "j.id, j.title, j.company_name_raw "
+                "j.id, j.title, c.name "
                 "FROM applications a "
                 "JOIN jobs j ON a.job_id = j.id "
+                "LEFT JOIN companies c ON j.company_id = c.id "
                 "WHERE a.user_id = :user_id "
                 "ORDER BY a.updated_at DESC LIMIT 1"
             ),
