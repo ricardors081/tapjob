@@ -53,7 +53,7 @@ jobs:
         id: verify
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node tools/deploy/require_pr_ci_success.mjs "${{ inputs.pr_number }}" "${{ github.repository }}"
+        run: node tools/deploy/require_pr_ci_success.mjs "${{ inputs.pr_number }}" "${{ github.repository }}" "$GITHUB_OUTPUT"
 
       - name: Compute short SHA for preview tag
         id: short_sha

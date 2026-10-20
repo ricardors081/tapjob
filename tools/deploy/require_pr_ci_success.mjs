@@ -260,7 +260,8 @@ export function main() {
   console.log("PREVIEW_ONLY=YES");
   console.log("PRODUCTION_PROMOTION_ALLOWED=NO");
 
-  if (process.env.GITHUB_OUTPUT) {
+  const outputPath = process.argv[4];
+  if (outputPath && typeof outputPath === "string" && outputPath.length > 0) {
     const lines = [
       `pr_number=${evaluation.prNumber}`,
       `pr_head_sha=${evaluation.headSha}`,
@@ -268,7 +269,7 @@ export function main() {
       `ci_run_number=${evaluation.runNumber}`,
       `ci_run_id=${evaluation.runId}`,
     ].join("\n") + "\n";
-    appendFileSync(process.env.GITHUB_OUTPUT, lines, "utf8");
+    appendFileSync(outputPath, lines, "utf8");
   }
 }
 
