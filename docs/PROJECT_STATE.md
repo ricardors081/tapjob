@@ -486,8 +486,31 @@ Merged via PR #19 into canonical `main` with squash commit `a423b98b97b202b3dcdd
 - **Task C (`task-pilot-ops`)**: Built read-only pilot operator CLI `tools/ops/pilot_inspect.py` (`--summary`, `--recent-envelopes`, `--recent-outbox`, `--phone`) enforcing strict LGPD PII masking (`55119****1234`, `55119****1234@s.whatsapp.net`, emails, candidate names); created comprehensive operational runbook `docs/runbooks/WHATSAPP_PILOT_RUNBOOK.md`; resolved deterministic rate limit test flakiness in `services/api/tests/test_identity_rate_limit_integration.py` by freezing time window in fixture; verified with 17 unit tests in `tools/ops/test_pilot_inspect.py`.
 - Corrective Hardening Round 1: Fixed data-deletion routing collision with fact confirmation (Finding 1); eliminated mock bypass in rate limiting test (Finding 2); added end-to-end multi-turn pilot integration test (Finding 3, `test_pilot_complete_journey_multi_turn_e2e`); added comprehensive CLI test coverage in `test_pilot_inspect.py` (Finding 4). All verified and merged.
 
+### PR Preview Image Workflow (CLOSED_AND_VERIFIED)
+Merged via PR #21 into canonical `main` with squash commit `dcdfc526ee28706af8af82f7826db8609635ee9f`:
+- Added `.github/workflows/preview-image.yml` providing an isolated, safe, non-production container image workflow for staging validation of open Pull Requests.
+- Requires workflow dispatch strictly from canonical `refs/heads/main` (`github.ref == 'refs/heads/main'`), failing closed immediately on any other ref (mirroring `release-image.yml`).
+- Added `tools/deploy/require_pr_ci_success.mjs` and 26 unit tests in `tools/deploy/require_pr_ci_success.test.mjs` verifying:
+  - PR must belong to canonical repository (`ricardors081/tapjob`), rejecting external forks for preview security;
+  - PR must target canonical base branch `main` (`pr.base.ref == "main"`), rejecting PRs targeting any other base branch;
+  - PR must be in `open` state;
+  - Resolves PR number -> exact remote HEAD commit SHA from GitHub API;
+  - Proves the exact commit's own CI run completed with conclusion `success`;
+  - TOCTOU build-time verification (`--verify-head`) immediately before building re-fetches PR metadata from GitHub and asserts `CURRENT_REMOTE_PR_HEAD == PREFLIGHT_VERIFIED_PR_HEAD_SHA`, failing closed if the remote PR HEAD moved after preflight;
+  - Workflow step summary emits `PREFLIGHT_VERIFIED_HEAD`, `BUILD_TIME_REMOTE_HEAD`, `HEADS_MATCH=YES`, and `CONTROL_PLANE_SEPARATED=YES`;
+  - Non-production image tagging (`pr-<num>-sha-<shortsha>`, `pr-<num>-preview`) and labels (`tapjob.preview_only=true`, `tapjob.production_promotion_allowed=false`).
+- Control-plane vs target source separation:
+  - Preflight captures `control-plane-sha` directly from the actual checked-out HEAD working tree via `git rev-parse HEAD` and passes it to the build job;
+  - Build job checks out control plane into `_preview_control` and target PR into `_preview_source`;
+  - TOCTOU verification and node configuration execute strictly from `_preview_control`, enabling target PRs that lack preview tooling (such as PR #20) to validate and build cleanly;
+  - Docker build context (`_preview_source`) and Dockerfile (`_preview_source/infra/docker/backend.Dockerfile`) build strictly from target source.
+- Added `tools/deploy/preview_workflow_contract.test.mjs` (12 contract tests) verifying dispatch ref governance, static structure, and proving target PR lacking preview tooling succeeds structurally.
+- Updated `docs/DEPLOYMENT.md` §3.2 documenting PR preview image invariants.
+- Updated `.github/workflows/ci.yml` `deploy-contract` job to run both the PR preview CI gate unit tests and workflow contract tests.
+- Canonical production release workflow `.github/workflows/release-image.yml` remains completely unchanged.
+
 ### WP-PILOT-2 — Practical Product Validation & Controlled Live Pilot (IMPLEMENTED_AND_AUTOMATED_E2E_VERIFIED_PENDING_HUMAN_ACCEPTANCE)
-Executed on branch `feat/whatsapp-pilot-practical-validation` branched from canonical `main` at `a423b98b97b202b3dcddb12643b1e489ea8e8b3e`:
+Executed on branch `feat/whatsapp-pilot-practical-validation` (PR #20) reconciled over canonical `main` (`dcdfc526ee28706af8af82f7826db8609635ee9f`):
 - **Current Operational Gate Statuses**:
   - `WP_PILOT_2_STATE = IMPLEMENTED_AND_AUTOMATED_E2E_VERIFIED_PENDING_HUMAN_ACCEPTANCE`
   - `REAL_USER_PILOT_AUTHORIZED = NO`

@@ -68,6 +68,29 @@ node tools/deploy/validate_image_ref.mjs --digest "$BACKEND_IMAGE_DIGEST"
    commit-SHA tag is also pushed alongside, for human discovery only; it is never what a deploy
    references.
 
+### 3.2 Producing a PR preview image for controlled staging validation
+
+`.github/workflows/preview-image.yml` provides an isolated, non-production preview image workflow specifically for validating an open Pull Request in staging before merge.
+
+Invariants:
+- `workflow_dispatch` with explicit `pr_number` input.
+- Requires workflow dispatch strictly from canonical `refs/heads/main` (`github.ref == 'refs/heads/main'`), failing closed immediately on any other ref (mirroring `release-image.yml`).
+- Resolves PR number -> exact remote HEAD commit SHA from GitHub API (`tools/deploy/require_pr_ci_success.mjs`).
+- Validates the PR belongs to the canonical repository (`ricardors081/tapjob`), rejecting external forks for preview security.
+- Validates the PR targets canonical base branch `main` (`pr.base.ref == "main"`), rejecting PRs targeting any non-main branch.
+- Requires that exact commit's own CI run to have completed with `status: completed` and `conclusion: success`.
+- Enforces TOCTOU build-time verification (`tools/deploy/require_pr_ci_success.mjs --verify-head`): immediately before building, re-fetches PR metadata from GitHub and asserts `CURRENT_REMOTE_PR_HEAD == PREFLIGHT_VERIFIED_PR_HEAD_SHA`. Fails closed if the remote PR HEAD moved after preflight.
+- Enforces strict control-plane vs target source separation:
+  - Canonical control-plane checkout into `_preview_control` (pinned to the captured `CONTROL_PLANE_SHA` read from actual checked-out HEAD via `git rev-parse HEAD`);
+  - Target PR source checkout into `_preview_source` (pinned to the preflight-verified PR HEAD SHA);
+  - TOCTOU verifier and Node configuration executed strictly from `_preview_control`, allowing target PRs that lack preview tooling (such as PR #20) to build and validate cleanly;
+  - Docker build context and Dockerfile point strictly to `_preview_source` (`_preview_source/infra/docker/backend.Dockerfile`).
+- Pushes to GHCR with tags `pr-<number>-sha-<shortsha>` and `pr-<number>-preview`.
+- Labels the image with `tapjob.preview_only=true` and `tapjob.production_promotion_allowed=false`.
+- Generates an immutable image digest (`sha256:...`) used as the promotion unit exclusively for staging validation.
+- Production promotion is strictly prohibited (`PRODUCTION_PROMOTION_ALLOWED=NO`).
+- The canonical production release workflow (`.github/workflows/release-image.yml`) remains completely unchanged.
+
 ## 4. Deploying a digest to an environment
 
 ```bash
