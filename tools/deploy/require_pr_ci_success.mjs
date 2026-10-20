@@ -19,6 +19,23 @@ import { fileURLToPath } from "node:url";
 
 const CI_WORKFLOW_FILE = "ci.yml";
 
+/**
+ * Validates that workflow dispatch ref matches canonical refs/heads/main.
+ *
+ * @param {string} ref
+ * @param {string} [expectedRef="refs/heads/main"]
+ * @returns {{ ok: boolean, reason: string }}
+ */
+export function validateDispatchRef(ref, expectedRef = "refs/heads/main") {
+  if (ref !== expectedRef) {
+    return {
+      ok: false,
+      reason: `Workflow dispatch ref must be '${expectedRef}', got '${ref}'`,
+    };
+  }
+  return { ok: true, reason: `Workflow dispatched against valid canonical ref '${expectedRef}'` };
+}
+
 function describeType(value) {
   if (value === null) return "null";
   if (Array.isArray(value)) return "array";

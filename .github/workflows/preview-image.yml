@@ -5,9 +5,15 @@ name: Build PR preview backend image
 #
 # Governance & Invariants:
 # - Manual-only (workflow_dispatch) with explicit PR number.
+# - Requires workflow dispatch from canonical refs/heads/main (fails closed on any other ref).
 # - Validates PR belongs to the canonical repository (no external forks).
+# - Validates PR targets canonical base branch main (pr.base.ref == "main").
 # - Resolves PR number -> exact remote HEAD commit SHA from GitHub API.
 # - Requires the exact PR HEAD commit's CI run to have completed with SUCCESS.
+# - Enforces TOCTOU build-time verification re-checking remote PR HEAD before image build.
+# - Isolates control plane (_preview_control) from target PR source (_preview_source) so target
+#   PR is not required to contain preview workflow tooling.
+# - Captures CONTROL_PLANE_SHA from actual checked-out HEAD (git rev-parse HEAD).
 # - Clearly labels the resulting image as NON-PRODUCTION / PREVIEW ONLY.
 # - NEVER promotes or deploys to production.
 # - Leaves the official release-image.yml completely unchanged.
@@ -44,13 +50,19 @@ jobs:
       short-sha: ${{ steps.short_sha.outputs.short_sha }}
       control-plane-sha: ${{ steps.control_sha.outputs.control_plane_sha }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
+      - name: Require preview control plane dispatch from refs/heads/main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "This workflow may only be run against refs/heads/main; got '${{ github.ref }}'." >&2
+          echo "workflow_dispatch can be triggered via the API against any ref containing this" >&2
+          echo "workflow file -- this check enforces main even when the UI restriction is bypassed." >&2
+          exit 1
 
-      - name: Record pinned control plane SHA
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Capture actual checked-out control-plane commit SHA
         id: control_sha
-        run: echo "control_plane_sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+        run: echo "control_plane_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:

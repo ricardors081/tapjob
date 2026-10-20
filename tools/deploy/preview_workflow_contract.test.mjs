@@ -5,15 +5,61 @@ import { dirname, join } from "node:path";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { verifyPrHeadMatch } from "./require_pr_ci_success.mjs";
+import { validateDispatchRef, verifyPrHeadMatch } from "./require_pr_ci_success.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const REPO_ROOT = join(__dirname, "../..");
 const PREVIEW_WORKFLOW_PATH = join(REPO_ROOT, ".github/workflows/preview-image.yml");
 
+describe("Dispatch Ref Governance (Mirroring Release Invariants)", () => {
+  test("DISPATCH_REF=refs/heads/main => allowed", () => {
+    const res = validateDispatchRef("refs/heads/main");
+    assert.equal(res.ok, true);
+    assert.match(res.reason, /valid canonical ref 'refs\/heads\/main'/);
+  });
+
+  test("DISPATCH_REF=refs/heads/feature-x => fail closed", () => {
+    const res = validateDispatchRef("refs/heads/feature-x");
+    assert.equal(res.ok, false);
+    assert.match(res.reason, /must be 'refs\/heads\/main', got 'refs\/heads\/feature-x'/);
+  });
+
+  test("DISPATCH_REF=refs/pull/21/head => fail closed", () => {
+    const res = validateDispatchRef("refs/pull/21/head");
+    assert.equal(res.ok, false);
+    assert.match(res.reason, /must be 'refs\/heads\/main'/);
+  });
+});
+
 describe("PR Preview Workflow Contract (Control Plane vs Target Source Separation)", () => {
   const workflowContent = readFileSync(PREVIEW_WORKFLOW_PATH, "utf8");
+
+  test("workflow preflight requires dispatch from refs/heads/main and fails closed otherwise", () => {
+    assert.match(
+      workflowContent,
+      /github\.ref\s*!=\s*['"]refs\/heads\/main['"]/,
+      "preflight must assert github.ref != 'refs/heads/main'",
+    );
+    assert.match(
+      workflowContent,
+      /exit 1/,
+      "preflight must fail closed with exit 1 on non-main dispatch ref",
+    );
+  });
+
+  test("workflow captures control_plane_sha from actual checked-out HEAD via git rev-parse HEAD", () => {
+    assert.match(
+      workflowContent,
+      /control_plane_sha=\$\(git rev-parse HEAD\)/,
+      "control plane SHA must be captured from actual checked-out HEAD via git rev-parse HEAD",
+    );
+    assert.doesNotMatch(
+      workflowContent,
+      /control_plane_sha=\${{\s*github\.sha\s*}}/,
+      "control plane SHA must not be trusted directly from github.sha",
+    );
+  });
 
   test("workflow isolates control plane checkout to _preview_control with pinned dispatch SHA", () => {
     assert.match(
@@ -23,8 +69,8 @@ describe("PR Preview Workflow Contract (Control Plane vs Target Source Separatio
     );
     assert.match(
       workflowContent,
-      /ref:\s*\${{\s*(?:env\.CONTROL_PLANE_SHA|needs\.preflight\.outputs\.control-plane-sha|github\.sha)\s*}}/,
-      "control plane checkout must be pinned to the canonical dispatch commit SHA",
+      /ref:\s*\${{\s*(?:env\.CONTROL_PLANE_SHA|needs\.preflight\.outputs\.control-plane-sha)\s*}}/,
+      "control plane checkout must be pinned to the captured dispatch commit SHA",
     );
   });
 
