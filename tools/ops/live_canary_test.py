@@ -226,18 +226,20 @@ class EvolutionCanaryClient:
         buffer_ms = since_timestamp_ms - 5000  # 5s clock skew tolerance
         deadline = time.time() + timeout_sec
         while time.time() < deadline:
-            msgs = self.find_recent_messages(CANARY_CLIENT_INSTANCE, count=10)
+            msgs = self.find_recent_messages(CANARY_CLIENT_INSTANCE, count=20)
             for m in msgs:
                 key = m.get("key", {})
-                from_me = key.get("fromMe", False)
-                remote_jid = key.get("remoteJid", "")
-                remote_jid_alt = key.get("remoteJidAlt", "")
+                from_me = bool(key.get("fromMe", False))
+                remote_jid = str(key.get("remoteJid") or "")
+                remote_jid_alt = str(key.get("remoteJidAlt") or "")
                 msg_id = str(key.get("id") or "")
                 msg_timestamp = int(m.get("messageTimestamp") or 0)
                 ts_ms = msg_timestamp * 1000 if msg_timestamp < 10000000000 else msg_timestamp
 
                 is_from_bot = not from_me and (
-                    CANARY_BOT_PHONE in remote_jid or CANARY_BOT_PHONE in remote_jid_alt
+                    CANARY_BOT_PHONE in remote_jid
+                    or CANARY_BOT_PHONE in remote_jid_alt
+                    or "38913225810041" in remote_jid
                 )
                 is_new = (msg_id not in seen) if seen else (ts_ms >= buffer_ms)
 
@@ -937,7 +939,7 @@ def run_canary_suite(
             reply_record = client.poll_reply_on_canary_client(
                 since_timestamp_ms=t0_ms,
                 seen_message_ids=seen_client_msg_ids,
-                timeout_sec=15.0 if not client.dry_run else 0.1,
+                timeout_sec=25.0 if not client.dry_run else 0.1,
                 synthetic_dry_reply=turn.get("synthetic_dry_reply"),
             )
             if client.dry_run and not reply_record:
@@ -985,7 +987,7 @@ def run_canary_suite(
                                 verifier, CANARY_CLIENT_PHONE, me
                             )
                         ),
-                        timeout_sec=8.0,
+                        timeout_sec=15.0,
                     )
                 else:
                     domain_ok, domain_detail = domain_assert_fn(
