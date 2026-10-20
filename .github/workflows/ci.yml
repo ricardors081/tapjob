@@ -177,6 +177,8 @@ jobs:
         run: node --test tools/deploy/require_ci_success.test.mjs
       - name: PR Preview CI-success-gate self-test (deterministic, no live GitHub API access)
         run: node --test tools/deploy/require_pr_ci_success.test.mjs
+      - name: PR Preview workflow contract self-test (control-plane isolation, target PR lacking tooling)
+        run: node --test tools/deploy/preview_workflow_contract.test.mjs
       - name: Validate governance foundation (rules, hooks, guards, invariants)
         run: python3 tools/agent_guard/validate_governance.py
       - name: Agent guard and pre-push hook self-tests (deterministic synthetic suites)
