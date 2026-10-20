@@ -487,3 +487,16 @@ Executed using the verified AF-2 multi-agent architecture (parent mission `whats
 - Updated role profiles: `tools/agent_factory/profiles/channel_whatsapp_engineer.json` and `tools/agent_factory/profiles/release_platform_ops_engineer.json`.
 - State: IMPLEMENTED, REVIEWED, SCOPE_VERIFIED, and CONSOLIDATED into `feat/whatsapp-pilot-readiness`. AF-3 remains unstarted and unauthorized. Zero staging or production mutations.
 
+### PR Preview Image Workflow (IMPLEMENTED, PENDING INDEPENDENT REVIEW)
+Executed on branch `feat/pr-preview-image-workflow` branched from canonical `main`:
+- Added `.github/workflows/preview-image.yml` providing an isolated, safe, non-production container image workflow for staging validation of open Pull Requests.
+- Added `tools/deploy/require_pr_ci_success.mjs` and 18 unit tests in `tools/deploy/require_pr_ci_success.test.mjs` verifying:
+  - PR must belong to canonical repository (`ricardors081/tapjob`), rejecting external forks for preview security;
+  - PR must be in `open` state;
+  - Resolves PR number -> exact remote HEAD commit SHA from GitHub API;
+  - Proves the exact commit's own CI run completed with conclusion `success`;
+  - Non-production image tagging (`pr-<num>-sha-<shortsha>`, `pr-<num>-preview`) and labels (`tapjob.preview_only=true`, `tapjob.production_promotion_allowed=false`).
+- Updated `docs/DEPLOYMENT.md` §3.2 documenting PR preview image invariants.
+- Updated `.github/workflows/ci.yml` `deploy-contract` job to run the PR preview CI gate unit tests.
+- Canonical production release workflow `.github/workflows/release-image.yml` remains completely unchanged.
+
