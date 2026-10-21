@@ -16,6 +16,7 @@ from tapjob_api.messaging.applications import ApplicationStatus
 from tapjob_api.messaging.orchestration import (
     dispatch_inbound_message,
     format_tailored_application_kit_messages,
+    is_rich_embedded_job_description,
 )
 from tapjob_api.ports.messaging_channel import ChannelIdentity, InboundMessage
 
@@ -1232,3 +1233,116 @@ def test_job_url_intake_url_only_success_calls_tool_ingest_job_url(
     reply = queued_messages[0].message_text
     assert "Vaga analisada: Desenvolvedor Python Pleno (TechCorp)" in reply
     assert "Match Score WP2.2: 92/100 (HIGHLY_ELIGIBLE)" in reply
+
+
+def test_is_rich_embedded_job_description_distinguishes_wrappers_from_real_jobs() -> None:
+    """Verifies that conversational wrappers return False and genuine job descriptions
+    return True.
+    """
+    # Conversational wrappers accompanying a URL
+    assert not is_rich_embedded_job_description("Achei essa vaga na Empresa X, pode analisar?")
+    assert not is_rich_embedded_job_description("Achei essa vaga nessa empresa, consegue analisar?")
+    assert not is_rich_embedded_job_description("vaga legal, olha isso:")
+    assert not is_rich_embedded_job_description(
+        "Olá assistente do TapJob, achei essa vaga excelente na Empresa XPTO e queria saber "
+        "se dá match com o meu perfil cadastrado."
+    )
+    assert not is_rich_embedded_job_description(
+        "Tenho 5 anos de experiência trabalhando com Python na AWS e queria saber desta vaga."
+    )
+
+    # Real job postings
+    assert is_rich_embedded_job_description(
+        "Vaga: Desenvolvedor Python Pleno na TechCorp. "
+        "Requisitos: Python, FastAPI, Docker, microsserviços."
+    )
+    assert is_rich_embedded_job_description(
+        "Desenvolvedor Backend Pleno\n"
+        "Responsabilidades:\n"
+        "- Desenvolver e manter microsserviços em Python e FastAPI\n"
+        "- Projetar bancos de dados PostgreSQL\n"
+        "Requisitos:\n"
+        "- Experiência com Docker, Celery e Redis\n"
+        "Benefícios:\n"
+        "- Vale refeição, plano de saúde, trabalho remoto"
+    )
+
+
+def test_conversational_job_url_wrapper_calls_url_intake_not_text_fastpath(
+    mock_session: MagicMock,
+) -> None:
+    """Conversational wrapper accompanying a URL must execute canonical tool_ingest_job_url
+    and NOT bypass URL intake into text intake fastpath.
+    """
+    inbound = _make_inbound(
+        "Achei essa vaga na Empresa X, pode analisar? https://jobs.lever.co/empresa-x/vaga",
+        msg_id="conv_url_wrapper",
+    )
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock(id=uuid.uuid4())
+    fake_job_info = {
+        "job_id": str(uuid.uuid4()),
+        "title": "Engenheiro de Software",
+        "company": "Empresa X",
+    }
+    fake_match_info = {
+        "overall_score": 85,
+        "eligibility": "ELIGIBLE",
+    }
+    queued_messages: list[MagicMock] = []
+
+    def fake_queue(
+        session: Session,
+        *,
+        channel_identity_link_id: Any,
+        recipient_external_id: str,
+        message_text: str,
+        idempotency_key: str,
+    ) -> MagicMock:
+        mock_msg = MagicMock()
+        mock_msg.message_text = message_text
+        mock_msg.idempotency_key = idempotency_key
+        queued_messages.append(mock_msg)
+        return mock_msg
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.tool_ingest_job_url",
+            return_value=fake_job_info,
+        ) as mock_ingest_url,
+        patch(
+            "tapjob_api.messaging.orchestration.tool_ingest_job_text",
+        ) as mock_ingest_text,
+        patch(
+            "tapjob_api.messaging.orchestration.tool_match_job",
+            return_value=fake_match_info,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue,
+        ),
+    ):
+        keys = dispatch_inbound_message(
+            mock_session,
+            redis_client=MagicMock(),
+            inbound=inbound,
+            provider_id=uuid.uuid4(),
+        )
+
+    # Invariant: URL intake was called, text intake was NOT called
+    mock_ingest_url.assert_called_once_with(
+        mock_session, user=user, url="https://jobs.lever.co/empresa-x/vaga"
+    )
+    mock_ingest_text.assert_not_called()
+    assert len(keys) == 1
+    reply = queued_messages[0].message_text
+    assert "Vaga analisada: Engenheiro de Software (Empresa X)" in reply
+    assert "Match Score WP2.2: 85/100 (ELIGIBLE)" in reply

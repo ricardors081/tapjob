@@ -2201,7 +2201,7 @@ requires-dist = [
     { name = "firebase-admin", specifier = ">=7.2.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" },
     { name = "pydantic-settings", specifier = ">=2.15.0" },
-    { name = "pypdf", specifier = ">=6.20.1" },
+    { name = "pypdf", specifier = ">=6.21.0" },
     { name = "python-docx", specifier = ">=1.2.0" },
     { name = "python-multipart", specifier = ">=0.0.32" },
     { name = "redis", specifier = ">=6.4.0" },

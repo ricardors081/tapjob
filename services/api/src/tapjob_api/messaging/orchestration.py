@@ -270,6 +270,81 @@ def is_pasted_job_text(text: str) -> bool:
     return is_pasted_job_text_normalized(norm, len(text))
 
 
+STRUCTURED_JOB_SECTION_MARKERS: tuple[str, ...] = (
+    "requisito",
+    "requisitos",
+    "responsabilidade",
+    "responsabilidades",
+    "atribuicao",
+    "atribuicoes",
+    "atribuições",
+    "qualificacao",
+    "qualificacoes",
+    "qualificações",
+    "beneficio",
+    "beneficios",
+    "benefícios",
+    "sobre a vaga",
+    "descricao da vaga",
+    "descrição da vaga",
+    "atividades",
+    "perfil desejado",
+    "habilidades necessarias",
+    "habilidades necessárias",
+    "o que esperamos",
+    "o que voce vai fazer",
+    "o que você vai fazer",
+    "principais atividades",
+    "faixa salarial",
+    "regime clt",
+    "regime pj",
+)
+
+CONVERSATIONAL_WRAPPER_CUES: tuple[str, ...] = (
+    "achei essa",
+    "olha essa",
+    "olha isso",
+    "ve essa",
+    "veja essa",
+    "consegue analisar",
+    "pode analisar",
+    "analisa pra mim",
+    "analisa essa",
+    "analise essa",
+    "da uma olhada",
+    "o que acha",
+    "o que voce acha",
+    "o que você acha",
+)
+
+
+def is_rich_embedded_job_description(text_without_url: str) -> bool:
+    """Validates whether text accompanying a job URL contains a genuine, substantial
+    embedded job posting rather than conversational wrapper text.
+
+    Rules:
+    - Minimum length threshold of 60 non-URL characters.
+    - Excludes candidate experience / profile text.
+    - Excludes conversational wrapper phrases unless accompanied by substantial (>=200 char)
+      body text containing explicit section headers.
+    - Requires explicit structured job section markers (requisitos, responsabilidades, etc.).
+    """
+    clean = text_without_url.strip()
+    if len(clean) < 60:
+        return False
+
+    norm = normalize_text(clean)
+    if is_candidate_text_experience(norm, len(clean)):
+        return False
+
+    has_section = any(marker in norm for marker in STRUCTURED_JOB_SECTION_MARKERS)
+    if not has_section:
+        return False
+
+    has_conv_cue = any(cue in norm for cue in CONVERSATIONAL_WRAPPER_CUES)
+    return not (has_conv_cue and len(clean) < 200)
+
+
 def is_privacy_intent(text: str) -> bool:
     """Detects explicit privacy / LGPD / data-rights intent.
 
@@ -1782,26 +1857,7 @@ def dispatch_inbound_message(
         text_without_url = re.sub(r"https?://\S+", "", text_without_url).strip()
         text_without_url = re.sub(r"(?i)\b(link|url)\s*:\s*", "", text_without_url).strip()
 
-        has_embedded_job_desc = len(text_without_url) > 20 and any(
-            term in text_without_url.lower()
-            for term in (
-                "vaga",
-                "requisitos",
-                "desenvolvedor",
-                "analista",
-                "engenheiro",
-                "techcorp",
-                "pleno",
-                "senior",
-                "junior",
-                "estagio",
-                "estágio",
-                "cargo",
-                "atividades",
-                "responsabilidades",
-                "empresa",
-            )
-        )
+        has_embedded_job_desc = is_rich_embedded_job_description(text_without_url)
 
         if has_embedded_job_desc:
             # FAST PATH: Ingest embedded job text immediately without blocking on remote URL.

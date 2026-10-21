@@ -244,6 +244,13 @@ class EvolutionCanaryClient:
         if expected_provider_message_ids:
             target_ids.update(expected_provider_message_ids)
 
+        if not self.dry_run and not target_ids:
+            logger.warning(
+                "poll_reply_on_canary_client called in live mode without target_ids; "
+                "rejecting all fallback messages."
+            )
+            return None
+
         buffer_ms = since_timestamp_ms - 5000  # 5s clock skew tolerance
         deadline = time.time() + timeout_sec
         while time.time() < deadline:
@@ -1083,6 +1090,7 @@ def run_canary_suite(
 
             # 2. Correlate with transactional outbox
             expected_reply_ids: set[str] = set()
+            outbox_correlated = False
             if verifier is not None and not client.dry_run and msg_id != "N/A":
                 outbox_record = verifier.wait_for_outbox_reply(
                     inbound_provider_msg_id=msg_id,
@@ -1094,27 +1102,46 @@ def run_canary_suite(
                     if not p_ids and outbox_record.get("provider_message_id"):
                         p_ids = [outbox_record["provider_message_id"]]
                     expected_reply_ids = {str(pid) for pid in p_ids if pid}
+                    st = outbox_record.get("status")
+                    if st == "sent" and expected_reply_ids:
+                        outbox_correlated = True
                     _emit(
                         f"  Outbox Correlated: outbox_id={outbox_record.get('outbox_id')}, "
-                        f"status={outbox_record.get('status')}, "
+                        f"status={st}, "
                         f"reply_ids={list(expected_reply_ids)}"
                     )
                 else:
                     _emit("  Outbox Correlated: NONE (outbox row not sent within budget)")
 
             # 3. Poll for bot reply reaching the canary client
-            reply_record = client.poll_reply_on_canary_client(
-                since_timestamp_ms=t0_ms,
-                seen_message_ids=seen_client_msg_ids,
-                rejected_message_ids=prior_reply_provider_ids,
-                expected_provider_message_ids=expected_reply_ids if expected_reply_ids else None,
-                timeout_sec=15.0 if not client.dry_run else 0.1,
-                synthetic_dry_reply=turn.get("synthetic_dry_reply"),
-            )
-            if client.dry_run and not reply_record:
-                reply_record = {
-                    "message": {"conversation": turn.get("synthetic_dry_reply", "Dry reply")}
-                }
+            if not client.dry_run:
+                if not outbox_correlated or not expected_reply_ids:
+                    _emit(
+                        f"  Turn {idx} reply assertion failed: "
+                        "no correlated sent outbox message found."
+                    )
+                    reply_record = None
+                else:
+                    reply_record = client.poll_reply_on_canary_client(
+                        since_timestamp_ms=t0_ms,
+                        seen_message_ids=seen_client_msg_ids,
+                        rejected_message_ids=prior_reply_provider_ids,
+                        expected_provider_message_ids=expected_reply_ids,
+                        timeout_sec=15.0,
+                    )
+            else:
+                reply_record = client.poll_reply_on_canary_client(
+                    since_timestamp_ms=t0_ms,
+                    seen_message_ids=seen_client_msg_ids,
+                    rejected_message_ids=prior_reply_provider_ids,
+                    expected_provider_message_ids=None,
+                    timeout_sec=0.1,
+                    synthetic_dry_reply=turn.get("synthetic_dry_reply"),
+                )
+                if not reply_record:
+                    reply_record = {
+                        "message": {"conversation": turn.get("synthetic_dry_reply", "Dry reply")}
+                    }
 
             if reply_record:
                 rec_id = str(reply_record.get("key", {}).get("id") or "")

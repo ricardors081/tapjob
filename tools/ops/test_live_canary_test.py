@@ -602,5 +602,239 @@ class TestLiveCanaryOutboxCorrelation(unittest.TestCase):
             self.assertIsNone(rec)
 
 
+class TestRunCanarySuiteCorrelationFailClosed(unittest.TestCase):
+    """Verifies that non-dry-run live canary suite enforces strict fail-closed
+    exact outbox reply correlation across all scenarios.
+    """
+
+    def setUp(self) -> None:
+        self.mock_session = MagicMock()
+        self.verifier = CanaryDbVerifier(self.mock_session)
+        self.verifier.get_max_outbox_id = MagicMock(return_value=100)
+        self.verifier.get_max_envelope_id = MagicMock(return_value=50)
+        self.verifier.get_all_sent_outbox_provider_ids = MagicMock(return_value=set())
+        self.verifier.resolve_user_id = MagicMock(return_value="user-test-uid")
+        self.verifier.get_application_ids = MagicMock(return_value=set())
+        self.verifier.get_kit_ids = MagicMock(return_value=set())
+        self.verifier.get_reminder_ids = MagicMock(return_value=set())
+        self.verifier.assert_invariants = MagicMock(
+            return_value={
+                "duplicate_applications": 0,
+                "duplicate_application_kits": 0,
+                "duplicate_reminders": 0,
+                "duplicate_outbound_effects": 0,
+                "duplicate_users": 0,
+                "duplicate_side_effects": 0,
+                "recursive_whatsapp_loops": 0,
+                "third_party_sends": 0,
+            }
+        )
+
+        self.client = EvolutionCanaryClient("https://evolution.mock", "key", dry_run=False)
+        self.client.send_text = MagicMock(
+            return_value={"key": {"id": "inbound.msg_turn_1"}, "status": "SENT"}
+        )
+        self.client.get_recent_message_ids = MagicMock(return_value=set())
+
+        self.single_test_turn = [
+            {
+                "turn": "1. TEST TURN",
+                "input": "Olá teste",
+                "expected_intent": "HELP_MENU",
+                "reply_assertion": lambda text: "resposta válida" in text.lower(),
+                "synthetic_dry_reply": "resposta válida do bot",
+                "domain_assertion": lambda v, phone, min_id: (True, "OK"),
+            }
+        ]
+
+    def test_missing_outbox_correlation_fails_turn_despite_unrelated_bot_message(self) -> None:
+        """1. Missing outbox row + unrelated incoming bot message -> turn FAIL immediately."""
+        self.verifier.wait_for_outbox_reply = MagicMock(return_value=None)
+        unrelated_bot_msg = {
+            "key": {
+                "id": "wamid.unrelated_random_bot_msg",
+                "fromMe": False,
+                "remoteJid": f"{CANARY_BOT_PHONE}@s.whatsapp.net",
+            },
+            "message": {"conversation": "resposta válida do bot"},
+            "messageTimestamp": 1729000000,
+        }
+        self.client.find_recent_messages = MagicMock(return_value=[unrelated_bot_msg])
+
+        with (
+            patch.object(self.client, "poll_reply_on_canary_client") as mock_poll,
+            patch("tools.ops.live_canary_test.CANARY_DIALOGUE_TURNS", self.single_test_turn),
+        ):
+            res = run_canary_suite(self.client, wait_seconds=0.01, verifier=self.verifier)
+
+            # Polling must NOT be called with unverified/None expected IDs
+            mock_poll.assert_not_called()
+
+        self.assertEqual(res["successful_turns"], 0)
+        self.assertEqual(res["failed_turns"], 1)
+        self.assertEqual(res["live_reply_assertions_passed"], 0)
+        self.assertEqual(res["live_reply_assertions_failed"], 2)
+        turn_res = res["turns"][0]
+        self.assertEqual(turn_res["status"], "FAILED")
+        self.assertFalse(turn_res["reply_received"])
+        self.assertFalse(turn_res["reply_asserted"])
+
+    def test_outbox_terminal_failure_fails_turn_despite_incoming_bot_message(self) -> None:
+        """2. Outbox row failed/dead + incoming bot message -> turn FAIL immediately."""
+        self.verifier.wait_for_outbox_reply = MagicMock(
+            return_value={
+                "outbox_id": 101,
+                "status": "failed",
+                "idempotency_key": "k",
+                "provider_message_id": None,
+                "provider_message_ids": [],
+            }
+        )
+        bot_msg = {
+            "key": {
+                "id": "wamid.unrelated_bot_msg",
+                "fromMe": False,
+                "remoteJid": f"{CANARY_BOT_PHONE}@s.whatsapp.net",
+            },
+            "message": {"conversation": "resposta válida do bot"},
+            "messageTimestamp": 1729000000,
+        }
+        self.client.find_recent_messages = MagicMock(return_value=[bot_msg])
+
+        with (
+            patch.object(self.client, "poll_reply_on_canary_client") as mock_poll,
+            patch("tools.ops.live_canary_test.CANARY_DIALOGUE_TURNS", self.single_test_turn),
+        ):
+            res = run_canary_suite(self.client, wait_seconds=0.01, verifier=self.verifier)
+
+            # Polling must NOT be called on outbox failure
+            mock_poll.assert_not_called()
+
+        self.assertEqual(res["successful_turns"], 0)
+        self.assertEqual(res["failed_turns"], 1)
+        self.assertEqual(res["live_reply_assertions_passed"], 0)
+        self.assertEqual(res["live_reply_assertions_failed"], 2)
+        turn_res = res["turns"][0]
+        self.assertEqual(turn_res["status"], "FAILED")
+        self.assertFalse(turn_res["reply_received"])
+        self.assertFalse(turn_res["reply_asserted"])
+
+    def test_outbox_sent_exact_id_matching_incoming_bot_message_passes(self) -> None:
+        """3. Outbox row sent + exact ID matching incoming bot message -> turn PASS."""
+        self.verifier.wait_for_outbox_reply = MagicMock(
+            return_value={
+                "outbox_id": 101,
+                "status": "sent",
+                "idempotency_key": "k",
+                "provider_message_id": "wamid.exact_target_1",
+                "provider_message_ids": ["wamid.exact_target_1"],
+            }
+        )
+        exact_bot_msg = {
+            "key": {
+                "id": "wamid.exact_target_1",
+                "fromMe": False,
+                "remoteJid": f"{CANARY_BOT_PHONE}@s.whatsapp.net",
+            },
+            "message": {"conversation": "resposta válida do bot"},
+            "messageTimestamp": 1729000000,
+        }
+        self.client.find_recent_messages = MagicMock(return_value=[exact_bot_msg])
+
+        with patch("tools.ops.live_canary_test.CANARY_DIALOGUE_TURNS", self.single_test_turn):
+            res = run_canary_suite(self.client, wait_seconds=0.01, verifier=self.verifier)
+
+        self.assertEqual(res["successful_turns"], 1)
+        self.assertEqual(res["failed_turns"], 0)
+        self.assertEqual(res["live_reply_assertions_passed"], 2)
+        self.assertEqual(res["live_reply_assertions_failed"], 0)
+        turn_res = res["turns"][0]
+        self.assertEqual(turn_res["status"], "SUCCESS")
+        self.assertTrue(turn_res["reply_received"])
+        self.assertTrue(turn_res["reply_asserted"])
+
+    def test_delayed_prior_turn_id_discarded_exact_current_id_accepted(self) -> None:
+        """4. Delayed prior turn's ID arriving first -> discarded, exact current turn accepted."""
+        # Baseline captured delayed ID from previous turn
+        self.verifier.get_all_sent_outbox_provider_ids = MagicMock(
+            return_value={"wamid.delayed_prior_turn_id"}
+        )
+        self.verifier.wait_for_outbox_reply = MagicMock(
+            return_value={
+                "outbox_id": 102,
+                "status": "sent",
+                "idempotency_key": "k2",
+                "provider_message_id": "wamid.exact_current_turn_id",
+                "provider_message_ids": ["wamid.exact_current_turn_id"],
+            }
+        )
+        delayed_msg = {
+            "key": {
+                "id": "wamid.delayed_prior_turn_id",
+                "fromMe": False,
+                "remoteJid": f"{CANARY_BOT_PHONE}@s.whatsapp.net",
+            },
+            "message": {"conversation": "resposta válida do bot"},
+            "messageTimestamp": 1729000000,
+        }
+        current_msg = {
+            "key": {
+                "id": "wamid.exact_current_turn_id",
+                "fromMe": False,
+                "remoteJid": f"{CANARY_BOT_PHONE}@s.whatsapp.net",
+            },
+            "message": {"conversation": "resposta válida do bot"},
+            "messageTimestamp": 1729000001,
+        }
+        # Both messages present in the inbox
+        self.client.find_recent_messages = MagicMock(return_value=[delayed_msg, current_msg])
+
+        with patch("tools.ops.live_canary_test.CANARY_DIALOGUE_TURNS", self.single_test_turn):
+            res = run_canary_suite(self.client, wait_seconds=0.01, verifier=self.verifier)
+
+        self.assertEqual(res["successful_turns"], 1)
+        self.assertEqual(res["failed_turns"], 0)
+        turn_res = res["turns"][0]
+        self.assertEqual(turn_res["status"], "SUCCESS")
+        self.assertTrue(turn_res["reply_received"])
+        self.assertTrue(turn_res["reply_asserted"])
+
+    def test_outbox_sent_with_id_but_client_never_receives_fails_turn(self) -> None:
+        """5. Outbox sent with provider ID but canary client never receives that ID -> turn FAIL."""
+        self.verifier.wait_for_outbox_reply = MagicMock(
+            return_value={
+                "outbox_id": 101,
+                "status": "sent",
+                "idempotency_key": "k",
+                "provider_message_id": "wamid.exact_never_arrives",
+                "provider_message_ids": ["wamid.exact_never_arrives"],
+            }
+        )
+
+        with (
+            patch.object(
+                self.client, "poll_reply_on_canary_client", return_value=None
+            ) as mock_poll,
+            patch("tools.ops.live_canary_test.CANARY_DIALOGUE_TURNS", self.single_test_turn),
+        ):
+            res = run_canary_suite(self.client, wait_seconds=0.01, verifier=self.verifier)
+
+            mock_poll.assert_called_once()
+            call_kwargs = mock_poll.call_args.kwargs
+            # Verifies expected_provider_message_ids is passed and NOT None
+            self.assertEqual(
+                call_kwargs["expected_provider_message_ids"], {"wamid.exact_never_arrives"}
+            )
+
+        self.assertEqual(res["successful_turns"], 0)
+        self.assertEqual(res["failed_turns"], 1)
+        self.assertEqual(res["live_reply_assertions_passed"], 0)
+        self.assertEqual(res["live_reply_assertions_failed"], 2)
+        turn_res = res["turns"][0]
+        self.assertEqual(turn_res["status"], "FAILED")
+        self.assertFalse(turn_res["reply_received"])
+        self.assertFalse(turn_res["reply_asserted"])
+
+
 if __name__ == "__main__":
     unittest.main()
