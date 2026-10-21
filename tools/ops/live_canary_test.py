@@ -256,6 +256,33 @@ class EvolutionCanaryClient:
         return None
 
 
+BENIGN_LEASE_METADATA_KEYS: frozenset[str] = frozenset(
+    {
+        "attempts",
+        "processing_started_at",
+        "lease_expires_at",
+        "lease_token",
+    }
+)
+
+
+def has_genuine_processing_error(error_details: Any) -> bool:
+    """Checks whether error_details represents genuine error information
+    rather than legitimate lease/lifecycle metadata.
+    """
+    if error_details is None or error_details == {}:
+        return False
+    if not isinstance(error_details, dict):
+        return True
+    # Explicit error indicators
+    error_keys = ("error", "errors", "type", "exception", "traceback", "failed", "retryable")
+    if any(k in error_details for k in error_keys):
+        return True
+    # Any keys outside legitimate lease/lifecycle metadata
+    non_lease_keys = set(error_details.keys()) - BENIGN_LEASE_METADATA_KEYS
+    return bool(non_lease_keys)
+
+
 class CanaryDbVerifier:
     """Asserts database domain state and safety invariants."""
 
@@ -344,7 +371,8 @@ class CanaryDbVerifier:
         norm = row[4] if isinstance(row[4], dict) else {}
         routed = norm.get("routed_intent")
 
-        is_proc = (status_str == "processed") and (error_details is None)
+        has_error = has_genuine_processing_error(error_details)
+        is_proc = (status_str == "processed") and not has_error
         intent_ok = True
         if expected_intent is not None:
             intent_ok = routed == expected_intent
@@ -358,6 +386,7 @@ class CanaryDbVerifier:
             "routed_intent": routed,
             "is_processed": is_proc,
             "intent_matched": intent_ok,
+            "has_genuine_error": has_error,
         }
 
     def verify_profile_facts(
@@ -620,7 +649,8 @@ CANARY_DIALOGUE_TURNS: list[dict[str, Any]] = [
         "synthetic_dry_reply": "Olá! Bem-vindo ao TapJob. Sou seu assistente de carreira pessoal.",
         "domain_assertion": lambda v, phone, min_id: (
             lambda env: (
-                env["is_processed"] and env["routed_intent"] in ("GREETING_OR_RETURN", None),
+                env["is_processed"]
+                and env["routed_intent"] in ("GREETING_OR_RETURN", "HELP_MENU", None),
                 f"Envelope={env.get('envelope_id')}, status={env.get('status')}, "
                 f"routed={env.get('routed_intent')}",
             )

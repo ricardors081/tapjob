@@ -383,6 +383,68 @@ def extract_skills_from_text(text: str) -> list[str]:
     return found
 
 
+def is_explicit_privacy_inquiry(clean: str, raw_len: int = 0) -> bool:
+    """Detects whether clean normalized text represents an explicit privacy/LGPD inquiry.
+
+    Must NOT match confirmation messages containing 'dados' (e.g. 'pode salvar meus dados'),
+    nor pasted job postings mentioning privacy policies.
+    """
+    if is_pasted_job_text_normalized(clean, raw_len):
+        return False
+
+    # Standalone or explicit privacy/LGPD terms
+    explicit_terms = (
+        "privacidade",
+        "lgpd",
+        "politica de privacidade",
+        "termos de privacidade",
+        "termo de privacidade",
+        "protecao de dados",
+        "seguranca dos dados",
+        "seguranca de dados",
+        "lei geral de protecao",
+        "direitos lgpd",
+    )
+    if any(t in clean for t in explicit_terms):
+        return True
+
+    # Semantic inquiries / questions about personal data:
+    # 1. Asking WHERE data is saved / kept / stored
+    if re.search(r"\bonde\b.*?\b(?:salv|guard|armazen|fic|coloc)\w*\b.*?\bdados\b", clean):
+        return True
+
+    # 2. Asking HOW data is treated / used / processed / protected
+    if re.search(r"\bcomo\b.*?\b(?:trat|us|process|proteg|cuid)\w*\b.*?\bdados\b", clean):
+        return True
+    if "como tratam meus dados" in clean or "como usam meus dados" in clean:
+        return True
+
+    # 3. Asking WHICH data is stored / collected / held
+    if re.search(r"\bquais\b.*?\bdados\b.*?\b(?:guard|colet|armazen|salv|tem|peg|us)\w*\b", clean):
+        return True
+
+    # 4. Asking WHY data is needed / requested
+    if re.search(r"\bpor\s+que\b.*?\b(?:precis|ped|quer|us)\w*\b.*?\bdados\b", clean):
+        return True
+
+    # 5. Asking HOW LONG data is retained / kept
+    if re.search(
+        r"\b(?:quanto\s+tempo|por\s+quanto\s+tempo)\b.*?\b(?:guard|armazen|mant|fic)\w*\b.*?\bdados\b",
+        clean,
+    ):
+        return True
+
+    # 6. Asking about data security / safety
+    if (
+        re.search(r"\bdados\b.*?\b(?:seguro|protegido)s?\b", clean)
+        or "dados estao seguros" in clean
+    ):
+        return True
+
+    # 7. Asking about data sharing / third party access
+    return bool(re.search(r"(?:compartilh\w*|quem\s+tem\s+acesso)\b.*?\bdados\b", clean))
+
+
 def interpret_conversational_message(
     text: str,
     context: ConversationContext | None = None,
@@ -456,16 +518,7 @@ def interpret_conversational_message(
         )
 
     # 2. Deterministic LGPD Privacy Inquiry Gate
-    priv_terms = (
-        "privacidade",
-        "lgpd",
-        "politica de privacidade",
-        "protecao de dados",
-        "termos de privacidade",
-        "meus dados",
-        "como tratam meus dados",
-    )
-    if any(t in clean for t in priv_terms) and not is_pasted_job_text_normalized(clean, raw_len):
+    if is_explicit_privacy_inquiry(clean, raw_len):
         return SemanticInterpretation(
             intent=ConversationalIntent.PRIVACY_INQUIRY,
             confidence=IntentConfidence.HIGH,
@@ -515,11 +568,16 @@ def interpret_conversational_message(
         "confirmar todos",
         "confirmar fatos",
         "confirmar fato",
+        "confirmar meus dados",
         "aceitar todos",
         "pode confirmar",
         "pode salvar",
+        "pode salvar tudo",
+        "pode salvar meus dados",
+        "salvar meus dados",
         "salvar informacoes",
         "salvar dados",
+        "salvar tudo",
         "salvar perfil",
         "ta certo",
         "tudo certo",
@@ -531,25 +589,48 @@ def interpret_conversational_message(
         "aprova tudo",
         "aceito tudo",
         "aceitar tudo",
-        "pode salvar tudo",
         "show de bola salva",
         "blz pode confirmar",
         "pode cadastrar",
         "salvar informacao",
         "pode seguir",
+        "meus dados estao certos",
+        "meus dados estao corretos",
     )
-    if any(t in clean for t in conf_terms) or clean in (
+    is_conf_term = any(t in clean for t in conf_terms) or clean in (
         "confirmar",
         "aceito",
         "aprovar",
         "salvar",
         "confirmo",
         "ok salvar",
+    )
+    has_pending_review = context is not None and context.has_pending_fact_review
+    if is_conf_term or (
+        has_pending_review
+        and any(
+            t in clean
+            for t in (
+                "tudo certo",
+                "pode salvar",
+                "salvar dados",
+                "salvar meus dados",
+                "pode salvar tudo",
+                "salvar tudo",
+                "salvar",
+                "confirmar",
+                "aceito",
+                "ta certo",
+                "ta ok",
+                "aprovar",
+            )
+        )
     ):
+        ctx_tag = "context:pending_fact_review" if has_pending_review else "confirm_all_pattern"
         return SemanticInterpretation(
             intent=ConversationalIntent.FACT_CONFIRM_ALL,
             confidence=IntentConfidence.HIGH,
-            context_used="confirm_all_pattern",
+            context_used=ctx_tag,
         )
 
     # 7. Application Status Query

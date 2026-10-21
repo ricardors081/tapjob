@@ -297,5 +297,151 @@ class TestLiveCanaryExecution(unittest.TestCase):
         self.assertEqual(args.db_url, "sqlite:///:memory:")
 
 
+class TestEnvelopeProcessingVerifier(unittest.TestCase):
+    """Regression tests for provider_event_envelopes processed state semantics and error_details."""
+
+    def setUp(self) -> None:
+        self.mock_session = MagicMock()
+        self.verifier = CanaryDbVerifier(self.mock_session)
+
+    def _mock_envelope_row(
+        self,
+        env_id: int = 1,
+        status: str = "processed",
+        attempts: int = 1,
+        error_details: object = None,
+        routed_intent: str | None = "GREETING_OR_RETURN",
+    ) -> None:
+        row = (
+            env_id,
+            status,
+            attempts,
+            error_details,
+            {"routed_intent": routed_intent} if routed_intent else {},
+        )
+        self.mock_session.execute.return_value.fetchone.return_value = row
+
+    def test_regression_1_processed_with_none_error_details_passes(self) -> None:
+        self._mock_envelope_row(
+            status="processed", error_details=None, routed_intent="TEXT_EXPERIENCE"
+        )
+        res = self.verifier.verify_envelope_processed(
+            "639568348733", expected_intent="TEXT_EXPERIENCE"
+        )
+        self.assertTrue(res["envelope_found"])
+        self.assertTrue(res["is_processed"])
+        self.assertTrue(res["intent_matched"])
+        self.assertFalse(res["has_genuine_error"])
+
+    def test_regression_2_processed_with_lease_only_metadata_passes(self) -> None:
+        lease_metadata = {
+            "attempts": 1,
+            "lease_token": "a1b2c3d4",
+            "lease_expires_at": "2026-10-21T02:00:00+00:00",
+            "processing_started_at": "2026-10-21T01:58:00+00:00",
+        }
+        self._mock_envelope_row(
+            status="processed",
+            error_details=lease_metadata,
+            routed_intent="TEXT_EXPERIENCE",
+        )
+        res = self.verifier.verify_envelope_processed(
+            "639568348733", expected_intent="TEXT_EXPERIENCE"
+        )
+        self.assertTrue(res["envelope_found"])
+        self.assertTrue(res["is_processed"])
+        self.assertTrue(res["intent_matched"])
+        self.assertFalse(res["has_genuine_error"])
+
+    def test_regression_3_failed_status_fails(self) -> None:
+        self._mock_envelope_row(
+            status="failed", error_details=None, routed_intent="TEXT_EXPERIENCE"
+        )
+        res = self.verifier.verify_envelope_processed(
+            "639568348733", expected_intent="TEXT_EXPERIENCE"
+        )
+        self.assertTrue(res["envelope_found"])
+        self.assertFalse(res["is_processed"])
+
+    def test_regression_4_processing_or_pending_status_fails(self) -> None:
+        for status in ("processing", "accepted", "pending"):
+            self._mock_envelope_row(
+                status=status, error_details=None, routed_intent="TEXT_EXPERIENCE"
+            )
+            res = self.verifier.verify_envelope_processed(
+                "639568348733", expected_intent="TEXT_EXPERIENCE"
+            )
+            self.assertTrue(res["envelope_found"])
+            self.assertFalse(res["is_processed"])
+
+    def test_regression_5_genuine_error_payload_fails(self) -> None:
+        # A) Explicit error key
+        self._mock_envelope_row(
+            status="processed",
+            error_details={"error": "db_connection_failed", "attempts": 2},
+            routed_intent="TEXT_EXPERIENCE",
+        )
+        res = self.verifier.verify_envelope_processed(
+            "639568348733", expected_intent="TEXT_EXPERIENCE"
+        )
+        self.assertFalse(res["is_processed"])
+        self.assertTrue(res["has_genuine_error"])
+
+        # B) Exception type in details
+        self._mock_envelope_row(
+            status="processed",
+            error_details={"type": "SoftTimeLimitExceeded", "retryable": True},
+            routed_intent="TEXT_EXPERIENCE",
+        )
+        res = self.verifier.verify_envelope_processed(
+            "639568348733", expected_intent="TEXT_EXPERIENCE"
+        )
+        self.assertFalse(res["is_processed"])
+        self.assertTrue(res["has_genuine_error"])
+
+        # C) Non-dict string error
+        self._mock_envelope_row(
+            status="processed",
+            error_details="Internal Server Error: Celery worker crashed",
+            routed_intent="TEXT_EXPERIENCE",
+        )
+        res = self.verifier.verify_envelope_processed(
+            "639568348733", expected_intent="TEXT_EXPERIENCE"
+        )
+        self.assertFalse(res["is_processed"])
+        self.assertTrue(res["has_genuine_error"])
+
+        # D) Unknown non-lease key
+        self._mock_envelope_row(
+            status="processed",
+            error_details={"attempts": 1, "unhandled_crash": True},
+            routed_intent="TEXT_EXPERIENCE",
+        )
+        res = self.verifier.verify_envelope_processed(
+            "639568348733", expected_intent="TEXT_EXPERIENCE"
+        )
+        self.assertFalse(res["is_processed"])
+        self.assertTrue(res["has_genuine_error"])
+
+    def test_regression_6_processed_with_wrong_routed_intent_fails_intent_match(self) -> None:
+        lease_metadata = {
+            "attempts": 1,
+            "lease_token": "a1b2c3d4",
+            "lease_expires_at": "2026-10-21T02:00:00+00:00",
+            "processing_started_at": "2026-10-21T01:58:00+00:00",
+        }
+        self._mock_envelope_row(
+            status="processed",
+            error_details=lease_metadata,
+            routed_intent="PRIVACY_INQUIRY",
+        )
+        res = self.verifier.verify_envelope_processed(
+            "639568348733", expected_intent="FACT_CONFIRM_ALL"
+        )
+        self.assertTrue(res["is_processed"])
+        self.assertFalse(res["intent_matched"])
+        self.assertEqual(res["routed_intent"], "PRIVACY_INQUIRY")
+
+
 if __name__ == "__main__":
     unittest.main()

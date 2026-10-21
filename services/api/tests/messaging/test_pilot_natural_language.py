@@ -90,6 +90,11 @@ from tapjob_api.messaging.natural_language import (
         ("pode salvar", ConversationalIntent.FACT_CONFIRM_ALL),
         ("salvar informacoes", ConversationalIntent.FACT_CONFIRM_ALL),
         ("salvar dados", ConversationalIntent.FACT_CONFIRM_ALL),
+        ("salvar meus dados", ConversationalIntent.FACT_CONFIRM_ALL),
+        ("pode salvar meus dados", ConversationalIntent.FACT_CONFIRM_ALL),
+        ("tudo certo, pode salvar meus dados", ConversationalIntent.FACT_CONFIRM_ALL),
+        ("pode salvar tudo", ConversationalIntent.FACT_CONFIRM_ALL),
+        ("confirmar meus dados", ConversationalIntent.FACT_CONFIRM_ALL),
         ("tá certo", ConversationalIntent.FACT_CONFIRM_ALL),
         ("tudo certo", ConversationalIntent.FACT_CONFIRM_ALL),
         ("tudo ok", ConversationalIntent.FACT_CONFIRM_ALL),
@@ -147,7 +152,14 @@ from tapjob_api.messaging.natural_language import (
         ("lgpd", ConversationalIntent.PRIVACY_INQUIRY),
         ("politica de privacidade", ConversationalIntent.PRIVACY_INQUIRY),
         ("como tratam meus dados?", ConversationalIntent.PRIVACY_INQUIRY),
+        ("onde vocês salvam meus dados?", ConversationalIntent.PRIVACY_INQUIRY),
+        ("como vocês usam meus dados?", ConversationalIntent.PRIVACY_INQUIRY),
+        ("quais dados vocês guardam?", ConversationalIntent.PRIVACY_INQUIRY),
+        ("meus dados estão seguros?", ConversationalIntent.PRIVACY_INQUIRY),
+        ("por que vocês precisam dos meus dados?", ConversationalIntent.PRIVACY_INQUIRY),
+        ("por quanto tempo guardam meus dados?", ConversationalIntent.PRIVACY_INQUIRY),
         ("excluir meus dados", ConversationalIntent.DELETION_REQUEST),
+        ("quero excluir meus dados", ConversationalIntent.DELETION_REQUEST),
         ("deletar meus dados", ConversationalIntent.DELETION_REQUEST),
         ("apagar dados", ConversationalIntent.DELETION_REQUEST),
         ("apaga tudo que tem sobre mim", ConversationalIntent.DELETION_REQUEST),
@@ -341,3 +353,44 @@ def test_extract_urls_cleans_punctuation() -> None:
         "https://empresa.gupy.io/job/12345",
         "https://github.com/dev",
     ]
+
+
+def test_fact_confirm_all_vs_privacy_inquiry_with_context() -> None:
+    """Regression test verifying precedence between confirmation and privacy inquiries."""
+    ctx_pending = ConversationContext(has_pending_fact_review=True, pending_facts_count=5)
+
+    # A) "tudo certo, pode salvar meus dados" with pending review => FACT_CONFIRM_ALL
+    res_a = interpret_conversational_message(
+        "tudo certo, pode salvar meus dados", context=ctx_pending
+    )
+    assert res_a.intent == ConversationalIntent.FACT_CONFIRM_ALL
+    assert res_a.confidence == IntentConfidence.HIGH
+
+    # B) "pode salvar tudo" with pending review => FACT_CONFIRM_ALL
+    res_b = interpret_conversational_message("pode salvar tudo", context=ctx_pending)
+    assert res_b.intent == ConversationalIntent.FACT_CONFIRM_ALL
+    assert res_b.confidence == IntentConfidence.HIGH
+
+    # C) "onde vocês salvam meus dados?" => PRIVACY_INQUIRY (even with pending review!)
+    res_c = interpret_conversational_message("onde vocês salvam meus dados?", context=ctx_pending)
+    assert res_c.intent == ConversationalIntent.PRIVACY_INQUIRY
+    assert res_c.confidence == IntentConfidence.HIGH
+
+    # D) "como tratam meus dados?" => PRIVACY_INQUIRY
+    res_d = interpret_conversational_message("como tratam meus dados?", context=ctx_pending)
+    assert res_d.intent == ConversationalIntent.PRIVACY_INQUIRY
+    assert res_d.confidence == IntentConfidence.HIGH
+
+    # E) "quero excluir meus dados" => DELETION_REQUEST (highest priority LGPD action)
+    res_e = interpret_conversational_message("quero excluir meus dados", context=ctx_pending)
+    assert res_e.intent == ConversationalIntent.DELETION_REQUEST
+    assert res_e.confidence == IntentConfidence.HIGH
+
+    # Verify TEXT_EXPERIENCE behavior remains intact
+    exp_text = (
+        "Tenho 5 anos de experiência como Desenvolvedor Python e trabalho com "
+        "FastAPI, PostgreSQL e Docker na AWS."
+    )
+    res_exp = interpret_conversational_message(exp_text, context=None)
+    assert res_exp.intent == ConversationalIntent.TEXT_EXPERIENCE
+    assert res_exp.confidence == IntentConfidence.HIGH

@@ -301,7 +301,6 @@ def is_privacy_intent(text: str) -> bool:
     explicit_commands = {
         "privacidade",
         "lgpd",
-        "meus dados",
         "excluir dados",
         "excluir meus dados",
         "apagar dados",
@@ -1199,7 +1198,9 @@ def dispatch_inbound_message(
         ConversationalIntent.CLARIFICATION_NEEDED,
         ConversationalIntent.UNKNOWN,
     ):
-        conv_ctx = resolve_user_conversation_context(session, user=user, link_id=link_id)
+        conv_ctx: ConversationContext | None = None
+        if user is not None:
+            conv_ctx = resolve_user_conversation_context(session, user=user, link_id=link_id)
         interpretation = interpret_conversational_message(text, context=conv_ctx)
 
     intent = interpretation.intent

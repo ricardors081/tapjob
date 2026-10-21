@@ -835,3 +835,182 @@ def test_privacy_intent_and_pasted_job_text_heuristics() -> None:
     assert is_privacy_intent("política de privacidade")
     assert is_privacy_intent("excluir meus dados")
     assert is_privacy_intent("apagar dados")
+
+
+def test_turn_2_to_turn_3_cascade_and_downstream_unblocked(mock_session: MagicMock) -> None:
+    """Cascade Regression: Turn 2 (intake) -> Turn 3 ('tudo certo, pode salvar meus dados').
+
+    Proves:
+    1. Turn 2 stages ResumeImport in READY_FOR_REVIEW with candidate facts.
+    2. Turn 3 phrase 'tudo certo, pode salvar meus dados' is NOT hijacked by privacy,
+       routes to FACT_CONFIRM_ALL, finalizes the import, updates profile_version >= 1
+       with active facts.
+    3. Downstream application request (Turn 5) is unblocked because profile facts are confirmed.
+    """
+    from tapjob_api.resume_import.models import ImportStatus, ResumeImport, ResumeImportCandidate
+
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock(id=uuid.uuid4(), user_id=user.id)
+    queued_messages: list[MagicMock] = []
+
+    def fake_queue(session: Any, **kwargs: Any) -> MagicMock:
+        mock_msg = MagicMock()
+        mock_msg.message_text = kwargs["message_text"]
+        mock_msg.idempotency_key = kwargs["idempotency_key"]
+        queued_messages.append(mock_msg)
+        return mock_msg
+
+    # --- Turn 2: Text Experience Intake ---
+    turn_2_inbound = _make_inbound(
+        "Tenho 5 anos de experiência como Desenvolvedor Python e trabalho com "
+        "FastAPI, PostgreSQL e Docker na AWS.",
+        msg_id="turn_2_msg",
+    )
+    staged_items: list[Any] = []
+    mock_session.add = MagicMock(side_effect=staged_items.append)
+    mock_session.scalars.return_value.all.return_value = []
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue,
+        ),
+    ):
+        keys_2 = dispatch_inbound_message(
+            mock_session,
+            redis_client=None,
+            inbound=turn_2_inbound,
+            provider_id=uuid.uuid4(),
+        )
+
+    assert len(keys_2) == 1
+    assert (
+        "Recebemos suas experiências profissionais com sucesso!" in queued_messages[0].message_text
+    )
+    staged_imports = [item for item in staged_items if isinstance(item, ResumeImport)]
+    assert len(staged_imports) == 1
+    resume_import = staged_imports[0]
+    assert resume_import.status == ImportStatus.READY_FOR_REVIEW
+
+    # Attach candidates to import for review
+    candidates = [item for item in staged_items if isinstance(item, ResumeImportCandidate)]
+    assert len(candidates) >= 5
+    for c in candidates:
+        if c.id is None:
+            c.id = uuid.uuid4()
+    resume_import.candidates = candidates
+
+    # --- Turn 3: Fact Confirmation with exact live canary phrase ---
+    turn_3_inbound = _make_inbound("tudo certo, pode salvar meus dados", msg_id="turn_3_msg")
+    queued_messages.clear()
+
+    # Mock DB query for latest READY_FOR_REVIEW import
+    mock_session.execute.return_value.scalar_one_or_none.return_value = resume_import
+    mock_session.scalars.return_value.all.return_value = []
+
+    mock_finalize_res = MagicMock()
+    mock_finalize_res.resume_version.profile_version = 1
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.get_truth_snapshot",
+            return_value=MagicMock(profile_version=0),
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.confirm_candidates_and_finalize",
+            return_value=mock_finalize_res,
+        ) as mock_finalize,
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue,
+        ),
+    ):
+        keys_3 = dispatch_inbound_message(
+            mock_session,
+            redis_client=None,
+            inbound=turn_3_inbound,
+            provider_id=uuid.uuid4(),
+        )
+
+    assert len(keys_3) == 1
+    mock_finalize.assert_called_once()
+    assert "fact_conf_turn_3_msg" in keys_3[0]
+    confirm_text = queued_messages[0].message_text
+    assert "Informações confirmadas com sucesso!" in confirm_text
+    assert "Versão 1" in confirm_text
+    assert "Privacidade e Proteção de Dados" not in confirm_text
+
+    # --- Downstream (Turn 5): Application Request is NOT blocked by unconfirmed facts ---
+    turn_5_inbound = _make_inbound(
+        "curti essa vaga, como faço pra me candidatar?", msg_id="turn_5_msg"
+    )
+    queued_messages.clear()
+
+    job = Job(
+        id=uuid.uuid4(),
+        title="Desenvolvedor Python Pleno",
+        status=JobStatus.ACTIVE,
+    )
+    fake_tailored = {
+        "tailored_resume": "Desenvolvedor experiente em Python e FastAPI",
+        "match_highlights": ["Python", "FastAPI"],
+    }
+    fake_kit = {
+        "kit_id": str(uuid.uuid4()),
+        "status": ApplicationStatus.PREPARING.value,
+        "tailored_draft": fake_tailored,
+    }
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_target_job",
+            return_value=job,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.tool_tailor_resume",
+            return_value=fake_tailored,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.tool_build_application_kit",
+            return_value=fake_kit,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue,
+        ),
+    ):
+        keys_5 = dispatch_inbound_message(
+            mock_session,
+            redis_client=None,
+            inbound=turn_5_inbound,
+            provider_id=uuid.uuid4(),
+        )
+
+    assert len(keys_5) >= 1
+    app_text = queued_messages[0].message_text
+    assert "Não foi possível gerar o Application Kit no momento" not in app_text
+    assert "Application Kit preparado com sucesso" in app_text
