@@ -1774,12 +1774,86 @@ def dispatch_inbound_message(
                 (w for w in words if w.startswith(("http://", "https://"))), None
             )
         job_url = extracted_job_url
+
+        # Check for rich embedded job description text alongside the URL
+        text_without_url = text
         if job_url:
+            text_without_url = text_without_url.replace(job_url, "")
+        text_without_url = re.sub(r"https?://\S+", "", text_without_url).strip()
+        text_without_url = re.sub(r"(?i)\b(link|url)\s*:\s*", "", text_without_url).strip()
+
+        has_embedded_job_desc = len(text_without_url) > 20 and any(
+            term in text_without_url.lower()
+            for term in (
+                "vaga",
+                "requisitos",
+                "desenvolvedor",
+                "analista",
+                "engenheiro",
+                "techcorp",
+                "pleno",
+                "senior",
+                "junior",
+                "estagio",
+                "estágio",
+                "cargo",
+                "atividades",
+                "responsabilidades",
+                "empresa",
+            )
+        )
+
+        if has_embedded_job_desc:
+            # FAST PATH: Ingest embedded job text immediately without blocking on remote URL.
+            try:
+                clean_text = (
+                    text_without_url.split(":", 1)[1].strip()
+                    if ":" in text_without_url[:15]
+                    else text_without_url
+                )
+                first_line = clean_text.splitlines()[0][:60]
+                title = first_line if len(first_line) > 5 else "Oportunidade Profissional"
+                company = "Empresa"
+                for sep in (" na ", " no ", " em ", " - ", " @ "):
+                    if sep in title:
+                        parts = title.split(sep, 1)
+                        title = parts[0].strip()
+                        company = parts[1].split(".")[0].strip()
+                        break
+
+                job_info = tool_ingest_job_text(
+                    session,
+                    user=user,
+                    text=clean_text,
+                    title_hint=title,
+                    company_hint=company,
+                    source_url=job_url,
+                )
+                job_id = uuid.UUID(job_info["job_id"])
+                match_info = tool_match_job(session, redis_client, user=user, job_id=job_id)
+                overall = match_info["overall_score"]
+                eligibility = match_info["eligibility"]
+                response_text = (
+                    f"Vaga analisada: {job_info['title']} ({job_info['company']}).\n"
+                    f"Match Score WP2.2: {overall}/100 ({eligibility}).\n\n"
+                    "Deseja gerar o Application Kit completo para esta vaga? "
+                    "Envie: 'quero me candidatar'."
+                )
+            except Exception as fast_path_exc:
+                logger.warning(
+                    "orchestration.job_url_embedded_fastpath_failed",
+                    extra={"user_id": str(user.id), "error": str(fast_path_exc)},
+                )
+                response_text = (
+                    "Recebemos seu link de vaga, mas não foi possível "
+                    "processá-lo no momento. Verifique se o link está acessível."
+                )
+        elif job_url:
+            # URL-ONLY PATH: Bounded remote fetch (<= 8s total wall-clock budget).
             try:
                 job_info = tool_ingest_job_url(session, user=user, url=job_url)
                 job_id = uuid.UUID(job_info["job_id"])
                 match_info = tool_match_job(session, redis_client, user=user, job_id=job_id)
-
                 overall = match_info["overall_score"]
                 eligibility = match_info["eligibility"]
                 response_text = (
@@ -1791,87 +1865,29 @@ def dispatch_inbound_message(
             except SoftTimeLimitExceeded:
                 raise
             except Exception as exc:
-                if is_transient_inbound_error(exc):
-                    raise
                 logger.warning(
-                    "orchestration.job_url_failed",
+                    "orchestration.job_url_remote_fetch_failed",
                     extra={"user_id": str(user.id), "error": str(exc)},
                 )
-                # Resilient fallback: if the URL failed (e.g. 404, network error),
-                # but the message itself contains job description details,
-                # ingest the textual description so matching and application kit can proceed.
-                text_without_url = text.replace(job_url, "").strip()
-                if len(text_without_url) > 20 and any(
-                    term in text_without_url.lower()
-                    for term in (
-                        "vaga",
-                        "requisitos",
-                        "desenvolvedor",
-                        "analista",
-                        "engenheiro",
-                        "techcorp",
-                        "pleno",
-                        "senior",
-                        "junior",
-                    )
-                ):
-                    try:
-                        clean_text = (
-                            text_without_url.split(":", 1)[1].strip()
-                            if ":" in text_without_url[:15]
-                            else text_without_url
-                        )
-                        first_line = clean_text.splitlines()[0][:60]
-                        title = first_line if len(first_line) > 5 else "Oportunidade Profissional"
-                        company = "Empresa"
-                        for sep in (" na ", " no ", " em "):
-                            if sep in title:
-                                parts = title.split(sep, 1)
-                                title = parts[0].strip()
-                                company = parts[1].split(".")[0].strip()
-                                break
-
-                        job_info = tool_ingest_job_text(
-                            session,
-                            user=user,
-                            text=clean_text,
-                            title_hint=title,
-                            company_hint=company,
-                        )
-                        job_id = uuid.UUID(job_info["job_id"])
-                        match_info = tool_match_job(session, redis_client, user=user, job_id=job_id)
-                        overall = match_info["overall_score"]
-                        eligibility = match_info["eligibility"]
-                        response_text = (
-                            f"Vaga analisada: {job_info['title']} ({job_info['company']}).\n"
-                            f"Match Score WP2.2: {overall}/100 ({eligibility}).\n\n"
-                            "Deseja gerar o Application Kit completo para esta vaga? "
-                            "Envie: 'quero me candidatar'."
-                        )
-                    except Exception as fallback_exc:
-                        logger.warning(
-                            "orchestration.job_url_fallback_failed",
-                            extra={"user_id": str(user.id), "error": str(fallback_exc)},
-                        )
-                        response_text = (
-                            "Recebemos seu link de vaga, mas não foi possível "
-                            "processá-lo no momento. Verifique se o link está acessível."
-                        )
-                else:
-                    response_text = (
-                        "Recebemos seu link de vaga, mas não foi possível "
-                        "processá-lo no momento. Verifique se o link está acessível."
-                    )
-
-            msg = queue_response_message(
-                session,
-                channel_identity_link_id=link_id,
-                recipient_external_id=external_id,
-                message_text=response_text,
-                idempotency_key=f"job_url_{inbound.provider_message_id}",
+                response_text = (
+                    "Não foi possível acessar a vaga pelo link fornecido "
+                    "(tempo limite ou link indisponível). Por favor, copie e cole aqui o texto "
+                    "com a descrição da vaga para realizarmos a análise e o match!"
+                )
+        else:
+            response_text = (
+                "Por favor, envie o link da vaga ou cole a descrição completa para analisarmos."
             )
-            queued_keys.append(msg.idempotency_key)
-            return queued_keys
+
+        msg = queue_response_message(
+            session,
+            channel_identity_link_id=link_id,
+            recipient_external_id=external_id,
+            message_text=response_text,
+            idempotency_key=f"job_url_{inbound.provider_message_id}",
+        )
+        queued_keys.append(msg.idempotency_key)
+        return queued_keys
 
     # 5. Candidate text experience intake (J-03)
     if intent == ConversationalIntent.TEXT_EXPERIENCE:

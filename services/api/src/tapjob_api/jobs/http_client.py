@@ -36,8 +36,9 @@ from tapjob_api.jobs.errors import (
 
 MAX_JOB_URL_DECODED_BYTES = 2_097_152  # 2 MiB
 MAX_REDIRECTS = 3
-CONNECT_TIMEOUT_SECONDS = 5.0
-READ_TIMEOUT_SECONDS = 10.0
+TOTAL_FETCH_TIMEOUT_SECONDS = 8.0
+CONNECT_TIMEOUT_SECONDS = 3.0
+READ_TIMEOUT_SECONDS = 5.0
 
 ALLOWED_SCHEMES = frozenset({"http", "https"})
 ALLOWED_MEDIA_TYPES = frozenset({"text/html", "application/xhtml+xml", "text/plain"})
@@ -136,8 +137,14 @@ class PinnedAsyncHTTPTransport(httpx.AsyncHTTPTransport):
 class SafeHttpClient:
     """SSRF-guarded HTTP client for URL intake."""
 
-    def __init__(self, *, max_decoded_bytes: int = MAX_JOB_URL_DECODED_BYTES) -> None:
+    def __init__(
+        self,
+        *,
+        max_decoded_bytes: int = MAX_JOB_URL_DECODED_BYTES,
+        total_timeout_seconds: float = TOTAL_FETCH_TIMEOUT_SECONDS,
+    ) -> None:
         self.max_decoded_bytes = max_decoded_bytes
+        self.total_timeout_seconds = total_timeout_seconds
 
     def parse_and_validate_url(self, raw_url: str) -> tuple[str, str, int]:
         """Validate URL syntax, scheme, userinfo and return (scheme, host, port)."""
@@ -208,113 +215,121 @@ class SafeHttpClient:
         visited_urls: set[str] = {current_url}
         redirect_count = 0
 
-        while True:
-            _scheme, host, port = self.parse_and_validate_url(current_url)
-            resolved_ips = await self.resolve_and_validate_dns(host, port)
-            pinned_ip = resolved_ips[0]
+        try:
+            async with asyncio.timeout(self.total_timeout_seconds):
+                while True:
+                    _scheme, host, port = self.parse_and_validate_url(current_url)
+                    resolved_ips = await self.resolve_and_validate_dns(host, port)
+                    pinned_ip = resolved_ips[0]
 
-            transport = PinnedAsyncHTTPTransport(pinned_ip=pinned_ip)
-            timeout = httpx.Timeout(
-                connect=CONNECT_TIMEOUT_SECONDS,
-                read=READ_TIMEOUT_SECONDS,
-                write=CONNECT_TIMEOUT_SECONDS,
-                pool=CONNECT_TIMEOUT_SECONDS,
-            )
+                    transport = PinnedAsyncHTTPTransport(pinned_ip=pinned_ip)
+                    timeout = httpx.Timeout(
+                        connect=CONNECT_TIMEOUT_SECONDS,
+                        read=READ_TIMEOUT_SECONDS,
+                        write=CONNECT_TIMEOUT_SECONDS,
+                        pool=CONNECT_TIMEOUT_SECONDS,
+                    )
 
-            headers = {
-                "User-Agent": "TapJob-Intake/1.0 (+https://tapjob.com.br)",
-                "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
-                "Accept-Encoding": "gzip, deflate, br",
-            }
+                    headers = {
+                        "User-Agent": "TapJob-Intake/1.0 (+https://tapjob.com.br)",
+                        "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
+                        "Accept-Encoding": "gzip, deflate, br",
+                    }
 
-            try:
-                async with (
-                    httpx.AsyncClient(
-                        transport=transport,
-                        trust_env=False,
-                        timeout=timeout,
-                        verify=True,
-                    ) as client,
-                    client.stream(
-                        "GET",
-                        current_url,
-                        headers=headers,
-                        follow_redirects=False,
-                    ) as response,
-                ):
-                    # Check for redirect
-                    if response.status_code in (
-                        HTTPStatus.MOVED_PERMANENTLY,
-                        HTTPStatus.FOUND,
-                        HTTPStatus.SEE_OTHER,
-                        HTTPStatus.TEMPORARY_REDIRECT,
-                        HTTPStatus.PERMANENT_REDIRECT,
-                    ):
-                        redirect_count += 1
-                        if redirect_count > MAX_REDIRECTS:
-                            raise JobUrlUnreachableError("Maximum redirect limit exceeded")
-
-                        location = response.headers.get("Location")
-                        if not location:
-                            raise JobUrlUnreachableError("Redirect missing Location header")
-
-                        next_url = urllib.parse.urljoin(current_url, location)
-                        if next_url in visited_urls:
-                            raise JobUrlUnreachableError("Redirect loop detected")
-
-                        visited_urls.add(next_url)
-                        current_url = next_url
-                        continue
-
-                    if response.status_code != HTTPStatus.OK:
-                        raise JobUrlUnreachableError(
-                            f"Upstream server returned HTTP {response.status_code}"
-                        )
-
-                    content_type_header = response.headers.get("content-type", "")
-                    media_type = content_type_header.split(";")[0].strip().lower()
-                    if media_type not in ALLOWED_MEDIA_TYPES:
-                        raise JobContentTypeUnsupportedError(
-                            f"Unsupported content-type: {media_type}"
-                        )
-
-                    # Stream uncompressed/decoded content enforcing safety boundary
-                    total_bytes = 0
-                    chunks: list[bytes] = []
-                    async for chunk in response.aiter_bytes():
-                        total_bytes += len(chunk)
-                        if total_bytes > self.max_decoded_bytes:
-                            raise JobUrlTooLargeError("Response exceeded maximum 2 MiB limit")
-                        chunks.append(chunk)
-
-                    raw_content = b"".join(chunks)
-                    encoding = response.encoding or "utf-8"
                     try:
-                        text = raw_content.decode(encoding, errors="replace")
-                    except Exception:
-                        text = raw_content.decode("utf-8", errors="replace")
+                        async with (
+                            httpx.AsyncClient(
+                                transport=transport,
+                                trust_env=False,
+                                timeout=timeout,
+                                verify=True,
+                            ) as client,
+                            client.stream(
+                                "GET",
+                                current_url,
+                                headers=headers,
+                                follow_redirects=False,
+                            ) as response,
+                        ):
+                            # Check for redirect
+                            if response.status_code in (
+                                HTTPStatus.MOVED_PERMANENTLY,
+                                HTTPStatus.FOUND,
+                                HTTPStatus.SEE_OTHER,
+                                HTTPStatus.TEMPORARY_REDIRECT,
+                                HTTPStatus.PERMANENT_REDIRECT,
+                            ):
+                                redirect_count += 1
+                                if redirect_count > MAX_REDIRECTS:
+                                    raise JobUrlUnreachableError("Maximum redirect limit exceeded")
 
-                    return current_url, media_type, text
+                                location = response.headers.get("Location")
+                                if not location:
+                                    raise JobUrlUnreachableError("Redirect missing Location header")
 
-            except (httpx.ConnectError, ssl.SSLError) as error:
-                # Distinguish TLS/SSL failures
-                is_cert_err = (
-                    isinstance(error, ssl.SSLCertVerificationError)
-                    or "certificate" in str(error).lower()
-                )
-                if is_cert_err:
-                    raise JobUrlTlsFailedError("TLS certificate validation failed") from error
-                raise JobUrlUnreachableError("Failed to connect to host") from error
-            except httpx.TimeoutException as error:
-                raise JobUrlUnreachableError("Connection timed out") from error
-            except (
-                JobUrlInvalidError,
-                JobUrlDestinationForbiddenError,
-                JobUrlUnreachableError,
-                JobUrlTlsFailedError,
-                JobUrlTooLargeError,
-                JobContentTypeUnsupportedError,
-            ):
-                raise
-            except Exception as error:
-                raise JobUrlUnreachableError("Unexpected HTTP transport error") from error
+                                next_url = urllib.parse.urljoin(current_url, location)
+                                if next_url in visited_urls:
+                                    raise JobUrlUnreachableError("Redirect loop detected")
+
+                                visited_urls.add(next_url)
+                                current_url = next_url
+                                continue
+
+                            if response.status_code != HTTPStatus.OK:
+                                raise JobUrlUnreachableError(
+                                    f"Upstream server returned HTTP {response.status_code}"
+                                )
+
+                            content_type_header = response.headers.get("content-type", "")
+                            media_type = content_type_header.split(";")[0].strip().lower()
+                            if media_type not in ALLOWED_MEDIA_TYPES:
+                                raise JobContentTypeUnsupportedError(
+                                    f"Unsupported content-type: {media_type}"
+                                )
+
+                            # Stream uncompressed/decoded content enforcing safety boundary
+                            total_bytes = 0
+                            chunks: list[bytes] = []
+                            async for chunk in response.aiter_bytes():
+                                total_bytes += len(chunk)
+                                if total_bytes > self.max_decoded_bytes:
+                                    raise JobUrlTooLargeError(
+                                        "Response exceeded maximum 2 MiB limit"
+                                    )
+                                chunks.append(chunk)
+
+                            raw_content = b"".join(chunks)
+                            encoding = response.encoding or "utf-8"
+                            try:
+                                text = raw_content.decode(encoding, errors="replace")
+                            except Exception:
+                                text = raw_content.decode("utf-8", errors="replace")
+
+                            return current_url, media_type, text
+
+                    except (httpx.ConnectError, ssl.SSLError) as error:
+                        # Distinguish TLS/SSL failures
+                        is_cert_err = (
+                            isinstance(error, ssl.SSLCertVerificationError)
+                            or "certificate" in str(error).lower()
+                        )
+                        if is_cert_err:
+                            raise JobUrlTlsFailedError(
+                                "TLS certificate validation failed"
+                            ) from error
+                        raise JobUrlUnreachableError("Failed to connect to host") from error
+                    except httpx.TimeoutException as error:
+                        raise JobUrlUnreachableError("Connection timed out") from error
+                    except (
+                        JobUrlInvalidError,
+                        JobUrlDestinationForbiddenError,
+                        JobUrlUnreachableError,
+                        JobUrlTlsFailedError,
+                        JobUrlTooLargeError,
+                        JobContentTypeUnsupportedError,
+                    ):
+                        raise
+                    except Exception as error:
+                        raise JobUrlUnreachableError("Unexpected HTTP transport error") from error
+        except TimeoutError as error:
+            raise JobUrlUnreachableError("Connection timed out") from error

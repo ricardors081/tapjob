@@ -177,12 +177,14 @@ def tool_ingest_job_text(
     text: str,
     title_hint: str | None = None,
     company_hint: str | None = None,
+    source_url: str | None = None,
 ) -> dict[str, Any]:
     """6. Tool: ingest_job_text."""
     req = JobPasteIntakeRequest(
         company_name=company_hint or "Empresa",
         title=title_hint or "Vaga",
         description=text,
+        source_url=source_url,
     )
     job = jobs_service.intake_job_paste(session, user=user, request=req)
     company_name = job.company.name if job.company else (company_hint or "Empresa")

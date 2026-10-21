@@ -216,11 +216,18 @@ class EvolutionCanaryClient:
         self,
         since_timestamp_ms: int,
         seen_message_ids: set[str] | None = None,
+        rejected_message_ids: set[str] | None = None,
+        expected_provider_message_id: str | None = None,
+        expected_provider_message_ids: set[str] | None = None,
         timeout_sec: float = 15.0,
         poll_interval: float = 1.0,
         synthetic_dry_reply: str | None = None,
     ) -> dict[str, Any] | None:
-        """Polls for the latest reply from TapJob bot received by the canary client."""
+        """Polls for the latest reply from TapJob bot received by the canary client.
+
+        Supports exact reply correlation by matching expected_provider_message_id(s)
+        and explicitly rejecting delayed replies present in rejected_message_ids.
+        """
         if self.dry_run:
             if synthetic_dry_reply:
                 return {
@@ -230,6 +237,13 @@ class EvolutionCanaryClient:
             return None
 
         seen = seen_message_ids or set()
+        rejected = rejected_message_ids or set()
+        target_ids: set[str] = set()
+        if expected_provider_message_id:
+            target_ids.add(expected_provider_message_id)
+        if expected_provider_message_ids:
+            target_ids.update(expected_provider_message_ids)
+
         buffer_ms = since_timestamp_ms - 5000  # 5s clock skew tolerance
         deadline = time.time() + timeout_sec
         while time.time() < deadline:
@@ -248,10 +262,27 @@ class EvolutionCanaryClient:
                     or CANARY_BOT_PHONE in remote_jid_alt
                     or "38913225810041" in remote_jid
                 )
-                is_new = (msg_id not in seen) if seen else (ts_ms >= buffer_ms)
+                if not is_from_bot:
+                    continue
 
-                if is_from_bot and is_new:
+                # Reject known delayed or prior-turn replies
+                if msg_id in rejected:
+                    logger.warning(
+                        "Canary client received delayed/prior message %s; discarding.", msg_id
+                    )
+                    continue
+
+                # If target reply IDs are specified from outbox, enforce exact match
+                if target_ids:
+                    if msg_id in target_ids:
+                        return m
+                    continue
+
+                # Fallback: check novelty and timestamp window
+                is_new = (msg_id not in seen) if seen else (ts_ms >= buffer_ms)
+                if is_new:
                     return m
+
             time.sleep(poll_interval)
         return None
 
@@ -298,6 +329,74 @@ class CanaryDbVerifier:
         """Returns highest outbox ID currently recorded."""
         val = self.session.execute(sa.text("SELECT max(id) FROM outbound_message_queue")).scalar()
         return int(val) if val is not None else 0
+
+    def get_all_sent_outbox_provider_ids(self) -> set[str]:
+        """Returns set of all provider_message_ids recorded in outbound_message_queue."""
+        with contextlib.suppress(Exception):
+            self.session.rollback()
+        rows = self.session.execute(
+            sa.text(
+                "SELECT provider_message_id FROM outbound_message_queue "
+                "WHERE provider_message_id IS NOT NULL"
+            )
+        ).fetchall()
+        return {str(r[0]) for r in rows if r[0]}
+
+    def wait_for_outbox_reply(
+        self,
+        inbound_provider_msg_id: str,
+        min_outbox_id: int | None = None,
+        timeout_sec: float = 20.0,
+        interval_sec: float = 0.5,
+    ) -> dict[str, Any] | None:
+        """Polls outbound_message_queue for outbox record matching inbound message.
+
+        Waits until status is 'sent' and provider_message_id is populated, or until
+        terminal failure (failed, dead, cancelled) or timeout.
+        """
+        deadline = time.time() + timeout_sec
+        sql = (
+            "SELECT id, status, idempotency_key, provider_message_id "
+            "FROM outbound_message_queue "
+            "WHERE idempotency_key LIKE :pattern "
+        )
+        params: dict[str, Any] = {"pattern": f"%{inbound_provider_msg_id}%"}
+        if min_outbox_id is not None and min_outbox_id > 0:
+            sql += "AND id >= :min_id "
+            params["min_id"] = min_outbox_id
+        sql += "ORDER BY id ASC"
+
+        while time.time() < deadline:
+            with contextlib.suppress(Exception):
+                self.session.rollback()
+            rows = self.session.execute(sa.text(sql), params).fetchall()
+            if rows:
+                sent_provider_ids: list[str] = []
+                last_row = rows[-1]
+                for r in rows:
+                    st = str(r[1])
+                    pid = r[3]
+                    if st == "sent" and pid:
+                        sent_provider_ids.append(str(pid))
+                    elif st in ("failed", "dead", "cancelled"):
+                        return {
+                            "outbox_id": r[0],
+                            "status": st,
+                            "idempotency_key": str(r[2]),
+                            "provider_message_id": str(pid) if pid else None,
+                            "provider_message_ids": sent_provider_ids,
+                        }
+
+                if sent_provider_ids:
+                    return {
+                        "outbox_id": last_row[0],
+                        "status": "sent",
+                        "idempotency_key": str(last_row[2]),
+                        "provider_message_id": sent_provider_ids[0],
+                        "provider_message_ids": sent_provider_ids,
+                    }
+            time.sleep(interval_sec)
+        return None
 
     def resolve_user_id(self, sender_digits: str) -> str | None:
         """Resolves user UUID via channel_identity_links joined with channel_identities."""
@@ -921,6 +1020,7 @@ def run_canary_suite(
     initial_app_ids: set[str] = set()
     initial_kit_ids: set[str] = set()
     initial_reminder_ids: set[str] = set()
+    prior_reply_provider_ids: set[str] = set()
 
     if not client.dry_run:
         if verifier is None:
@@ -930,6 +1030,7 @@ def run_canary_suite(
         try:
             initial_outbox_id = verifier.get_max_outbox_id()
             initial_envelope_id = verifier.get_max_envelope_id()
+            prior_reply_provider_ids.update(verifier.get_all_sent_outbox_provider_ids())
             initial_uid = verifier.resolve_user_id(CANARY_CLIENT_PHONE)
             if initial_uid:
                 initial_app_ids = verifier.get_application_ids(initial_uid)
@@ -941,6 +1042,7 @@ def run_canary_suite(
         try:
             initial_outbox_id = verifier.get_max_outbox_id()
             initial_envelope_id = verifier.get_max_envelope_id()
+            prior_reply_provider_ids.update(verifier.get_all_sent_outbox_provider_ids())
             initial_uid = verifier.resolve_user_id(CANARY_CLIENT_PHONE)
             if initial_uid:
                 initial_app_ids = verifier.get_application_ids(initial_uid)
@@ -957,11 +1059,14 @@ def run_canary_suite(
         t0 = time.time()
         t0_ms = int(t0 * 1000)
         min_env_id = None
+        min_outbox_id = None
         if verifier is not None:
             try:
                 min_env_id = verifier.get_max_envelope_id() + 1
+                min_outbox_id = verifier.get_max_outbox_id() + 1
             except Exception:
                 min_env_id = None
+                min_outbox_id = None
 
         seen_client_msg_ids = client.get_recent_message_ids(CANARY_CLIENT_INSTANCE)
 
@@ -976,17 +1081,47 @@ def run_canary_suite(
             msg_id = send_res.get("key", {}).get("id") or "N/A"
             _emit(f"  Status           : DISPATCHED in {elapsed:.2f}s (Msg ID: {msg_id})")
 
-            # 2. Poll for bot reply reaching the canary client
+            # 2. Correlate with transactional outbox
+            expected_reply_ids: set[str] = set()
+            if verifier is not None and not client.dry_run and msg_id != "N/A":
+                outbox_record = verifier.wait_for_outbox_reply(
+                    inbound_provider_msg_id=msg_id,
+                    min_outbox_id=min_outbox_id,
+                    timeout_sec=20.0,
+                )
+                if outbox_record:
+                    p_ids = outbox_record.get("provider_message_ids") or []
+                    if not p_ids and outbox_record.get("provider_message_id"):
+                        p_ids = [outbox_record["provider_message_id"]]
+                    expected_reply_ids = {str(pid) for pid in p_ids if pid}
+                    _emit(
+                        f"  Outbox Correlated: outbox_id={outbox_record.get('outbox_id')}, "
+                        f"status={outbox_record.get('status')}, "
+                        f"reply_ids={list(expected_reply_ids)}"
+                    )
+                else:
+                    _emit("  Outbox Correlated: NONE (outbox row not sent within budget)")
+
+            # 3. Poll for bot reply reaching the canary client
             reply_record = client.poll_reply_on_canary_client(
                 since_timestamp_ms=t0_ms,
                 seen_message_ids=seen_client_msg_ids,
-                timeout_sec=25.0 if not client.dry_run else 0.1,
+                rejected_message_ids=prior_reply_provider_ids,
+                expected_provider_message_ids=expected_reply_ids if expected_reply_ids else None,
+                timeout_sec=15.0 if not client.dry_run else 0.1,
                 synthetic_dry_reply=turn.get("synthetic_dry_reply"),
             )
             if client.dry_run and not reply_record:
                 reply_record = {
                     "message": {"conversation": turn.get("synthetic_dry_reply", "Dry reply")}
                 }
+
+            if reply_record:
+                rec_id = str(reply_record.get("key", {}).get("id") or "")
+                if rec_id:
+                    prior_reply_provider_ids.add(rec_id)
+            if expected_reply_ids:
+                prior_reply_provider_ids.update(expected_reply_ids)
 
             reply_text = extract_message_text(reply_record) if reply_record else ""
             reply_received = bool(reply_text)

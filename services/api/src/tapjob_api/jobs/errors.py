@@ -13,31 +13,35 @@ class JobTextTooLongError(JobDomainError):
     """Raised when job description text exceeds the maximum allowable length."""
 
 
-class JobUrlInvalidError(JobDomainError):
+class JobUrlError(JobDomainError):
+    """Base exception for URL intake and fetching errors."""
+
+
+class JobUrlInvalidError(JobUrlError):
     """Raised when an intake URL fails parsing or contains credentials."""
 
 
-class JobUrlDestinationForbiddenError(JobDomainError):
+class JobUrlDestinationForbiddenError(JobUrlError):
     """Raised when DNS resolution resolves to private, loopback, or forbidden IP space."""
 
 
-class JobUrlUnreachableError(JobDomainError):
+class JobUrlUnreachableError(JobUrlError):
     """Raised when connection cannot be established or host is unreachable."""
 
 
-class JobUrlTlsFailedError(JobDomainError):
+class JobUrlTlsFailedError(JobUrlError):
     """Raised when TLS handshake or certificate hostname validation fails."""
 
 
-class JobUrlTooLargeError(JobDomainError):
+class JobUrlTooLargeError(JobUrlError):
     """Raised when streamed decoded response bytes exceed the 2 MiB safety bound."""
 
 
-class JobContentTypeUnsupportedError(JobDomainError):
+class JobContentTypeUnsupportedError(JobUrlError):
     """Raised when response Content-Type is not supported (e.g. binary, PDF, media)."""
 
 
-class JobPageRequiresManualPasteError(JobDomainError):
+class JobPageRequiresManualPasteError(JobUrlError):
     """Raised when HTML page depends on dynamic JavaScript and contains no extractable body."""
 
 

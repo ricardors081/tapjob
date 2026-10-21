@@ -489,5 +489,118 @@ class TestEnvelopeProcessingVerifier(unittest.TestCase):
         self.assertEqual(res["routed_intent"], "PRIVACY_INQUIRY")
 
 
+class TestLiveCanaryOutboxCorrelation(unittest.TestCase):
+    """Verifies transactional outbox correlation, delayed reply rejection, and exact matching."""
+
+    def setUp(self) -> None:
+        self.mock_session = MagicMock()
+        self.verifier = CanaryDbVerifier(self.mock_session)
+
+    def test_wait_for_outbox_reply_successful_match(self) -> None:
+        """When outbox row exists with status='sent' and provider_message_id, it is returned."""
+        # Row shape: (id, status, idempotency_key, provider_message_id)
+        mock_row = (42, "sent", "job_url_3EB0123", "wamid.evolution_reply_42")
+        mock_result = MagicMock()
+        mock_result.fetchall.return_value = [mock_row]
+        self.mock_session.execute.return_value = mock_result
+
+        res = self.verifier.wait_for_outbox_reply("3EB0123", min_outbox_id=10, timeout_sec=1.0)
+        self.assertIsNotNone(res)
+        if res is not None:
+            self.assertEqual(res["outbox_id"], 42)
+            self.assertEqual(res["status"], "sent")
+            self.assertEqual(res["provider_message_id"], "wamid.evolution_reply_42")
+            self.assertIn("wamid.evolution_reply_42", res["provider_message_ids"])
+
+    def test_wait_for_outbox_reply_terminal_failure(self) -> None:
+        """When outbox row has terminal failure status, returns failure record immediately."""
+        mock_row = (43, "failed", "job_url_3EB0FAIL", None)
+        mock_result = MagicMock()
+        mock_result.fetchall.return_value = [mock_row]
+        self.mock_session.execute.return_value = mock_result
+
+        res = self.verifier.wait_for_outbox_reply("3EB0FAIL", timeout_sec=1.0)
+        self.assertIsNotNone(res)
+        if res is not None:
+            self.assertEqual(res["status"], "failed")
+            self.assertIsNone(res["provider_message_id"])
+
+    def test_wait_for_outbox_reply_timeout(self) -> None:
+        """When no outbox row matches within timeout, returns None."""
+        mock_result = MagicMock()
+        mock_result.fetchall.return_value = []
+        self.mock_session.execute.return_value = mock_result
+
+        res = self.verifier.wait_for_outbox_reply(
+            "3EB0NONEXISTENT", timeout_sec=0.2, interval_sec=0.05
+        )
+        self.assertIsNone(res)
+
+    def test_poll_reply_exact_provider_message_id_accepted(self) -> None:
+        """Exact expected_provider_message_ids match is accepted."""
+        client = EvolutionCanaryClient("https://evolution.mock", "key", dry_run=False)
+        bot_msg = {
+            "key": {
+                "id": "wamid.exact_turn6",
+                "fromMe": False,
+                "remoteJid": f"{CANARY_BOT_PHONE}@s.whatsapp.net",
+            },
+            "message": {"conversation": "Resposta exata do turno"},
+            "messageTimestamp": 1729000000,
+        }
+        with patch.object(client, "find_recent_messages", return_value=[bot_msg]):
+            rec = client.poll_reply_on_canary_client(
+                since_timestamp_ms=1728990000000,
+                expected_provider_message_ids={"wamid.exact_turn6"},
+                timeout_sec=0.2,
+                poll_interval=0.05,
+            )
+            self.assertIsNotNone(rec)
+            if rec is not None:
+                self.assertEqual(rec["key"]["id"], "wamid.exact_turn6")
+
+    def test_poll_reply_rejects_different_bot_message_when_expecting_exact_id(self) -> None:
+        """A different bot message arriving is ignored when expecting a specific ID."""
+        client = EvolutionCanaryClient("https://evolution.mock", "key", dry_run=False)
+        unexpected_bot_msg = {
+            "key": {
+                "id": "wamid.other_delayed_msg",
+                "fromMe": False,
+                "remoteJid": f"{CANARY_BOT_PHONE}@s.whatsapp.net",
+            },
+            "message": {"conversation": "Mensagem atrasada de outro turno"},
+            "messageTimestamp": 1729000000,
+        }
+        with patch.object(client, "find_recent_messages", return_value=[unexpected_bot_msg]):
+            rec = client.poll_reply_on_canary_client(
+                since_timestamp_ms=1728990000000,
+                expected_provider_message_ids={"wamid.exact_turn6"},
+                timeout_sec=0.15,
+                poll_interval=0.05,
+            )
+            self.assertIsNone(rec)
+
+    def test_poll_reply_rejects_delayed_reply_in_rejected_message_ids(self) -> None:
+        """Known prior-turn message in rejected_message_ids is discarded even without target_ids."""
+        client = EvolutionCanaryClient("https://evolution.mock", "key", dry_run=False)
+        delayed_msg = {
+            "key": {
+                "id": "wamid.turn4_delayed",
+                "fromMe": False,
+                "remoteJid": f"{CANARY_BOT_PHONE}@s.whatsapp.net",
+            },
+            "message": {"conversation": "Resposta atrasada do turno 4"},
+            "messageTimestamp": 1729000000,
+        }
+        with patch.object(client, "find_recent_messages", return_value=[delayed_msg]):
+            rec = client.poll_reply_on_canary_client(
+                since_timestamp_ms=1728990000000,
+                rejected_message_ids={"wamid.turn4_delayed"},
+                timeout_sec=0.15,
+                poll_interval=0.05,
+            )
+            self.assertIsNone(rec)
+
+
 if __name__ == "__main__":
     unittest.main()

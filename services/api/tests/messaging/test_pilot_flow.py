@@ -1014,3 +1014,221 @@ def test_turn_2_to_turn_3_cascade_and_downstream_unblocked(mock_session: MagicMo
     app_text = queued_messages[0].message_text
     assert "Não foi possível gerar o Application Kit no momento" not in app_text
     assert "Application Kit preparado com sucesso" in app_text
+
+
+def test_job_url_intake_fast_path_with_embedded_text_does_not_block_on_remote_url(
+    mock_session: MagicMock,
+) -> None:
+    """Proves Turn 4 input (URL + rich description) uses fast path without calling
+    tool_ingest_job_url.
+    """
+    inbound = _make_inbound(
+        "Vaga: Desenvolvedor Python Pleno na TechCorp. Requisitos: Python, FastAPI, Docker. "
+        "Link: https://jobs.lever.co/techcorp/python-pleno",
+        msg_id="turn_4_fastpath",
+    )
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock(id=uuid.uuid4())
+    fake_job_info = {
+        "job_id": str(uuid.uuid4()),
+        "title": "Desenvolvedor Python Pleno",
+        "company": "TechCorp",
+    }
+    fake_match_info = {
+        "overall_score": 88,
+        "eligibility": "ELIGIBLE",
+    }
+    queued_messages: list[MagicMock] = []
+
+    def fake_queue(
+        session: Session,
+        *,
+        channel_identity_link_id: Any,
+        recipient_external_id: str,
+        message_text: str,
+        idempotency_key: str,
+    ) -> MagicMock:
+        mock_msg = MagicMock()
+        mock_msg.message_text = message_text
+        mock_msg.idempotency_key = idempotency_key
+        queued_messages.append(mock_msg)
+        return mock_msg
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.tool_ingest_job_text",
+            return_value=fake_job_info,
+        ) as mock_ingest_text,
+        patch("tapjob_api.messaging.orchestration.tool_ingest_job_url") as mock_ingest_url,
+        patch(
+            "tapjob_api.messaging.orchestration.tool_match_job",
+            return_value=fake_match_info,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue,
+        ),
+    ):
+        keys = dispatch_inbound_message(
+            mock_session,
+            redis_client=MagicMock(),
+            inbound=inbound,
+            provider_id=uuid.uuid4(),
+        )
+
+    # Invariant: tool_ingest_job_url was NEVER called!
+    mock_ingest_url.assert_not_called()
+    mock_ingest_text.assert_called_once()
+    assert (
+        mock_ingest_text.call_args.kwargs["source_url"]
+        == "https://jobs.lever.co/techcorp/python-pleno"
+    )
+    assert "TechCorp" in mock_ingest_text.call_args.kwargs["company_hint"]
+    assert len(keys) == 1
+    assert "job_url_turn_4_fastpath" in keys[0]
+    reply = queued_messages[0].message_text
+    assert "Vaga analisada: Desenvolvedor Python Pleno (TechCorp)" in reply
+    assert "Match Score WP2.2: 88/100 (ELIGIBLE)" in reply
+    assert "quero me candidatar" in reply
+
+
+def test_job_url_intake_url_only_timeout_fails_fast_with_paste_prompt(
+    mock_session: MagicMock,
+) -> None:
+    """Proves URL-only message on timeout returns clear prompt to paste description
+    without Celery retry.
+    """
+    from tapjob_api.jobs.errors import JobUrlUnreachableError
+
+    inbound = _make_inbound(
+        "https://jobs.lever.co/techcorp/python-pleno",
+        msg_id="turn_4_timeout",
+    )
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock(id=uuid.uuid4())
+    queued_messages: list[MagicMock] = []
+
+    def fake_queue(
+        session: Session,
+        *,
+        channel_identity_link_id: Any,
+        recipient_external_id: str,
+        message_text: str,
+        idempotency_key: str,
+    ) -> MagicMock:
+        mock_msg = MagicMock()
+        mock_msg.message_text = message_text
+        mock_msg.idempotency_key = idempotency_key
+        queued_messages.append(mock_msg)
+        return mock_msg
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.tool_ingest_job_url",
+            side_effect=JobUrlUnreachableError("Connection timed out"),
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue,
+        ),
+    ):
+        keys = dispatch_inbound_message(
+            mock_session,
+            redis_client=MagicMock(),
+            inbound=inbound,
+            provider_id=uuid.uuid4(),
+        )
+
+    assert len(keys) == 1
+    reply = queued_messages[0].message_text
+    assert "Não foi possível acessar a vaga pelo link fornecido" in reply
+    assert "copie e cole aqui o texto com a descrição" in reply
+
+
+def test_job_url_intake_url_only_success_calls_tool_ingest_job_url(
+    mock_session: MagicMock,
+) -> None:
+    """Proves URL-only message when remote fetch succeeds calls tool_ingest_job_url canonically."""
+    inbound = _make_inbound(
+        "https://jobs.lever.co/techcorp/python-pleno",
+        msg_id="turn_4_canonical",
+    )
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock(id=uuid.uuid4())
+    fake_job_info = {
+        "job_id": str(uuid.uuid4()),
+        "title": "Desenvolvedor Python Pleno",
+        "company": "TechCorp",
+    }
+    fake_match_info = {
+        "overall_score": 92,
+        "eligibility": "HIGHLY_ELIGIBLE",
+    }
+    queued_messages: list[MagicMock] = []
+
+    def fake_queue(
+        session: Session,
+        *,
+        channel_identity_link_id: Any,
+        recipient_external_id: str,
+        message_text: str,
+        idempotency_key: str,
+    ) -> MagicMock:
+        mock_msg = MagicMock()
+        mock_msg.message_text = message_text
+        mock_msg.idempotency_key = idempotency_key
+        queued_messages.append(mock_msg)
+        return mock_msg
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.tool_ingest_job_url",
+            return_value=fake_job_info,
+        ) as mock_ingest_url,
+        patch(
+            "tapjob_api.messaging.orchestration.tool_match_job",
+            return_value=fake_match_info,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue,
+        ),
+    ):
+        keys = dispatch_inbound_message(
+            mock_session,
+            redis_client=MagicMock(),
+            inbound=inbound,
+            provider_id=uuid.uuid4(),
+        )
+
+    mock_ingest_url.assert_called_once_with(
+        mock_session, user=user, url="https://jobs.lever.co/techcorp/python-pleno"
+    )
+    assert len(keys) == 1
+    reply = queued_messages[0].message_text
+    assert "Vaga analisada: Desenvolvedor Python Pleno (TechCorp)" in reply
+    assert "Match Score WP2.2: 92/100 (HIGHLY_ELIGIBLE)" in reply
