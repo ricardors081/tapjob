@@ -442,7 +442,16 @@ def is_explicit_privacy_inquiry(clean: str, raw_len: int = 0) -> bool:
         return True
 
     # 7. Asking about data sharing / third party access
-    return bool(re.search(r"(?:compartilh\w*|quem\s+tem\s+acesso)\b.*?\bdados\b", clean))
+    if re.search(r"(?:compartilh\w*|quem\s+tem\s+acesso)\b.*?\bdados\b", clean):
+        return True
+
+    # 8. Inquiring about data saving/storage authorization (e.g. "você pode salvar meus dados?")
+    return bool(
+        re.search(
+            r"\b(?:voce|voces|vcs?|da\s+pra)\b.*?\b(?:pode|podem|salv|guard)\w*\b.*?\bdados\b",
+            clean,
+        )
+    )
 
 
 def interpret_conversational_message(
@@ -564,68 +573,66 @@ def interpret_conversational_message(
         )
 
     # 6. Fact Confirmation (All)
-    conf_terms = (
+    has_pending_review = context is not None and context.has_pending_fact_review
+
+    # Unconditional confirmation terms (unambiguous commands with or without active review context)
+    unambiguous_conf_terms = (
         "confirmar todos",
         "confirmar fatos",
         "confirmar fato",
         "confirmar meus dados",
+        "confirmar informacoes",
         "aceitar todos",
-        "pode confirmar",
-        "pode salvar",
-        "pode salvar tudo",
+        "aceitar sugestoes",
+        "aceitar tudo",
+        "aceito tudo",
+        "aprovar todos",
+        "aprovar sugestoes",
+        "aprovar fatos",
+        "aprova tudo",
+        "meus dados estao certos",
+        "meus dados estao corretos",
+    )
+    is_unambiguous = any(t in clean for t in unambiguous_conf_terms) or clean in (
+        "confirmar",
+        "confirmo",
+        "aprovar",
+        "aceito",
+    )
+
+    # Contextual confirmation phrases (require active pending fact review)
+    contextual_conf_terms = (
+        "tudo certo, pode salvar meus dados",
+        "tudo certo pode salvar meus dados",
+        "tudo certo pode salvar",
+        "tudo certo, pode salvar",
         "pode salvar meus dados",
         "salvar meus dados",
-        "salvar informacoes",
-        "salvar dados",
+        "pode salvar tudo",
         "salvar tudo",
+        "pode salvar",
+        "salvar dados",
         "salvar perfil",
+        "salvar informacoes",
+        "salvar informacao",
+        "pode confirmar",
         "ta certo",
         "tudo certo",
         "tudo ok",
         "perfeito",
         "ta perfeito",
         "esta certo",
-        "aprovar todos",
-        "aprova tudo",
-        "aceito tudo",
-        "aceitar tudo",
         "show de bola salva",
         "blz pode confirmar",
         "pode cadastrar",
-        "salvar informacao",
         "pode seguir",
-        "meus dados estao certos",
-        "meus dados estao corretos",
-    )
-    is_conf_term = any(t in clean for t in conf_terms) or clean in (
-        "confirmar",
-        "aceito",
-        "aprovar",
         "salvar",
-        "confirmo",
         "ok salvar",
+        "ta ok",
     )
-    has_pending_review = context is not None and context.has_pending_fact_review
-    if is_conf_term or (
-        has_pending_review
-        and any(
-            t in clean
-            for t in (
-                "tudo certo",
-                "pode salvar",
-                "salvar dados",
-                "salvar meus dados",
-                "pode salvar tudo",
-                "salvar tudo",
-                "salvar",
-                "confirmar",
-                "aceito",
-                "ta certo",
-                "ta ok",
-                "aprovar",
-            )
-        )
-    ):
+    is_contextual_conf = has_pending_review and any(t in clean for t in contextual_conf_terms)
+
+    if is_unambiguous or is_contextual_conf:
         ctx_tag = "context:pending_fact_review" if has_pending_review else "confirm_all_pattern"
         return SemanticInterpretation(
             intent=ConversationalIntent.FACT_CONFIRM_ALL,

@@ -640,21 +640,25 @@ class CanaryDbVerifier:
 # Multi-turn conversational sequence testing Brazilian Portuguese natural language journeys
 CANARY_DIALOGUE_TURNS: list[dict[str, Any]] = [
     {
-        "turn": "1. GREETING",
+        "turn": "1. GREETING & HELP MENU",
         "input": "Olá, gostaria de saber como funciona o TapJob",
-        "expected_intent": "GREETING_OR_RETURN",
+        "expected_intent": "HELP_MENU",
         "reply_assertion": lambda text: any(
-            t in text.lower() for t in ("assistente", "olá", "bem-vindo", "tapjob")
+            t in text.lower()
+            for t in ("como posso te ajudar", "assistente", "olá", "bem-vindo", "tapjob")
         ),
-        "synthetic_dry_reply": "Olá! Bem-vindo ao TapJob. Sou seu assistente de carreira pessoal.",
+        "synthetic_dry_reply": (
+            "Como posso te ajudar no TapJob:\n\n"
+            "📄 Currículo: envie seu currículo em PDF ou escreva suas experiências aqui no chat.\n"
+            "🔍 Vagas & Match: envie o link ou cole o texto de uma vaga para analisarmos o match."
+        ),
         "domain_assertion": lambda v, phone, min_id: (
             lambda env: (
-                env["is_processed"]
-                and env["routed_intent"] in ("GREETING_OR_RETURN", "HELP_MENU", None),
+                env["is_processed"] and env["intent_matched"],
                 f"Envelope={env.get('envelope_id')}, status={env.get('status')}, "
                 f"routed={env.get('routed_intent')}",
             )
-        )(v.verify_envelope_processed(phone, min_envelope_id=min_id)),
+        )(v.verify_envelope_processed(phone, expected_intent="HELP_MENU", min_envelope_id=min_id)),
     },
     {
         "turn": "2. TEXT EXPERIENCE INTAKE",

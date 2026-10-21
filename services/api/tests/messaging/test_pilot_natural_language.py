@@ -83,28 +83,17 @@ from tapjob_api.messaging.natural_language import (
         ("da pra explicar melhor essa vaga?", ConversationalIntent.MATCH_EXPLANATION),
         ("me da uma luz sobre essa vaga", ConversationalIntent.MATCH_EXPLANATION),
         ("sera que tenho chance nessa oportunidade?", ConversationalIntent.MATCH_EXPLANATION),
-        # --- 3. FACT CONFIRMATION ALL (J-04) ---
+        # --- 3. FACT CONFIRMATION ALL (J-04: Unambiguous commands) ---
         ("confirmar todos", ConversationalIntent.FACT_CONFIRM_ALL),
         ("confirmar fatos", ConversationalIntent.FACT_CONFIRM_ALL),
-        ("pode confirmar", ConversationalIntent.FACT_CONFIRM_ALL),
-        ("pode salvar", ConversationalIntent.FACT_CONFIRM_ALL),
-        ("salvar informacoes", ConversationalIntent.FACT_CONFIRM_ALL),
-        ("salvar dados", ConversationalIntent.FACT_CONFIRM_ALL),
-        ("salvar meus dados", ConversationalIntent.FACT_CONFIRM_ALL),
-        ("pode salvar meus dados", ConversationalIntent.FACT_CONFIRM_ALL),
-        ("tudo certo, pode salvar meus dados", ConversationalIntent.FACT_CONFIRM_ALL),
-        ("pode salvar tudo", ConversationalIntent.FACT_CONFIRM_ALL),
         ("confirmar meus dados", ConversationalIntent.FACT_CONFIRM_ALL),
-        ("tá certo", ConversationalIntent.FACT_CONFIRM_ALL),
-        ("tudo certo", ConversationalIntent.FACT_CONFIRM_ALL),
-        ("tudo ok", ConversationalIntent.FACT_CONFIRM_ALL),
-        ("perfeito", ConversationalIntent.FACT_CONFIRM_ALL),
-        ("tá perfeito", ConversationalIntent.FACT_CONFIRM_ALL),
+        ("confirmar informacoes", ConversationalIntent.FACT_CONFIRM_ALL),
         ("aprovar todos", ConversationalIntent.FACT_CONFIRM_ALL),
         ("aceito tudo", ConversationalIntent.FACT_CONFIRM_ALL),
-        ("show de bola, salva aí", ConversationalIntent.FACT_CONFIRM_ALL),
-        ("blz pode confirmar", ConversationalIntent.FACT_CONFIRM_ALL),
-        ("pode cadastrar", ConversationalIntent.FACT_CONFIRM_ALL),
+        ("aceitar todos", ConversationalIntent.FACT_CONFIRM_ALL),
+        ("aceitar tudo", ConversationalIntent.FACT_CONFIRM_ALL),
+        ("meus dados estao certos", ConversationalIntent.FACT_CONFIRM_ALL),
+        ("meus dados estao corretos", ConversationalIntent.FACT_CONFIRM_ALL),
         # --- 4. FACT SINGLE ACTION (J-05) ---
         ("rejeita o 2", ConversationalIntent.FACT_SINGLE_ACTION),
         ("rejeita a 1", ConversationalIntent.FACT_SINGLE_ACTION),
@@ -371,20 +360,55 @@ def test_fact_confirm_all_vs_privacy_inquiry_with_context() -> None:
     assert res_b.intent == ConversationalIntent.FACT_CONFIRM_ALL
     assert res_b.confidence == IntentConfidence.HIGH
 
-    # C) "onde vocês salvam meus dados?" => PRIVACY_INQUIRY (even with pending review!)
-    res_c = interpret_conversational_message("onde vocês salvam meus dados?", context=ctx_pending)
-    assert res_c.intent == ConversationalIntent.PRIVACY_INQUIRY
-    assert res_c.confidence == IntentConfidence.HIGH
+    # C) Contextual confirmations with pending review => FACT_CONFIRM_ALL
+    for phrase in (
+        "pode salvar",
+        "salvar meus dados",
+        "pode salvar meus dados",
+        "tudo certo",
+        "perfeito",
+        "ta certo",
+        "tudo ok",
+    ):
+        res_phrase = interpret_conversational_message(phrase, context=ctx_pending)
+        assert res_phrase.intent == ConversationalIntent.FACT_CONFIRM_ALL
 
-    # D) "como tratam meus dados?" => PRIVACY_INQUIRY
-    res_d = interpret_conversational_message("como tratam meus dados?", context=ctx_pending)
+    # D) "onde vocês salvam meus dados?" => PRIVACY_INQUIRY (even with pending review!)
+    res_d = interpret_conversational_message("onde vocês salvam meus dados?", context=ctx_pending)
     assert res_d.intent == ConversationalIntent.PRIVACY_INQUIRY
     assert res_d.confidence == IntentConfidence.HIGH
 
-    # E) "quero excluir meus dados" => DELETION_REQUEST (highest priority LGPD action)
-    res_e = interpret_conversational_message("quero excluir meus dados", context=ctx_pending)
-    assert res_e.intent == ConversationalIntent.DELETION_REQUEST
+    # E) "como tratam meus dados?" => PRIVACY_INQUIRY
+    res_e = interpret_conversational_message("como tratam meus dados?", context=ctx_pending)
+    assert res_e.intent == ConversationalIntent.PRIVACY_INQUIRY
     assert res_e.confidence == IntentConfidence.HIGH
+
+    # F) "quero excluir meus dados" => DELETION_REQUEST (highest priority LGPD action)
+    res_f = interpret_conversational_message("quero excluir meus dados", context=ctx_pending)
+    assert res_f.intent == ConversationalIntent.DELETION_REQUEST
+    assert res_f.confidence == IntentConfidence.HIGH
+
+    # G) WITHOUT pending review: ambiguous phrases must NOT be FACT_CONFIRM_ALL
+    ctx_no_pending = ConversationContext(has_pending_fact_review=False)
+    for ctx in (None, ctx_no_pending):
+        # "você pode salvar meus dados?" => PRIVACY_INQUIRY (never FACT_CONFIRM_ALL)
+        res_q = interpret_conversational_message("você pode salvar meus dados?", context=ctx)
+        assert res_q.intent != ConversationalIntent.FACT_CONFIRM_ALL
+        assert res_q.intent == ConversationalIntent.PRIVACY_INQUIRY
+
+        # "tudo certo, pode salvar meus dados" without review => NOT FACT_CONFIRM_ALL
+        res_no_ctx = interpret_conversational_message(
+            "tudo certo, pode salvar meus dados", context=ctx
+        )
+        assert res_no_ctx.intent != ConversationalIntent.FACT_CONFIRM_ALL
+
+        # "pode salvar tudo" without review => NOT FACT_CONFIRM_ALL
+        res_pst = interpret_conversational_message("pode salvar tudo", context=ctx)
+        assert res_pst.intent != ConversationalIntent.FACT_CONFIRM_ALL
+
+        # "pode salvar meus dados" without review => NOT FACT_CONFIRM_ALL
+        res_psmd = interpret_conversational_message("pode salvar meus dados", context=ctx)
+        assert res_psmd.intent != ConversationalIntent.FACT_CONFIRM_ALL
 
     # Verify TEXT_EXPERIENCE behavior remains intact
     exp_text = (

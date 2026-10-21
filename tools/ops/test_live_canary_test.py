@@ -186,6 +186,52 @@ class TestLiveCanaryExecution(unittest.TestCase):
             self.assertTrue(r["domain_asserted"])
             self.assertTrue(r["provider_message_id"].startswith("dry_msg_"))
 
+    def test_turn_1_domain_assertion_strictly_requires_help_menu(self) -> None:
+        turn_1 = CANARY_DIALOGUE_TURNS[0]
+        self.assertEqual(turn_1["turn"], "1. GREETING & HELP MENU")
+        self.assertEqual(turn_1["expected_intent"], "HELP_MENU")
+
+        mock_verifier = MagicMock()
+
+        # Case A: status=processed, routed_intent="HELP_MENU", intent_matched=True => PASSES
+        mock_verifier.verify_envelope_processed.return_value = {
+            "is_processed": True,
+            "intent_matched": True,
+            "envelope_id": 1,
+            "status": "processed",
+            "routed_intent": "HELP_MENU",
+        }
+        passed, detail = turn_1["domain_assertion"](mock_verifier, CANARY_CLIENT_PHONE, 1)
+        self.assertTrue(passed)
+        self.assertIn("routed=HELP_MENU", detail)
+        mock_verifier.verify_envelope_processed.assert_called_with(
+            CANARY_CLIENT_PHONE, expected_intent="HELP_MENU", min_envelope_id=1
+        )
+
+        # Case B: status=processed, routed_intent=None, intent_matched=False => FAILS
+        mock_verifier.verify_envelope_processed.return_value = {
+            "is_processed": True,
+            "intent_matched": False,
+            "envelope_id": 1,
+            "status": "processed",
+            "routed_intent": None,
+        }
+        passed, detail = turn_1["domain_assertion"](mock_verifier, CANARY_CLIENT_PHONE, 1)
+        self.assertFalse(passed)
+        self.assertIn("routed=None", detail)
+
+        # Case C: status=processed, wrong routed_intent="GREETING_OR_RETURN" => FAILS
+        mock_verifier.verify_envelope_processed.return_value = {
+            "is_processed": True,
+            "intent_matched": False,
+            "envelope_id": 1,
+            "status": "processed",
+            "routed_intent": "GREETING_OR_RETURN",
+        }
+        passed, detail = turn_1["domain_assertion"](mock_verifier, CANARY_CLIENT_PHONE, 1)
+        self.assertFalse(passed)
+        self.assertIn("routed=GREETING_OR_RETURN", detail)
+
     def test_turn_5_domain_assertion_requires_application_and_kit(self) -> None:
         turn_5 = CANARY_DIALOGUE_TURNS[4]
         self.assertEqual(turn_5["turn"], "5. CONVERSATIONAL APPLICATION REQUEST")
