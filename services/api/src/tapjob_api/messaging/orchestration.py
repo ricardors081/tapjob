@@ -270,34 +270,27 @@ def is_pasted_job_text(text: str) -> bool:
     return is_pasted_job_text_normalized(norm, len(text))
 
 
-STRUCTURED_JOB_SECTION_MARKERS: tuple[str, ...] = (
-    "requisito",
-    "requisitos",
-    "responsabilidade",
-    "responsabilidades",
-    "atribuicao",
-    "atribuicoes",
-    "atribuições",
-    "qualificacao",
-    "qualificacoes",
-    "qualificações",
-    "beneficio",
-    "beneficios",
-    "benefícios",
-    "sobre a vaga",
-    "descricao da vaga",
-    "descrição da vaga",
-    "atividades",
-    "perfil desejado",
-    "habilidades necessarias",
-    "habilidades necessárias",
-    "o que esperamos",
-    "o que voce vai fazer",
-    "o que você vai fazer",
-    "principais atividades",
-    "faixa salarial",
-    "regime clt",
-    "regime pj",
+STRUCTURAL_JOB_HEADER_PATTERN: re.Pattern[str] = re.compile(
+    r"(?:^|[\n.;]\s*)"
+    r"(?:"
+    r"requisitos?"
+    r"|responsabilidades?"
+    r"|atribui(?:[cç][oõ]es|[cç][aã]o)"
+    r"|qualifica(?:[cç][oõ]es|[cç][aã]o)"
+    r"|benef[ií]cios?"
+    r"|sobre a vaga"
+    r"|descri[cç][aã]o da vaga"
+    r"|principais atividades?"
+    r"|atividades?"
+    r"|perfil desejado"
+    r"|habilidades necess[aá]rias"
+    r"|o que esperamos"
+    r"|o que voc[eê] vai fazer"
+    r"|faixa salarial"
+    r"|regime (?:clt|pj)"
+    r"|modelo (?:h[ií]brido|remoto|presencial)"
+    r")\s*(?::|(?:\n\s*(?:[-*•]|\d+\.)))",
+    re.IGNORECASE,
 )
 
 CONVERSATIONAL_WRAPPER_CUES: tuple[str, ...] = (
@@ -320,14 +313,17 @@ CONVERSATIONAL_WRAPPER_CUES: tuple[str, ...] = (
 
 def is_rich_embedded_job_description(text_without_url: str) -> bool:
     """Validates whether text accompanying a job URL contains a genuine, substantial
-    embedded job posting rather than conversational wrapper text.
+    embedded job posting rather than conversational wrapper text or questions.
 
     Rules:
     - Minimum length threshold of 60 non-URL characters.
     - Excludes candidate experience / profile text.
+    - Excludes conversational questions ending in '?' unless accompanied by multiple
+      structural sections and substantial body (>=150 chars).
+    - Requires explicit structural job section syntax (e.g. 'Requisitos:', 'Responsabilidades:',
+      'Benefícios:' as standalone headers or followed by bullet items).
     - Excludes conversational wrapper phrases unless accompanied by substantial (>=200 char)
       body text containing explicit section headers.
-    - Requires explicit structured job section markers (requisitos, responsabilidades, etc.).
     """
     clean = text_without_url.strip()
     if len(clean) < 60:
@@ -337,8 +333,12 @@ def is_rich_embedded_job_description(text_without_url: str) -> bool:
     if is_candidate_text_experience(norm, len(clean)):
         return False
 
-    has_section = any(marker in norm for marker in STRUCTURED_JOB_SECTION_MARKERS)
-    if not has_section:
+    matches = STRUCTURAL_JOB_HEADER_PATTERN.findall(clean)
+    if not matches:
+        return False
+
+    # Conversational question guard
+    if clean.endswith("?") and len(clean) < 150 and len(matches) < 2:
         return False
 
     has_conv_cue = any(cue in norm for cue in CONVERSATIONAL_WRAPPER_CUES)
