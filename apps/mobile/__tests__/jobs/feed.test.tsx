@@ -79,11 +79,13 @@ describe("<JobFeedScreen />", () => {
 
     await render(<JobFeedScreen />);
 
-    expect(await screen.findByText(/Senior Backend Engineer/)).toBeTruthy();
-    expect(screen.getByText(/Tech Corp/)).toBeTruthy();
-    expect(screen.getByText(/88%/)).toBeTruthy();
-    expect(screen.getByText(/Compatível/)).toBeTruthy();
-    expect(screen.getByText(/Remoto/)).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText(/Senior Backend Engineer/)).toBeTruthy();
+      expect(screen.getByText(/Tech Corp/)).toBeTruthy();
+      expect(screen.getByText(/88%/)).toBeTruthy();
+      expect(screen.getByText(/Compatível/)).toBeTruthy();
+      expect(screen.getByText(/Remoto/)).toBeTruthy();
+    });
   });
 
   test("renders empty state when feed has no items", async () => {
