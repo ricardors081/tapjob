@@ -7,3 +7,8 @@ process.env.EXPO_PUBLIC_API_BASE_URL ??= "http://localhost:8000";
 // Enable React act() environment for Testing Library
 global.IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+// Increase default test timeout for CI runners
+if (typeof jest !== "undefined") {
+  jest.setTimeout(15000);
+}

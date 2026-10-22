@@ -2664,9 +2664,12 @@ def test_j05_real_integrated_fact_rejection_and_confirmation_cascade(
             byte_size=1024,
             checksum_sha256="c" * 64,
             storage_key="test_storage_j05",
+            candidates=candidates,
         )
         session.add(import_rec)
         session.commit()
+        session.close()
+        session = session_factory()
 
         # Step 1 Assertions: Pre-review state in real PostgreSQL
         profile_pre = session.scalar(select(CareerProfile).where(CareerProfile.user_id == user_id))
@@ -2709,6 +2712,7 @@ def test_j05_real_integrated_fact_rejection_and_confirmation_cascade(
             storage=storage,
             envelope_id=envelope_1_id,
         )
+        session.commit()
         assert len(keys_1) == 1
 
         session.close()
@@ -2770,6 +2774,7 @@ def test_j05_real_integrated_fact_rejection_and_confirmation_cascade(
             storage=storage,
             envelope_id=envelope_2_id,
         )
+        session.commit()
         assert len(keys_2) == 1
 
         session.close()
