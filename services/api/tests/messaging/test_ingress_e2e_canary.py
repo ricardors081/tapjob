@@ -2641,10 +2641,13 @@ def test_j05_real_integrated_fact_rejection_and_confirmation_cascade(
 
         # Setup ResumeImport with 5 candidates in READY_FOR_REVIEW
         import_id = uuid.uuid4()
+        cand_ids: list[uuid.UUID] = []
         candidates: list[ResumeImportCandidate] = []
         for i in range(1, 6):
+            c_id = uuid.uuid4()
+            cand_ids.append(c_id)
             c = ResumeImportCandidate(
-                id=uuid.uuid4(),
+                id=c_id,
                 resume_import_id=import_id,
                 user_id=user_id,
                 candidate_kind="skill",
@@ -2722,7 +2725,7 @@ def test_j05_real_integrated_fact_rejection_and_confirmation_cascade(
         draft_c2 = session.scalar(
             select(CandidateReviewDraft).where(
                 CandidateReviewDraft.user_id == user_id,
-                CandidateReviewDraft.candidate_id == candidates[1].id,
+                CandidateReviewDraft.candidate_id == cand_ids[1],
             )
         )
         assert draft_c2 is not None
@@ -2735,7 +2738,7 @@ def test_j05_real_integrated_fact_rejection_and_confirmation_cascade(
         assert reloaded_import_mid is not None
         assert reloaded_import_mid.status == ImportStatus.READY_FOR_REVIEW
 
-        reloaded_c2_mid = session.get(ResumeImportCandidate, candidates[1].id)
+        reloaded_c2_mid = session.get(ResumeImportCandidate, cand_ids[1])
         assert reloaded_c2_mid is not None
         assert reloaded_c2_mid.review_state == CandidateReviewState.PENDING
 
@@ -2804,12 +2807,12 @@ def test_j05_real_integrated_fact_rejection_and_confirmation_cascade(
         assert active_skill_names == {"Skill 1", "Skill 3", "Skill 4", "Skill 5"}
 
         # 3. Candidate 2 marked REJECTED; others marked ACCEPTED
-        reloaded_c2_post = session.get(ResumeImportCandidate, candidates[1].id)
+        reloaded_c2_post = session.get(ResumeImportCandidate, cand_ids[1])
         assert reloaded_c2_post is not None
         assert reloaded_c2_post.review_state == CandidateReviewState.REJECTED
 
         for idx in (0, 2, 3, 4):
-            cand_acc = session.get(ResumeImportCandidate, candidates[idx].id)
+            cand_acc = session.get(ResumeImportCandidate, cand_ids[idx])
             assert cand_acc is not None
             assert cand_acc.review_state == CandidateReviewState.ACCEPTED
 
