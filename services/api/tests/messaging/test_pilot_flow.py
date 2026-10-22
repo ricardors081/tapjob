@@ -1762,6 +1762,10 @@ def test_j05_real_database_fact_rejection_and_confirmation_persistence() -> None
        - Exactly 4 active ProfileFact records in database (all FactStatus.ACTIVE).
        - Candidate 2 review_state in resume_import_candidates transitions to REJECTED.
        - Candidate 2 was NEVER activated as ProfileFact (Skill 2 absent; Skills 1, 3, 4, 5 present).
+
+    NOTE: For the full two-message conversational cascade through dispatch_inbound_message
+    with real PostgreSQL in CI, see:
+    services/api/tests/messaging/test_ingress_e2e_canary.py::test_j05_real_integrated_fact_rejection_and_confirmation_cascade
     """
     from sqlalchemy import create_engine, event, select
     from sqlalchemy.orm import sessionmaker
@@ -2358,6 +2362,19 @@ def test_j22_real_database_inbound_effect_and_reminder_idempotency() -> None:
     )
     session.commit()
     assert eff1.operation_state == InboundEffectState.PENDING.value
+
+    # Canonical contract: repeated reservation of same (envelope_id, effect_kind)
+    # fails closed with IntegrityError via uq_inbound_effects_envelope_kind.
+    # Callers must inspect get_inbound_effect before calling reserve_inbound_effect.
+    with pytest.raises(IntegrityError):
+        reserve_inbound_effect(
+            session,
+            envelope_id=1,
+            inbound_message_id="msg_j22_eff_duplicate",
+            effect_kind="schedule_followup",
+            resource_id=str(user.id),
+        )
+    session.rollback()
 
     eff_completed = complete_inbound_effect(
         session,

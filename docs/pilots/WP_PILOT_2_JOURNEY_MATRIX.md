@@ -52,9 +52,10 @@ Cada fluxo é especificado no formato padrão:
 - **Ação:** Registro de rascunho de decisão (`CandidateReviewDraft`) marcando o item como rejeitado ou com valor editado (`EDIT_ACCEPT`).
 - **Resposta Esperada:** Confirmação da alteração específica realizada (ex: "Fato 2 rejeitado com sucesso") e relatório dos fatos ainda pendentes de decisão.
 - **Evidência:**
-  1. Conversacional e rascunhos: `services/api/tests/messaging/test_pilot_flow.py::test_j05_single_fact_rejection_and_confirmation_cascade` e `services/api/tests/messaging/test_candidate_review_drafts.py`.
-  2. Persistência real em banco de dados isolado (sem mocks do finalizador): `services/api/tests/messaging/test_pilot_flow.py::test_j05_real_database_fact_rejection_and_confirmation_persistence`. Comprova que a confirmação via `confirm_candidates_and_finalize` -> `resume_import_service.finalize_resume_import` e `career_profile_service.bump_profile_version` produz exatamente quatro fatos ativos em `profile_facts`, avança a versão do perfil para 1 apenas na confirmação final, e mantém o fato 2 com `review_state == 'rejected'` sem nunca ativá-lo no Truth Store.
-  3. Recuperação de crash e idempotência em CI com PostgreSQL: `services/api/tests/messaging/test_ingress_e2e_canary.py::test_finalize_review_crash_between_domain_commit_and_effect_completion_postgres`.
+  1. Integração ponta a ponta com banco real (PostgreSQL em CI, sem mocks): `services/api/tests/messaging/test_ingress_e2e_canary.py::test_j05_real_integrated_fact_rejection_and_confirmation_cascade`. Executa a sequência de duas mensagens inbounds ("rejeita o 2" seguido de "confirmar todos") chamando `dispatch_inbound_message` diretamente sem mocks. Comprova que o primeiro inbound persiste `CandidateReviewDraft(decision='reject')` no banco sem ativar nenhum fato no Truth Store; e o segundo inbound consulta os rascunhos persistidos no banco, agrega as decisões mantendo o fato 2 rejeitado e os demais aceitos, invoca o finalizador canônico e persiste exatamente quatro fatos ativos em `profile_facts`, avança `CareerProfile.profile_version` estritamente uma vez para 1, marca o candidato 2 como `REJECTED` (nunca ativado no perfil), transiciona a importação para `FINALIZED` e grava `InboundEffect` como `COMPLETED`.
+  2. Persistência real em banco isolado do finalizador: `services/api/tests/messaging/test_pilot_flow.py::test_j05_real_database_fact_rejection_and_confirmation_persistence`.
+  3. Camada de roteamento e rascunhos: `services/api/tests/messaging/test_pilot_flow.py::test_j05_single_fact_rejection_and_confirmation_cascade` e `services/api/tests/messaging/test_candidate_review_drafts.py`.
+  4. Recuperação de crash e idempotência em CI com PostgreSQL: `services/api/tests/messaging/test_ingress_e2e_canary.py::test_finalize_review_crash_between_domain_commit_and_effect_completion_postgres`.
 - **Status:** PASS (Comprovação ponta a ponta com persistência real em banco isolado e integração CI)
 
 ### J-06: Envio de Link de Vaga
@@ -202,11 +203,17 @@ Cada fluxo é especificado no formato padrão:
 - **Status:** PASS
 
 ### J-22: Replay e Idempotência
-- **Input Humano:** Retransmissão de webhook com o mesmo `provider_message_id` após crash do processo worker.
+- **Input Humano:** Retransmissão de webhook com o mesmo `provider_message_id` após crash do processo worker ou duplicidade de entrega do provedor.
 - **Intenção Esperada:** `REPLAY_IDEMPOTENCY_SAFETY`
-- **Contexto Necessário:** `inbound_domain_effects` gravado ou chave de idempotência de outbox já gerada.
-- **Ação:** Detecção de efeito pré-existente (`get_inbound_effect`); reutilização do resultado persistido sem duplicar `ResumeImport`, `Application` ou disparos outbox.
-- **Resposta Esperada:** A mesma resposta esperada do fluxo original, sem duplicação de mensagens no WhatsApp do usuário.
+- **Contexto Necessário:** Webhook retransmitido, efeito de importação/finalização em andamento, ou entidade de domínio já agendada/criada.
+- **Ação:** Tratamento particionado por camada de resiliência:
+  1. Desduplicação de Webhook (Ingress): Constraint de banco `uq_provider_event_envelopes_dedup` rejeita envelopes com mesmo `(provider, provider_instance, external_event_id)` com `IntegrityError` imediato no ack HTTP 202.
+  2. Recuperação de Crash de Currículo (`InboundEffect`): Durabilidade pré-alocada (`InboundEffectKind.RESUME_IMPORT` e `FINALIZE_REVIEW`) com `operation_state` (`PENDING` -> `COMPLETED`). Garante que um crash entre o commit do domínio e o ack do envelope recupere o recurso exato sem duplicar `ResumeImport`, `CareerProfile` ou versões. A tentativa de reservar o mesmo efeito repetidamente falha fechada com `IntegrityError` (`uq_inbound_effects_envelope_kind`), exigindo que o orquestrador consulte `get_inbound_effect` antes da reserva; a conclusão (`complete_inbound_effect`) é idempotente. (Nota: `InboundEffect` aplica-se estritamente aos fluxos de currículo e revisão de fatos, não sendo generalizado para todos os efeitos de domínio).
+  3. Idempotência em Serviços de Domínio:
+     - `Reminder`: Validação de `idempotency_key` único por usuário/tarefa no banco; chamadas repetidas retornam a linha existente sem criar lembretes duplicados.
+     - `Application` e `ApplicationKit`: Validação de candidatura existente no banco; replays retornam os registros persistidos sem gerar novas candidaturas ou kits para a mesma vaga.
+  4. Determinismo de Chaves na Orquestração: Chaves de idempotência de outbox e despacho mantêm estabilidade estrutural idêntica em múltiplas retransmissões.
+- **Resposta Esperada:** A mesma resposta esperada do fluxo original, sem duplicação de entidades no banco de dados e sem mensagens duplicadas no WhatsApp do usuário.
 - **Evidência:**
   1. Suíte Primária de Integração em CI (`backend-integration` com PostgreSQL e Redis reais provisionados):
      - `test_ingress_e2e_canary.py::test_real_ingress_e2e_canary_vertical_slice`: retransmissão de webhook com mesmo ID comprova zero duplicação de `User`, zero duplicação de `ChannelIdentityLink`, e zero duplicação de mensagens na `outbound_message_queue`.
@@ -214,6 +221,6 @@ Cada fluxo é especificado no formato padrão:
      - `test_ingress_e2e_canary.py::test_first_contact_job_url_and_replays_vertical_slice`: replay de intake de vaga comprova zero duplicação de `Job`, zero duplicação de `MatchResult` e zero duplicação de outbox no PostgreSQL.
      - `test_ingress_e2e_canary.py::test_finalize_review_crash_between_domain_commit_and_effect_completion_postgres`: recuperação de crash e replay idempotente com `InboundEffect` e confirmação canônica.
   2. Suíte de Banco Isolado e Orquestração:
-     - `test_pilot_flow.py::test_j22_real_database_inbound_effect_and_reminder_idempotency`: desduplicação por constraint de envelope (`uq_provider_event_envelopes_dedup`), idempotência de `InboundEffect` e idempotência de `Reminder` com persistência real em banco isolado.
+     - `test_pilot_flow.py::test_j22_real_database_inbound_effect_and_reminder_idempotency`: comprova desduplicação por constraint de envelope (`uq_provider_event_envelopes_dedup`), fail-closed na reserva duplicada de `InboundEffect` (`uq_inbound_effects_envelope_kind`), idempotência no `complete_inbound_effect` e idempotência de `Reminder` por `idempotency_key` com persistência real em banco.
      - `test_pilot_flow.py::test_j22_dispatch_orchestration_replay_idempotency_keys`: determinismo de chaves de idempotência na camada de orquestração.
-- **Status:** PARCIAL (Ponta a ponta garantido no ambiente de CI com PostgreSQL/Redis provisionados; ambiente de teste local isolado valida contratos de chave, desduplicação de envelope, InboundEffect e Reminder).
+- **Status:** PARCIAL (Ponta a ponta garantido no ambiente de CI com PostgreSQL/Redis provisionados para os fluxos canônicos cobertos; persistência real em banco isolado valida contratos de chave, desduplicação de envelope, InboundEffect e Reminder; escopo de InboundEffect mantido restrito a fluxos de currículo conforme arquitetura).
