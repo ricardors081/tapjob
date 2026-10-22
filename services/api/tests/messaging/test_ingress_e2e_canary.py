@@ -2723,7 +2723,11 @@ def test_j05_real_integrated_fact_rejection_and_confirmation_cascade(
         session.close()
         session = session_factory()
 
-        # Step 2 Assertions: Draft persisted, zero facts created, import remains READY_FOR_REVIEW
+        # Step 2 Assertions: Draft persisted, profile version unchanged,
+        # zero facts created, import remains READY_FOR_REVIEW
+        profile_mid = session.scalar(select(CareerProfile).where(CareerProfile.user_id == user_id))
+        assert profile_mid is None or profile_mid.profile_version == 0
+
         draft_c2 = session.scalar(
             select(CandidateReviewDraft).where(
                 CandidateReviewDraft.user_id == user_id,

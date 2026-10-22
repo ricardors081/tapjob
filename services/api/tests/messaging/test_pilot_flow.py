@@ -1869,7 +1869,10 @@ def test_j05_real_database_fact_rejection_and_confirmation_persistence() -> None
     session.add(draft_c2)
     session.commit()
 
-    # Step 2 Assertions: Draft persisted, facts remain untouched
+    # Step 2 Assertions: Draft persisted, profile version unchanged, facts remain untouched
+    profile_step2 = session.scalar(select(CareerProfile).where(CareerProfile.user_id == user.id))
+    assert profile_step2 is None or profile_step2.profile_version == 0
+
     persisted_drafts = session.scalars(
         select(CandidateReviewDraft).where(CandidateReviewDraft.user_id == user.id)
     ).all()
