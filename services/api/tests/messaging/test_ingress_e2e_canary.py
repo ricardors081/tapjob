@@ -2643,6 +2643,7 @@ def test_j05_real_integrated_fact_rejection_and_confirmation_cascade(
         import_id = uuid.uuid4()
         cand_ids: list[uuid.UUID] = []
         candidates: list[ResumeImportCandidate] = []
+        base_time = datetime.now(UTC)
         for i in range(1, 6):
             c_id = uuid.uuid4()
             cand_ids.append(c_id)
@@ -2654,6 +2655,7 @@ def test_j05_real_integrated_fact_rejection_and_confirmation_cascade(
                 value_json={"name": f"Skill {i}", "category": "technical"},
                 confidence=0.9,
                 review_state=CandidateReviewState.PENDING,
+                created_at=base_time + timedelta(seconds=i),
             )
             session.add(c)
             candidates.append(c)
