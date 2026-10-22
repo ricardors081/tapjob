@@ -15,6 +15,7 @@ Coordinates conversational flows for candidate interactions:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import re
 import uuid
@@ -28,6 +29,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from tapjob_api.career_profile.fact_values import SkillFactValue
 from tapjob_api.career_profile.service import get_truth_snapshot
 from tapjob_api.identity.models import User, UserStatus
 from tapjob_api.jobs.models import Job
@@ -46,13 +48,30 @@ from tapjob_api.messaging.career_agent_tools import (
     tool_update_application_status,
 )
 from tapjob_api.messaging.document_intake import confirm_candidates_and_finalize
-from tapjob_api.messaging.inbound import InboundEffectKind, InboundEffectState
+from tapjob_api.messaging.inbound import (
+    InboundEffectKind,
+    InboundEffectState,
+    ProviderEventEnvelope,
+)
 from tapjob_api.messaging.inbound_service import (
     complete_inbound_effect,
     get_inbound_effect,
     is_transient_inbound_error,
     reserve_inbound_effect,
 )
+from tapjob_api.messaging.natural_language import (
+    ConversationalIntent,
+    ConversationContext,
+    classify_url_intent,
+    extract_single_action_details,
+    extract_skills_from_text,
+    extract_urls,
+    interpret_conversational_message,
+    is_candidate_text_experience,
+    is_pasted_job_text_normalized,
+    normalize_text,
+)
+from tapjob_api.messaging.outbox import OutboundMessageQueue
 from tapjob_api.messaging.service import (
     get_user_profile_status,
     link_or_create_identity,
@@ -63,6 +82,7 @@ from tapjob_api.messaging.service import (
 from tapjob_api.ports._common import CallContext, PortError
 from tapjob_api.ports.messaging_channel import InboundMessage, MessagingChannel
 from tapjob_api.resume_import import service as resume_import_service
+from tapjob_api.resume_import.candidates import CandidateKind
 from tapjob_api.resume_import.commands import CandidateReviewDecision, ReviewDecisionKind
 from tapjob_api.resume_import.errors import (
     DocumentTooLargeError,
@@ -81,6 +101,7 @@ from tapjob_api.resume_import.models import (
     ImportFailureCode,
     ImportStatus,
     ResumeImport,
+    ResumeImportCandidate,
     ResumeVersion,
 )
 from tapjob_api.resume_import.service import _FAILURE_CODE_BY_ERROR
@@ -243,42 +264,118 @@ def reconcile_reserved_resume_import(
 
 def is_pasted_job_text(text: str) -> bool:
     """Detects if inbound text represents a pasted job description."""
-    lower = text.lower()
-    return (
-        lower.startswith("vaga:")
-        or lower.startswith("oportunidade:")
-        or (
-            len(text) > 80
-            and any(
-                term in lower
-                for term in (
-                    "requisitos",
-                    "responsabilidades",
-                    "benefícios",
-                    "senior",
-                    "desenvolvedor",
-                    "engenheiro",
-                )
-            )
-        )
-    )
+    norm = normalize_text(text)
+    if is_candidate_text_experience(norm, len(text)):
+        return False
+    return is_pasted_job_text_normalized(norm, len(text))
+
+
+STRUCTURAL_JOB_HEADER_PATTERN: re.Pattern[str] = re.compile(
+    r"(?:^|[\n.;]\s*)"
+    r"(?:"
+    r"requisitos?"
+    r"|responsabilidades?"
+    r"|atribui(?:[cç][oõ]es|[cç][aã]o)"
+    r"|qualifica(?:[cç][oõ]es|[cç][aã]o)"
+    r"|benef[ií]cios?"
+    r"|sobre a vaga"
+    r"|descri[cç][aã]o da vaga"
+    r"|principais atividades?"
+    r"|atividades?"
+    r"|perfil desejado"
+    r"|habilidades necess[aá]rias"
+    r"|o que esperamos"
+    r"|o que voc[eê] vai fazer"
+    r"|faixa salarial"
+    r"|regime (?:clt|pj)"
+    r"|modelo (?:h[ií]brido|remoto|presencial)"
+    r")\s*(?::|(?:\n\s*(?:[-*•]|\d+\.)))",
+    re.IGNORECASE,
+)
+
+CONVERSATIONAL_WRAPPER_CUES: tuple[str, ...] = (
+    "achei essa",
+    "olha essa",
+    "olha isso",
+    "ve essa",
+    "veja essa",
+    "consegue analisar",
+    "pode analisar",
+    "analisa pra mim",
+    "analisa essa",
+    "analise essa",
+    "da uma olhada",
+    "o que acha",
+    "o que voce acha",
+    "o que você acha",
+)
+
+
+def is_rich_embedded_job_description(text_without_url: str) -> bool:
+    """Validates whether text accompanying a job URL contains a genuine, substantial
+    embedded job posting rather than conversational wrapper text or questions.
+
+    Rules:
+    - Minimum length threshold of 60 non-URL characters.
+    - Excludes candidate experience / profile text.
+    - Excludes conversational questions ending in '?' unless accompanied by multiple
+      structural sections and substantial body (>=150 chars).
+    - Requires explicit structural job section syntax (e.g. 'Requisitos:', 'Responsabilidades:',
+      'Benefícios:' as standalone headers or followed by bullet items).
+    - Excludes conversational wrapper phrases unless accompanied by substantial (>=200 char)
+      body text containing explicit section headers.
+    """
+    clean = text_without_url.strip()
+    if len(clean) < 60:
+        return False
+
+    norm = normalize_text(clean)
+    if is_candidate_text_experience(norm, len(clean)):
+        return False
+
+    matches = STRUCTURAL_JOB_HEADER_PATTERN.findall(clean)
+    if not matches:
+        return False
+
+    # Conversational question guard
+    if clean.endswith("?") and len(clean) < 150 and len(matches) < 2:
+        return False
+
+    has_conv_cue = any(cue in norm for cue in CONVERSATIONAL_WRAPPER_CUES)
+    return not (has_conv_cue and len(clean) < 200)
 
 
 def is_privacy_intent(text: str) -> bool:
     """Detects explicit privacy / LGPD / data-rights intent.
 
     Must NOT match generic mentions of 'política' (such as 'política de benefícios',
-    'política de trabalho remoto', or 'política comercial') found in job descriptions.
+    'política de trabalho remoto', or 'política comercial') found in job descriptions,
+    nor messages where the user is saving, confirming, or updating profile facts.
     """
     clean_text = text.lower().strip()
     norm = re.sub(r"[^\w\s]", " ", clean_text)
     norm = " ".join(norm.split())
 
+    # Messages saving, confirming or updating candidate facts must NEVER be hijacked
+    if any(
+        w in norm
+        for w in (
+            "salvar",
+            "salve",
+            "confirmar",
+            "confirma",
+            "gravar",
+            "guardar",
+            "tudo certo",
+            "pode salvar",
+        )
+    ):
+        return False
+
     # Standalone or explicit privacy commands
     explicit_commands = {
         "privacidade",
         "lgpd",
-        "meus dados",
         "excluir dados",
         "excluir meus dados",
         "apagar dados",
@@ -337,7 +434,7 @@ def is_privacy_intent(text: str) -> bool:
         if "privacidade" in tokens or "lgpd" in tokens:
             return True
         if "dados" in tokens and any(
-            w in tokens for w in ("excluir", "apagar", "deletar", "remover", "meus")
+            w in tokens for w in ("excluir", "apagar", "deletar", "remover")
         ):
             return True
 
@@ -374,8 +471,111 @@ def resolve_user_target_job(session: Session, *, user: User) -> Job | None:
     job_by_app = session.execute(stmt_app_jobs).scalar_one_or_none()
 
     if job_by_intake is not None and job_by_app is not None:
-        return job_by_intake if job_by_intake.created_at >= job_by_app.created_at else job_by_app
+        try:
+            if hasattr(job_by_intake, "created_at") and hasattr(job_by_app, "created_at"):
+                return (
+                    job_by_intake
+                    if job_by_intake.created_at >= job_by_app.created_at
+                    else job_by_app
+                )
+        except TypeError:
+            pass
+        return job_by_intake
     return job_by_intake or job_by_app
+
+
+def resolve_user_conversation_context(
+    session: Session,
+    *,
+    user: User,
+    link_id: uuid.UUID | None,
+) -> ConversationContext:
+    """Builds conversational and domain context for contextual semantic understanding."""
+    has_active_profile = False
+    profile_version = 0
+    try:
+        profile_status = get_user_profile_status(session, user_id=user.id)
+        if isinstance(profile_status, dict):
+            has_active_profile = bool(profile_status.get("has_facts", False))
+            profile_version = int(profile_status.get("profile_version", 0) or 0)
+    except Exception:
+        logger.debug("Failed resolving user profile status for context")
+
+    has_pending_fact_review = False
+    pending_facts_count = 0
+    try:
+        pending_import = session.execute(
+            select(ResumeImport)
+            .where(
+                ResumeImport.user_id == user.id,
+                ResumeImport.status == ImportStatus.READY_FOR_REVIEW,
+            )
+            .order_by(ResumeImport.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if pending_import is not None and isinstance(pending_import, ResumeImport):
+            has_pending_fact_review = True
+            cands = getattr(pending_import, "candidates", None)
+            pending_facts_count = len(cands) if cands and hasattr(cands, "__len__") else 0
+    except Exception:
+        logger.debug("Failed resolving pending resume import for context")
+
+    has_target_job = False
+    target_job_title = None
+    target_job_company = None
+    try:
+        target_job = resolve_user_target_job(session, user=user)
+        if target_job is not None and getattr(target_job, "id", None) is not None:
+            has_target_job = True
+            target_job_title = getattr(target_job, "title", None)
+            comp = getattr(target_job, "company", None)
+            target_job_company = (
+                getattr(comp, "name", None)
+                if comp
+                else getattr(target_job, "company_name_raw", None)
+            )
+    except Exception:
+        logger.debug("Failed resolving target job for context")
+
+    latest_app_status = None
+    try:
+        latest_app = session.execute(
+            select(Application)
+            .where(Application.user_id == user.id)
+            .order_by(Application.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if latest_app is not None and getattr(latest_app, "status", None) is not None:
+            st = latest_app.status
+            latest_app_status = st.value if hasattr(st, "value") else str(st)
+    except Exception:
+        logger.debug("Failed resolving latest application for context")
+
+    last_prompt = None
+    if link_id is not None:
+        try:
+            latest_outbox = session.execute(
+                select(OutboundMessageQueue)
+                .where(OutboundMessageQueue.channel_identity_link_id == str(link_id))
+                .order_by(OutboundMessageQueue.created_at.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if latest_outbox and isinstance(getattr(latest_outbox, "message_content", None), dict):
+                last_prompt = str(latest_outbox.message_content.get("text", ""))
+        except Exception:
+            logger.debug("Failed resolving latest outbox for context")
+
+    return ConversationContext(
+        has_active_profile=has_active_profile,
+        profile_version=profile_version,
+        has_pending_fact_review=has_pending_fact_review,
+        pending_facts_count=pending_facts_count,
+        has_target_job=has_target_job,
+        target_job_title=target_job_title,
+        target_job_company=target_job_company,
+        latest_application_status=latest_app_status,
+        last_assistant_prompt=last_prompt,
+    )
 
 
 class IncompleteCandidateReviewError(Exception):
@@ -688,7 +888,14 @@ def dispatch_inbound_message(
         has_document = bool(
             inbound.attachments and any(a.kind == "document" for a in inbound.attachments)
         )
-        has_job_url = "http://" in text or "https://" in text
+        urls = extract_urls(text)
+        url_interp = classify_url_intent(urls[0], text) if urls else None
+        has_job_url = (
+            url_interp is not None and url_interp.intent == ConversationalIntent.JOB_URL_INTAKE
+        )
+        has_portfolio_url = (
+            url_interp is not None and url_interp.intent == ConversationalIntent.TEXT_EXPERIENCE
+        )
         has_pasted_job = is_pasted_job_text(text) and not any(
             cmd in lower_text
             for cmd in (
@@ -702,7 +909,7 @@ def dispatch_inbound_message(
             )
         )
 
-        if not (has_document or has_job_url or has_pasted_job):
+        if not (has_document or has_job_url or has_portfolio_url or has_pasted_job):
             greeting_text = (
                 f"Olá! Bem-vindo ao {config.product_name}. "
                 "Sou seu assistente de carreira pessoal.\n\n"
@@ -1056,10 +1263,72 @@ def dispatch_inbound_message(
             queued_keys.append(msg.idempotency_key)
             return queued_keys
 
+    # 2.5 Resolve Conversation Context & Interpret Message
+    # Fast path: evaluate message with standalone heuristics
+    interpretation = interpret_conversational_message(text, context=None)
+
+    # For affirmative, casual, or ambiguous messages, consult conversation context
+    if interpretation.intent in (
+        ConversationalIntent.AFFIRMATIVE_CONTEXTUAL,
+        ConversationalIntent.CLARIFICATION_NEEDED,
+        ConversationalIntent.UNKNOWN,
+    ):
+        conv_ctx: ConversationContext | None = None
+        if user is not None:
+            conv_ctx = resolve_user_conversation_context(session, user=user, link_id=link_id)
+        interpretation = interpret_conversational_message(text, context=conv_ctx)
+
+    intent = interpretation.intent
+
+    # Observability: update envelope with routed intent, confidence and context used
+    if envelope_id is not None:
+        try:
+            envelope_rec = session.get(ProviderEventEnvelope, envelope_id)
+            if envelope_rec and isinstance(getattr(envelope_rec, "normalized_event", None), dict):
+                updated_norm = dict(envelope_rec.normalized_event)
+                updated_norm["routed_intent"] = intent.value
+                updated_norm["intent_confidence"] = interpretation.confidence.value
+                if interpretation.context_used:
+                    updated_norm["context_used"] = interpretation.context_used
+                envelope_rec.normalized_event = updated_norm
+                session.flush()
+        except Exception:
+            logger.debug("Failed updating envelope with routed intent observability")
+
+    # Ambiguous input clarification handling
+    if intent == ConversationalIntent.CLARIFICATION_NEEDED:
+        clarification_msg = interpretation.clarification_question or (
+            "Não compreendi com clareza. Você gostaria de analisar uma vaga ou "
+            "atualizar seu perfil? Envie 'ajuda' para ver as opções disponíveis."
+        )
+        msg = queue_response_message(
+            session,
+            channel_identity_link_id=link_id,
+            recipient_external_id=external_id,
+            message_text=clarification_msg,
+            idempotency_key=f"clarify_{inbound.provider_message_id}",
+        )
+        queued_keys.append(msg.idempotency_key)
+        return queued_keys
+
     # 3. Privacy, LGPD & Data-Rights command handler (Finding 1, Finding 4, Finding 6)
-    if is_privacy_intent(text):
+    if intent in (
+        ConversationalIntent.PRIVACY_INQUIRY,
+        ConversationalIntent.DELETION_REQUEST,
+    ) or (
+        is_privacy_intent(text)
+        and intent
+        not in (
+            ConversationalIntent.FACT_CONFIRM_ALL,
+            ConversationalIntent.FACT_REJECT_ALL,
+            ConversationalIntent.FACT_SINGLE_ACTION,
+            ConversationalIntent.TEXT_EXPERIENCE,
+        )
+    ):
         deletion_words = ("excluir", "apagar", "remover", "deletar", "exclusao", "exclusão")
-        if any(w in lower_text for w in deletion_words):
+        if intent == ConversationalIntent.DELETION_REQUEST or any(
+            w in lower_text for w in deletion_words
+        ):
             response_text = (
                 "Solicitação de Exclusão de Dados (LGPD):\n\n"
                 "Respeitamos integralmente seus direitos de privacidade e exclusão de dados.\n\n"
@@ -1114,10 +1383,13 @@ def dispatch_inbound_message(
         )
     )
 
+    action_type, extracted_idx, extracted_val = extract_single_action_details(normalize_text(text))
+
     is_confirm_all = (
         not has_privacy_or_deletion_terms
         and (
-            any(
+            intent == ConversationalIntent.FACT_CONFIRM_ALL
+            or any(
                 k in lower_text
                 for k in (
                     "confirmar fatos",
@@ -1133,19 +1405,25 @@ def dispatch_inbound_message(
         )
     )
 
-    is_reject_all = not has_privacy_or_deletion_terms and any(
-        k in lower_text
-        for k in ("rejeitar todos", "ignorar todos", "descartar todos", "rejeitar fatos")
+    is_reject_all = not has_privacy_or_deletion_terms and (
+        intent == ConversationalIntent.FACT_REJECT_ALL
+        or any(
+            k in lower_text
+            for k in ("rejeitar todos", "ignorar todos", "descartar todos", "rejeitar fatos")
+        )
     )
 
-    is_single_reject = not has_privacy_or_deletion_terms and any(
-        k in lower_text for k in ("rejeitar fato", "ignorar fato", "descartar fato")
+    is_single_reject = not has_privacy_or_deletion_terms and (
+        (intent == ConversationalIntent.FACT_SINGLE_ACTION and action_type == "reject")
+        or any(k in lower_text for k in ("rejeitar fato", "ignorar fato", "descartar fato"))
     )
-    is_single_accept = not has_privacy_or_deletion_terms and any(
-        k in lower_text for k in ("aceitar fato",)
+    is_single_accept = not has_privacy_or_deletion_terms and (
+        (intent == ConversationalIntent.FACT_SINGLE_ACTION and action_type == "accept")
+        or any(k in lower_text for k in ("aceitar fato",))
     )
-    is_single_edit = not has_privacy_or_deletion_terms and any(
-        k in lower_text for k in ("editar fato", "corrigir fato")
+    is_single_edit = not has_privacy_or_deletion_terms and (
+        (intent == ConversationalIntent.FACT_SINGLE_ACTION and action_type == "edit")
+        or any(k in lower_text for k in ("editar fato", "corrigir fato"))
     )
 
     if is_confirm_all or is_reject_all or is_single_reject or is_single_accept or is_single_edit:
@@ -1319,8 +1597,6 @@ def dispatch_inbound_message(
                         )
                         session.add(draft)
                         drafts_by_cand_id[cf.id] = draft
-                    elif draft.decision == ReviewDecisionKind.REJECT.value:
-                        draft.decision = ReviewDecisionKind.ACCEPT.value
                 session.flush()
                 should_finalize = True
 
@@ -1344,7 +1620,11 @@ def dispatch_inbound_message(
 
             elif is_single_reject or is_single_accept:
                 match_num = re.search(r"(?:fato\s+|fatos\s+)?(\d+)", lower_text)
-                target_idx = int(match_num.group(1)) if match_num else None
+                target_idx = (
+                    extracted_idx
+                    if extracted_idx is not None
+                    else (int(match_num.group(1)) if match_num else None)
+                )
                 if target_idx is not None and 1 <= target_idx <= len(ordered_candidates):
                     target_cand = ordered_candidates[target_idx - 1]
                     dec_val = (
@@ -1394,11 +1674,27 @@ def dispatch_inbound_message(
                     )
 
             elif is_single_edit:
-                # Syntax: editar fato <N>: <novo_valor>
-                match_edit = re.search(r"(?:fato\s+)?(\d+)\s*[:=]\s*(.+)$", text, re.IGNORECASE)
+                # Syntax: editar fato <N>: <novo_valor> or muda o 1 para <novo_valor>
+                target_idx = extracted_idx
+                new_val_str = extracted_val
+                # Extract value directly from raw text to preserve exact case and accents
+                match_edit = re.search(
+                    r"(?:edit\w*|corrig\w*|mud\w*|troc\w*)\s+(?:o\s+|a\s+|do\s+|da\s+)?(?:fato\s+|item\s+)?#?(\d+)\s*(?:[:=]|para)\s*(.+)$",
+                    text,
+                    re.IGNORECASE,
+                )
                 if match_edit:
                     target_idx = int(match_edit.group(1))
                     new_val_str = match_edit.group(2).strip()
+                elif target_idx is None or new_val_str is None:
+                    match_fallback = re.search(
+                        r"(?:fato\s+)?(\d+)\s*[:=]\s*(.+)$", text, re.IGNORECASE
+                    )
+                    if match_fallback:
+                        target_idx = int(match_fallback.group(1))
+                        new_val_str = match_fallback.group(2).strip()
+
+                if target_idx is not None and new_val_str is not None:
                     if 1 <= target_idx <= len(ordered_candidates):
                         target_cand = ordered_candidates[target_idx - 1]
                         if target_cand.candidate_kind == "skill":
@@ -1543,15 +1839,75 @@ def dispatch_inbound_message(
         return queued_keys
 
     # 4. Job URL intake
-    if "http://" in text or "https://" in text:
-        words = text.split()
-        job_url = next((w for w in words if w.startswith(("http://", "https://"))), None)
+    if intent == ConversationalIntent.JOB_URL_INTAKE:
+        extracted_job_url = interpretation.extracted_entities.get("job_url")
+        if not extracted_job_url:
+            words = text.split()
+            extracted_job_url = next(
+                (w for w in words if w.startswith(("http://", "https://"))), None
+            )
+        job_url = extracted_job_url
+
+        # Check for rich embedded job description text alongside the URL
+        text_without_url = text
         if job_url:
+            text_without_url = text_without_url.replace(job_url, "")
+        text_without_url = re.sub(r"https?://\S+", "", text_without_url).strip()
+        text_without_url = re.sub(r"(?i)\b(link|url)\s*:\s*", "", text_without_url).strip()
+
+        has_embedded_job_desc = is_rich_embedded_job_description(text_without_url)
+
+        if has_embedded_job_desc:
+            # FAST PATH: Ingest embedded job text immediately without blocking on remote URL.
+            try:
+                clean_text = (
+                    text_without_url.split(":", 1)[1].strip()
+                    if ":" in text_without_url[:15]
+                    else text_without_url
+                )
+                first_line = clean_text.splitlines()[0][:60]
+                title = first_line if len(first_line) > 5 else "Oportunidade Profissional"
+                company = "Empresa"
+                for sep in (" na ", " no ", " em ", " - ", " @ "):
+                    if sep in title:
+                        parts = title.split(sep, 1)
+                        title = parts[0].strip()
+                        company = parts[1].split(".")[0].strip()
+                        break
+
+                job_info = tool_ingest_job_text(
+                    session,
+                    user=user,
+                    text=clean_text,
+                    title_hint=title,
+                    company_hint=company,
+                    source_url=job_url,
+                )
+                job_id = uuid.UUID(job_info["job_id"])
+                match_info = tool_match_job(session, redis_client, user=user, job_id=job_id)
+                overall = match_info["overall_score"]
+                eligibility = match_info["eligibility"]
+                response_text = (
+                    f"Vaga analisada: {job_info['title']} ({job_info['company']}).\n"
+                    f"Match Score WP2.2: {overall}/100 ({eligibility}).\n\n"
+                    "Deseja gerar o Application Kit completo para esta vaga? "
+                    "Envie: 'quero me candidatar'."
+                )
+            except Exception as fast_path_exc:
+                logger.warning(
+                    "orchestration.job_url_embedded_fastpath_failed",
+                    extra={"user_id": str(user.id), "error": str(fast_path_exc)},
+                )
+                response_text = (
+                    "Recebemos seu link de vaga, mas não foi possível "
+                    "processá-lo no momento. Verifique se o link está acessível."
+                )
+        elif job_url:
+            # URL-ONLY PATH: Bounded remote fetch (<= 8s total wall-clock budget).
             try:
                 job_info = tool_ingest_job_url(session, user=user, url=job_url)
                 job_id = uuid.UUID(job_info["job_id"])
                 match_info = tool_match_job(session, redis_client, user=user, job_id=job_id)
-
                 overall = match_info["overall_score"]
                 eligibility = match_info["eligibility"]
                 response_text = (
@@ -1563,38 +1919,131 @@ def dispatch_inbound_message(
             except SoftTimeLimitExceeded:
                 raise
             except Exception as exc:
-                if is_transient_inbound_error(exc):
-                    raise
                 logger.warning(
-                    "orchestration.job_url_failed",
+                    "orchestration.job_url_remote_fetch_failed",
                     extra={"user_id": str(user.id), "error": str(exc)},
                 )
                 response_text = (
-                    "Recebemos seu link de vaga, mas não foi possível processá-lo no momento. "
-                    "Verifique se o link está acessível."
+                    "Não foi possível acessar a vaga pelo link fornecido "
+                    "(tempo limite ou link indisponível). Por favor, copie e cole aqui o texto "
+                    "com a descrição da vaga para realizarmos a análise e o match!"
                 )
-
-            msg = queue_response_message(
-                session,
-                channel_identity_link_id=link_id,
-                recipient_external_id=external_id,
-                message_text=response_text,
-                idempotency_key=f"job_url_{inbound.provider_message_id}",
+        else:
+            response_text = (
+                "Por favor, envie o link da vaga ou cole a descrição completa para analisarmos."
             )
-            queued_keys.append(msg.idempotency_key)
-            return queued_keys
 
-    # 5. Pasted Job Description intake
-    if is_pasted_job_text(text) and not any(
-        cmd in lower_text
-        for cmd in (
-            "analisa",
-            "candidatar",
-            "lembra",
-            "status",
-            "confirmar",
-            "privac",
-            "excluir",
+        msg = queue_response_message(
+            session,
+            channel_identity_link_id=link_id,
+            recipient_external_id=external_id,
+            message_text=response_text,
+            idempotency_key=f"job_url_{inbound.provider_message_id}",
+        )
+        queued_keys.append(msg.idempotency_key)
+        return queued_keys
+
+    # 5. Candidate text experience intake (J-03)
+    if intent == ConversationalIntent.TEXT_EXPERIENCE:
+        portfolio_url = interpretation.extracted_entities.get("portfolio_url")
+        skills = extract_skills_from_text(text)
+        skills_str = ", ".join(skills) if skills else "Gerais"
+        if portfolio_url:
+            clean_headline = f"Portfólio / Perfil Online: {portfolio_url}"
+        else:
+            clean_headline = text.splitlines()[0][:60]
+
+        # Stage candidate facts in a reviewable ResumeImport for subsequent confirmation
+        try:
+            prev_imports = session.scalars(
+                select(ResumeImport).where(
+                    ResumeImport.user_id == user.id,
+                    ResumeImport.status == ImportStatus.READY_FOR_REVIEW,
+                )
+            ).all()
+            for pi in prev_imports:
+                pi.status = ImportStatus.FAILED
+                pi.failure_code = ImportFailureCode.NO_REVIEWABLE_CANDIDATES
+
+            text_bytes = text.encode("utf-8")
+            resume_import = ResumeImport(
+                id=uuid.uuid4(),
+                user_id=user.id,
+                status=ImportStatus.READY_FOR_REVIEW,
+                original_filename="experiencia_whatsapp.txt",
+                media_type="text/plain",
+                byte_size=len(text_bytes),
+                checksum_sha256=hashlib.sha256(text_bytes).hexdigest(),
+                storage_key=f"text_experience/{user.id}/{uuid.uuid4()}.txt",
+                parser_identity="whatsapp_conversational_parser",
+            )
+            session.add(resume_import)
+            session.flush()
+
+            for sk in skills:
+                skill_val = SkillFactValue(name=sk)
+                cand = ResumeImportCandidate(
+                    resume_import_id=resume_import.id,
+                    user_id=user.id,
+                    candidate_kind=CandidateKind.SKILL.value,
+                    value_json=skill_val.model_dump(mode="json", by_alias=True),
+                    confidence=1.0,
+                    source_excerpt=text[:150],
+                    review_state=CandidateReviewState.PENDING,
+                )
+                session.add(cand)
+
+            if clean_headline:
+                headline_cand = ResumeImportCandidate(
+                    resume_import_id=resume_import.id,
+                    user_id=user.id,
+                    candidate_kind=CandidateKind.HEADLINE.value,
+                    value_json={"kind": "headline", "text": clean_headline},
+                    confidence=1.0,
+                    source_excerpt=clean_headline[:150],
+                    review_state=CandidateReviewState.PENDING,
+                )
+                session.add(headline_cand)
+
+            session.commit()
+        except Exception as stage_exc:
+            session.rollback()
+            logger.warning(
+                "orchestration.text_experience_staging_failed",
+                extra={"user_id": str(user.id), "error": str(stage_exc)},
+            )
+
+        response_text = (
+            f"Recebemos suas experiências profissionais com sucesso!\n"
+            f"• Perfil / Resumo: {clean_headline}\n"
+            f"• Competências identificadas: {skills_str}\n\n"
+            "Deseja confirmar e adicionar essas informações ao seu perfil profissional?\n"
+            "Envie: 'pode confirmar' ou 'confirmar todos'."
+        )
+        msg = queue_response_message(
+            session,
+            channel_identity_link_id=link_id,
+            recipient_external_id=external_id,
+            message_text=response_text,
+            idempotency_key=f"exp_text_{inbound.provider_message_id}",
+        )
+        queued_keys.append(msg.idempotency_key)
+        return queued_keys
+
+    # 5.5 Pasted Job Description intake
+    if intent == ConversationalIntent.JOB_TEXT_INTAKE or (
+        is_pasted_job_text(text)
+        and not any(
+            cmd in lower_text
+            for cmd in (
+                "analisa",
+                "candidatar",
+                "lembra",
+                "status",
+                "confirmar",
+                "privac",
+                "excluir",
+            )
         )
     ):
         clean_text = text.split(":", 1)[1].strip() if ":" in text[:15] else text
@@ -1628,8 +2077,10 @@ def dispatch_inbound_message(
         queued_keys.append(msg.idempotency_key)
         return queued_keys
 
-    # 6. Match analysis & explanation request ("analisa essa vaga") (Finding 2)
-    if any(q in lower_text for q in ("analisa", "analisar", "vale a pena", "explicar")):
+    # 6. Match analysis & explanation request (Finding 2, J-08, J-09)
+    if intent == ConversationalIntent.MATCH_EXPLANATION or any(
+        q in lower_text for q in ("analisa", "analisar", "vale a pena", "explicar")
+    ):
         latest_job = resolve_user_target_job(session, user=user)
 
         if latest_job:
@@ -1681,8 +2132,8 @@ def dispatch_inbound_message(
         queued_keys.append(msg.idempotency_key)
         return queued_keys
 
-    # 7. Application Kit & Tailoring preparation ("quero me candidatar") (Findings 2, 3)
-    if any(
+    # 7. Application Kit & Tailoring preparation (Findings 2, 3, J-10, J-11)
+    if intent == ConversationalIntent.APPLICATION_REQUEST or any(
         q in lower_text
         for q in ("quero me candidatar", "candidatar", "gerar kit", "preparar candidatura")
     ):
@@ -1768,8 +2219,8 @@ def dispatch_inbound_message(
         queued_keys.append(msg.idempotency_key)
         return queued_keys
 
-    # 8. Application Status update ("já me candidatei", "candidatura enviada") (Finding 3)
-    if any(
+    # 8. Application Status update (Finding 3, J-12)
+    if intent == ConversationalIntent.APPLICATION_STATUS_UPDATE or any(
         q in lower_text
         for q in ("já me candidatei", "me candidatei", "candidatura enviada", "marcar aplicada")
     ):
@@ -1808,8 +2259,43 @@ def dispatch_inbound_message(
         queued_keys.append(msg.idempotency_key)
         return queued_keys
 
-    # 9. Reminder scheduling ("me lembra", "lembrete", "follow-up") (Finding 4)
-    if any(q in lower_text for q in ("me lembra", "lembrete", "follow-up", "acompanhar")):
+    # 8.5 Application Status query (J-13)
+    if intent == ConversationalIntent.APPLICATION_STATUS_QUERY:
+        app_rows = session.execute(
+            select(Application, Job)
+            .join(Job, Application.job_id == Job.id)
+            .where(Application.user_id == user.id)
+            .order_by(Application.created_at.desc())
+            .limit(5)
+        ).all()
+        if app_rows:
+            lines = ["Suas candidaturas registradas:"]
+            for app, job in app_rows:
+                job_title = job.title if job else "Vaga"
+                status_str = app.status.value if hasattr(app.status, "value") else str(app.status)
+                lines.append(f"• {job_title} — Status: {status_str}")
+            lines.append("\nPara marcar uma candidatura como enviada, envie: 'já me candidatei'.")
+            response_text = "\n".join(lines)
+        else:
+            response_text = (
+                "Você ainda não possui nenhuma candidatura registrada. "
+                "Envie o link de uma vaga para prepararmos seu Application Kit!"
+            )
+
+        msg = queue_response_message(
+            session,
+            channel_identity_link_id=link_id,
+            recipient_external_id=external_id,
+            message_text=response_text,
+            idempotency_key=f"status_query_{inbound.provider_message_id}",
+        )
+        queued_keys.append(msg.idempotency_key)
+        return queued_keys
+
+    # 9. Reminder scheduling (Finding 4, J-14)
+    if intent == ConversationalIntent.REMINDER_FOLLOWUP or any(
+        q in lower_text for q in ("me lembra", "lembrete", "follow-up", "acompanhar")
+    ):
         latest_app = session.execute(
             select(Application)
             .where(Application.user_id == user.id)
@@ -1858,7 +2344,10 @@ def dispatch_inbound_message(
         return queued_keys
 
     # 10. Recommendations list
-    if any(cmd in lower_text for cmd in ("vaga", "vagas", "oportunidade", "recomendar")):
+    if intent == ConversationalIntent.JOB_RECOMMENDATIONS or (
+        any(cmd in lower_text for cmd in ("vagas recomendadas", "recomendar vagas", "outras vagas"))
+        or lower_text.strip() in ("vaga", "vagas", "oportunidade", "oportunidades")
+    ):
         recs = tool_recommend_jobs(session, redis_client, user=user, limit=3)
         if recs:
             lines = ["Oportunidades recomendadas para o seu perfil:"]
@@ -1882,7 +2371,61 @@ def dispatch_inbound_message(
         queued_keys.append(msg.idempotency_key)
         return queued_keys
 
-    # 11. Profile readiness & Default Fallback
+    # 10.5 Help menu (J-17)
+    if intent == ConversationalIntent.HELP_MENU:
+        config = get_product_config()
+        response_text = (
+            f"Como posso te ajudar no {config.product_name}:\n\n"
+            "📄 Currículo: envie seu currículo em PDF ou escreva suas experiências aqui no chat.\n"
+            "🔍 Vagas & Match: envie o link ou cole o texto de uma vaga para analisarmos o match.\n"
+            "✨ Candidatura: diga 'quero me candidatar' para gerar seu Application Kit adaptado.\n"
+            "📌 Acompanhamento: diga 'já me candidatei' após submeter para atualizar o status.\n"
+            "⏰ Lembretes: diga 'me lembra de acompanhar' para agendar um lembrete de follow-up.\n"
+            "🔒 Privacidade: envie 'privacidade' para consultar como cuidamos dos seus dados."
+        )
+        msg = queue_response_message(
+            session,
+            channel_identity_link_id=link_id,
+            recipient_external_id=external_id,
+            message_text=response_text,
+            idempotency_key=f"help_{inbound.provider_message_id}",
+        )
+        queued_keys.append(msg.idempotency_key)
+        return queued_keys
+
+    # 10.6 Greeting or Return (J-01, J-18)
+    if intent == ConversationalIntent.GREETING_OR_RETURN:
+        config = get_product_config()
+        status = get_user_profile_status(session, user_id=user.id)
+        if status["has_facts"]:
+            v_num = status["profile_version"]
+            f_cnt = status["fact_count"]
+            response_text = (
+                f"Olá! Bom ter você de volta ao {config.product_name}. "
+                f"Seu perfil está ativo (Versão {v_num}, {f_cnt} competências confirmadas).\n\n"
+                "Como posso te ajudar agora?\n"
+                "• Envie o link de uma vaga para analisarmos o match;\n"
+                "• Envie 'vagas' para ver oportunidades recomendadas;\n"
+                "• Ou envie 'ajuda' para ver todas as opções."
+            )
+        else:
+            response_text = (
+                f"Olá! Sou seu assistente de carreira no {config.product_name}.\n\n"
+                "Para começar a analisar oportunidades e preparar candidaturas, "
+                "envie seu currículo em PDF ou compartilhe um resumo das suas "
+                "experiências profissionais aqui!"
+            )
+        msg = queue_response_message(
+            session,
+            channel_identity_link_id=link_id,
+            recipient_external_id=external_id,
+            message_text=response_text,
+            idempotency_key=f"greet_{inbound.provider_message_id}",
+        )
+        queued_keys.append(msg.idempotency_key)
+        return queued_keys
+
+    # 11. Profile readiness & Default Fallback (J-20)
     status = get_user_profile_status(session, user_id=user.id)
     if not status["has_facts"]:
         missing = tool_get_profile_missing_information(session, user=user)

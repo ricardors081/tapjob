@@ -7,6 +7,7 @@ import ipaddress
 import os
 import socket
 import ssl
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -306,5 +307,24 @@ def test_tls_certificate_verification_failure_raises_tls_error() -> None:
             pytest.raises(JobUrlTlsFailedError),
         ):
             await client.fetch("https://invalid-tls.example.com/job")
+
+    asyncio.run(_test())
+
+
+def test_total_timeout_enforced_raises_unreachable_error() -> None:
+    async def _test() -> None:
+        client = SafeHttpClient(total_timeout_seconds=0.1)
+
+        async def _hanging_dns(*args: Any, **kwargs: Any) -> list[str]:
+            await asyncio.sleep(0.5)
+            return ["93.184.215.14"]
+
+        with (
+            patch.object(client, "resolve_and_validate_dns", side_effect=_hanging_dns),
+            pytest.raises(JobUrlUnreachableError) as exc_info,
+        ):
+            await client.fetch("https://example.com/hanging-job")
+
+        assert "timed out" in str(exc_info.value).lower()
 
     asyncio.run(_test())

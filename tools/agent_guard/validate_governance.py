@@ -482,11 +482,20 @@ def validate_agent_factory_status(repo_root: Path) -> list[str]:
     if not af1_verified:
         errors.append("docs/PROJECT_STATE.md must state that AF-1 is CLOSED_AND_VERIFIED.")
 
-    # At current HEAD, AF-2 is authorized and IN PROGRESS; reject regression to NOT STARTED
-    af2_in_progress = any(s in content for s in ("AF-2 = IN PROGRESS", "AF-2: IN PROGRESS"))
-    if not af2_in_progress:
+    # AF-2 is CLOSED_AND_VERIFIED (or IN PROGRESS in legacy branches)
+    # Reject regression to NOT STARTED
+    af2_status_valid = any(
+        s in content
+        for s in (
+            "AF-2 = CLOSED_AND_VERIFIED",
+            "AF-2: CLOSED_AND_VERIFIED",
+            "AF-2 = IN PROGRESS",
+            "AF-2: IN PROGRESS",
+        )
+    )
+    if not af2_status_valid:
         errors.append(
-            "docs/PROJECT_STATE.md must state that AF-2 is IN PROGRESS (current branch HEAD)."
+            "docs/PROJECT_STATE.md must state that AF-2 is CLOSED_AND_VERIFIED or IN PROGRESS."
         )
 
     return errors

@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import MagicMock
 
 from tools.ops.pilot_inspect import (
+    inspect_participant,
     inspect_recent_envelopes,
     inspect_recent_outbox,
     inspect_summary,
@@ -21,6 +22,7 @@ from tools.ops.pilot_inspect import (
     mask_phone,
     mask_provider_message_id,
     parse_args,
+    print_participant_summary,
     sanitize_text,
 )
 
@@ -205,6 +207,93 @@ class TestPilotInspectLogic(unittest.TestCase):
         self.assertEqual(len(res), 1)
         self.assertEqual(res[0]["recipient_masked"], "55118****4321")
         self.assertNotIn("88888", res[0]["recipient_masked"])
+
+    def test_inspect_participant_with_profile_and_application(self) -> None:
+        mock_session = MagicMock()
+        # Side effects for session.execute queries in inspect_participant:
+        # 1. Inbound envelopes
+        # 2. Outbox messages
+        # 3. ChannelIdentityLink user resolution
+        # 4. CareerProfile
+        # 5. ProfileFacts grouped by type
+        # 6. Latest application + job
+        mock_session.execute.side_effect = [
+            MagicMock(
+                fetchall=lambda: [(1, "message_received", "processed", {}, 1, "2026-10-19", None)]
+            ),
+            MagicMock(
+                fetchall=lambda: [(2, "sent", 0, "2026-10-19", "2026-10-19", None, "wamid.123")]
+            ),
+            MagicMock(fetchone=lambda: ("u-1234-uuid",)),
+            MagicMock(
+                fetchone=lambda: ("cp-1", "Engenheiro de Software", "Resumo profissional", 2)
+            ),
+            MagicMock(fetchall=lambda: [("skill", 4), ("experience", 2)]),
+            MagicMock(
+                fetchone=lambda: (
+                    "app-1",
+                    "preparing",
+                    "deep_link",
+                    None,
+                    "2026-10-19 12:30:00",
+                    "job-1",
+                    "Senior Python Developer",
+                    "TechCorp",
+                )
+            ),
+        ]
+
+        res = inspect_participant(mock_session, "5511999991234")
+        self.assertEqual(res["participant_masked"], "55119****1234")
+        self.assertTrue(res["user_resolved"])
+        self.assertEqual(res["profile_summary"]["profile_version"], 2)
+        self.assertEqual(res["profile_summary"]["headline"], "Engenheiro de Software")
+        self.assertEqual(res["profile_summary"]["active_facts_count"], 6)
+        self.assertEqual(res["profile_summary"]["facts_by_type"], {"skill": 4, "experience": 2})
+        self.assertIsNotNone(res["active_target_job"])
+        self.assertEqual(res["active_target_job"]["title"], "Senior Python Developer")
+        self.assertEqual(res["active_target_job"]["company"], "TechCorp")
+        self.assertIsNotNone(res["latest_application"])
+        self.assertEqual(res["latest_application"]["status"], "preparing")
+        self.assertEqual(res["latest_application"]["apply_mode"], "deep_link")
+
+    def test_inspect_participant_unresolved_user(self) -> None:
+        mock_session = MagicMock()
+        mock_session.execute.side_effect = [
+            MagicMock(fetchall=lambda: []),
+            MagicMock(fetchall=lambda: []),
+            MagicMock(fetchone=lambda: None),
+        ]
+
+        res = inspect_participant(mock_session, "5511988887777")
+        self.assertEqual(res["participant_masked"], "55119****7777")
+        self.assertFalse(res["user_resolved"])
+        self.assertEqual(res["profile_summary"]["active_facts_count"], 0)
+        self.assertIsNone(res["active_target_job"])
+        self.assertIsNone(res["latest_application"])
+
+    def test_print_participant_summary_runs_without_error(self) -> None:
+        participant_data = {
+            "participant_masked": "55119****1234",
+            "user_resolved": True,
+            "profile_summary": {
+                "profile_version": 1,
+                "headline": "Backend Dev",
+                "summary": "Specialist in APIs",
+                "active_facts_count": 3,
+                "facts_by_type": {"skill": 3},
+            },
+            "active_target_job": {"title": "Python Engineer", "company": "Acme Corp"},
+            "latest_application": {
+                "status": "applied",
+                "apply_mode": "assisted_extension",
+                "updated_at": "2026-10-19 14:00:00",
+            },
+            "total_inbound": 5,
+            "total_outbound": 5,
+        }
+        # Verify it runs without raising any exceptions
+        print_participant_summary(participant_data)
 
 
 if __name__ == "__main__":

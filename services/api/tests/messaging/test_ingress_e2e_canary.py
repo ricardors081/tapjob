@@ -45,7 +45,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from tapjob_api.career_profile import service as career_profile_service
 from tapjob_api.career_profile.fact_values import ExperienceFactValue, SkillFactValue, YearMonth
-from tapjob_api.career_profile.models import FactStatus, FactType, ProfileFact
+from tapjob_api.career_profile.models import CareerProfile, FactStatus, FactType, ProfileFact
 from tapjob_api.core.config import ApiSettings, Environment
 from tapjob_api.identity.models import User, UserStatus
 from tapjob_api.jobs import service as jobs_service
@@ -64,6 +64,7 @@ from tapjob_api.messaging.applications_service import (
 from tapjob_api.messaging.inbound import (
     InboundEffect,
     InboundEffectKind,
+    InboundEffectState,
     ProviderEventEnvelope,
     ProviderEventProcessingStatus,
     ProviderEventType,
@@ -71,6 +72,7 @@ from tapjob_api.messaging.inbound import (
 from tapjob_api.messaging.inbound_service import (
     InboundClaimResult,
     claim_inbound_envelope,
+    get_inbound_effect,
     mark_event_failed,
     mark_event_processed,
     reserve_inbound_effect,
@@ -106,6 +108,7 @@ from tapjob_api.resume_import.errors import (
     TextNotExtractableError,
 )
 from tapjob_api.resume_import.models import (
+    CandidateReviewDraft,
     CandidateReviewState,
     ImportStatus,
     Resume,
@@ -2561,6 +2564,286 @@ def test_finalize_pending_effect_missing_target_fails_closed(
             )
         )
         assert finalized_count == 0
+    finally:
+        session.close()
+        engine.dispose()
+
+
+@pytest.mark.integration
+def test_j05_real_integrated_fact_rejection_and_confirmation_cascade(
+    _identity_schema_ready: None,
+) -> None:
+    """J-05 Real Database Integrated Persistence Test: Fact rejection and confirmation cascade.
+
+    Traverses the full end-to-end orchestration pipeline with real PostgreSQL persistence:
+    1. Initial State:
+       - User linked to channel identity (WhatsApp).
+       - ResumeImport in READY_FOR_REVIEW with 5 ResumeImportCandidate rows (Skill 1..5).
+       - Zero facts in profile_facts, CareerProfile version is 0.
+    2. Message 1: "rejeita o 2" dispatched via dispatch_inbound_message (NO MOCKS):
+       - Orchestration resolves single rejection intent for candidate index 2.
+       - CandidateReviewDraft is created and persisted in PostgreSQL with decision='reject'.
+       - CandidateReviewState in DB remains PENDING (drafted, not finalized).
+       - Zero facts activated in profile_facts.
+       - Profile version remains 0.
+       - Outbox receives feedback: "Fato 2 rejeitado com sucesso. Restam 4 fato(s) pendente(s)...".
+    3. Message 2: "confirmar todos" dispatched via dispatch_inbound_message (NO MOCKS):
+       - Orchestration detects confirm_all intent.
+       - Orchestration queries real DB for all candidates and persisted drafts.
+       - Assembles decisions preserving drafted REJECT for candidate 2, ACCEPT for remaining 4.
+       - Orchestration invokes canonical finalizer confirm_candidates_and_finalize.
+       - Commits to real PostgreSQL:
+         * CareerProfile version advances to 1 (bumped strictly once on final confirmation).
+         * Exactly 4 active ProfileFact rows in profile_facts (Skills 1, 3, 4, 5).
+         * Candidate 2 was NEVER activated as ProfileFact (Skill 2 is absent).
+         * In resume_import_candidates: candidate 2 is REJECTED, candidates 1, 3, 4, 5 are ACCEPTED.
+         * ResumeImport transitions to FINALIZED.
+         * Exactly 1 ResumeVersion created with profile_version=1.
+         * InboundEffect marked COMPLETED.
+         * Outbox receives confirmation: "Informações confirmadas com sucesso!... Versão 1".
+    """
+    settings = ApiSettings(app_env=Environment.DEVELOPMENT)
+    engine = create_engine(str(settings.database_url), pool_size=5, max_overflow=5)
+    session_factory = sessionmaker(bind=engine)
+    session: Session = session_factory()
+    redis_client = redis.Redis.from_url(str(settings.redis_url))
+
+    fake_channel = FakeMessagingChannel()
+    storage = InMemoryObjectStorage()
+
+    try:
+        phone = f"5511{uuid.uuid4().int % 90000000 + 10000000}"
+        msg_id_1 = f"wamid_j05_rej_{uuid.uuid4().hex[:12]}"
+        msg_id_2 = f"wamid_j05_conf_{uuid.uuid4().hex[:12]}"
+
+        provider = get_or_create_channel_provider(
+            session,
+            channel=ChannelType.WHATSAPP,
+            provider_name="evolution",
+            provider_config_key="evolution_canary_instance",
+        )
+        session.commit()
+        provider_id = provider.id
+
+        user = User(locale="pt-BR", timezone="Etc/UTC", status=UserStatus.ACTIVE)
+        session.add(user)
+        session.flush()
+        _link = link_or_create_identity(
+            session,
+            user_id=user.id,
+            provider_id=provider_id,
+            external_id=phone,
+            is_new_user=True,
+            verified_proof=True,
+        )
+        session.commit()
+        user_id = user.id
+
+        # Setup ResumeImport with 5 candidates in READY_FOR_REVIEW
+        import_id = uuid.uuid4()
+        cand_ids: list[uuid.UUID] = []
+        candidates: list[ResumeImportCandidate] = []
+        base_time = datetime.now(UTC)
+        for i in range(1, 6):
+            c_id = uuid.uuid4()
+            cand_ids.append(c_id)
+            c = ResumeImportCandidate(
+                id=c_id,
+                resume_import_id=import_id,
+                user_id=user_id,
+                candidate_kind="skill",
+                value_json={"name": f"Skill {i}", "category": "technical"},
+                confidence=0.9,
+                review_state=CandidateReviewState.PENDING,
+                created_at=base_time + timedelta(seconds=i),
+            )
+            session.add(c)
+            candidates.append(c)
+
+        import_rec = ResumeImport(
+            id=import_id,
+            user_id=user_id,
+            status=ImportStatus.READY_FOR_REVIEW,
+            original_filename="curriculo_j05.pdf",
+            media_type="application/pdf",
+            byte_size=1024,
+            checksum_sha256="c" * 64,
+            storage_key="test_storage_j05",
+            candidates=candidates,
+        )
+        session.add(import_rec)
+        session.commit()
+        session.close()
+        session = session_factory()
+
+        # Step 1 Assertions: Pre-review state in real PostgreSQL
+        profile_pre = session.scalar(select(CareerProfile).where(CareerProfile.user_id == user_id))
+        facts_pre = session.scalars(select(ProfileFact).where(ProfileFact.user_id == user_id)).all()
+        assert profile_pre is None or profile_pre.profile_version == 0
+        assert len(facts_pre) == 0
+
+        # Step 2: Message 1 ("rejeita o 2")
+        envelope_1 = ProviderEventEnvelope(
+            provider="evolution",
+            provider_instance="canary_instance",
+            external_event_id=f"evt_j05_1_{uuid.uuid4().hex[:12]}",
+            event_type=ProviderEventType.MESSAGE_RECEIVED,
+            normalized_event={
+                "channel": "whatsapp",
+                "sender_external_id": phone,
+                "provider_message_id": msg_id_1,
+                "text": "rejeita o 2",
+            },
+            status=ProviderEventProcessingStatus.ACCEPTED,
+            processing_attempts=1,
+        )
+        session.add(envelope_1)
+        session.commit()
+        envelope_1_id = envelope_1.id
+
+        inbound_1 = InboundMessage(
+            sender=PortChannelIdentity(channel="whatsapp", external_id=phone),
+            provider_message_id=msg_id_1,
+            received_at=datetime.now(UTC),
+            text="rejeita o 2",
+        )
+
+        keys_1 = dispatch_inbound_message(
+            session,
+            redis_client,
+            inbound=inbound_1,
+            provider_id=provider_id,
+            channel_adapter=fake_channel,
+            storage=storage,
+            envelope_id=envelope_1_id,
+        )
+        session.commit()
+        assert len(keys_1) == 1
+
+        session.close()
+        session = session_factory()
+
+        # Step 2 Assertions: Draft persisted, profile version unchanged,
+        # zero facts created, import remains READY_FOR_REVIEW
+        profile_mid = session.scalar(select(CareerProfile).where(CareerProfile.user_id == user_id))
+        assert profile_mid is None or profile_mid.profile_version == 0
+
+        draft_c2 = session.scalar(
+            select(CandidateReviewDraft).where(
+                CandidateReviewDraft.user_id == user_id,
+                CandidateReviewDraft.candidate_id == cand_ids[1],
+            )
+        )
+        assert draft_c2 is not None
+        assert draft_c2.decision == "reject"
+
+        facts_mid = session.scalars(select(ProfileFact).where(ProfileFact.user_id == user_id)).all()
+        assert len(facts_mid) == 0, "No facts should be activated before final confirmation"
+
+        reloaded_import_mid = session.get(ResumeImport, import_id)
+        assert reloaded_import_mid is not None
+        assert reloaded_import_mid.status == ImportStatus.READY_FOR_REVIEW
+
+        reloaded_c2_mid = session.get(ResumeImportCandidate, cand_ids[1])
+        assert reloaded_c2_mid is not None
+        assert reloaded_c2_mid.review_state == CandidateReviewState.PENDING
+
+        # Step 3: Message 2 ("confirmar todos")
+        envelope_2 = ProviderEventEnvelope(
+            provider="evolution",
+            provider_instance="canary_instance",
+            external_event_id=f"evt_j05_2_{uuid.uuid4().hex[:12]}",
+            event_type=ProviderEventType.MESSAGE_RECEIVED,
+            normalized_event={
+                "channel": "whatsapp",
+                "sender_external_id": phone,
+                "provider_message_id": msg_id_2,
+                "text": "confirmar todos",
+            },
+            status=ProviderEventProcessingStatus.ACCEPTED,
+            processing_attempts=1,
+        )
+        session.add(envelope_2)
+        session.commit()
+        envelope_2_id = envelope_2.id
+
+        inbound_2 = InboundMessage(
+            sender=PortChannelIdentity(channel="whatsapp", external_id=phone),
+            provider_message_id=msg_id_2,
+            received_at=datetime.now(UTC),
+            text="confirmar todos",
+        )
+
+        keys_2 = dispatch_inbound_message(
+            session,
+            redis_client,
+            inbound=inbound_2,
+            provider_id=provider_id,
+            channel_adapter=fake_channel,
+            storage=storage,
+            envelope_id=envelope_2_id,
+        )
+        session.commit()
+        assert len(keys_2) == 1
+
+        session.close()
+        session = session_factory()
+
+        # Step 3 Assertions: Post-confirmation state in real PostgreSQL
+        # 1. CareerProfile version bumped strictly to 1
+        profile_post = session.scalar(select(CareerProfile).where(CareerProfile.user_id == user_id))
+        assert profile_post is not None
+        assert profile_post.profile_version == 1
+
+        # 2. Exactly 4 active ProfileFact rows (candidate 2 excluded)
+        active_facts = session.scalars(
+            select(ProfileFact).where(
+                ProfileFact.user_id == user_id,
+                ProfileFact.status == FactStatus.ACTIVE,
+            )
+        ).all()
+        assert len(active_facts) == 4, f"Expected 4 active facts, got {len(active_facts)}"
+
+        active_skill_names = {
+            f.value_json["name"]
+            for f in active_facts
+            if isinstance(f.value_json, dict) and "name" in f.value_json
+        }
+        assert "Skill 2" not in active_skill_names
+        assert active_skill_names == {"Skill 1", "Skill 3", "Skill 4", "Skill 5"}
+
+        # 3. Candidate 2 marked REJECTED; others marked ACCEPTED
+        reloaded_c2_post = session.get(ResumeImportCandidate, cand_ids[1])
+        assert reloaded_c2_post is not None
+        assert reloaded_c2_post.review_state == CandidateReviewState.REJECTED
+
+        for idx in (0, 2, 3, 4):
+            cand_acc = session.get(ResumeImportCandidate, cand_ids[idx])
+            assert cand_acc is not None
+            assert cand_acc.review_state == CandidateReviewState.ACCEPTED
+
+        # 4. ResumeImport status transitions to FINALIZED
+        reloaded_import_post = session.get(ResumeImport, import_id)
+        assert reloaded_import_post is not None
+        assert reloaded_import_post.status == ImportStatus.FINALIZED
+
+        # 5. Exactly 1 ResumeVersion created with profile_version=1
+        versions = session.scalars(
+            select(ResumeVersion)
+            .join(Resume, Resume.id == ResumeVersion.resume_id)
+            .where(Resume.user_id == user_id)
+        ).all()
+        assert len(versions) == 1
+        assert versions[0].profile_version == 1
+
+        # 6. InboundEffect recorded as COMPLETED for envelope 2
+        finalize_effect = get_inbound_effect(
+            session,
+            envelope_id=envelope_2_id,
+            effect_kind=InboundEffectKind.FINALIZE_REVIEW.value,
+        )
+        assert finalize_effect is not None
+        assert finalize_effect.operation_state == InboundEffectState.COMPLETED.value
     finally:
         session.close()
         engine.dispose()

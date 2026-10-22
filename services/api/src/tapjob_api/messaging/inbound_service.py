@@ -68,9 +68,13 @@ def is_transient_inbound_error(exc: Exception) -> bool:
     import redis
     from celery.exceptions import SoftTimeLimitExceeded
 
+    from tapjob_api.jobs.errors import JobUrlError
     from tapjob_api.ports._common import PortError
     from tapjob_api.resume_import.errors import ImportLeaseActiveError, TransientProcessingError
     from tapjob_api.resume_import.storage import ObjectStorageError
+
+    if isinstance(exc, JobUrlError):
+        return False
 
     if isinstance(exc, SoftTimeLimitExceeded):
         return True

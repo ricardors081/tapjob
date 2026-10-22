@@ -95,11 +95,9 @@ describe("<JobFeedScreen />", () => {
 
     await render(<JobFeedScreen />);
 
-    await waitFor(() => {
-      expect(
-        screen.getByText(/Nenhuma vaga encontrada para os critérios selecionados/),
-      ).toBeTruthy();
-    });
+    expect(
+      await screen.findByText(/Nenhuma vaga encontrada para os critérios selecionados/),
+    ).toBeTruthy();
   });
 
   test("renders error state and retries on press", async () => {
@@ -109,21 +107,17 @@ describe("<JobFeedScreen />", () => {
 
     await render(<JobFeedScreen />);
 
-    await waitFor(() => {
-      expect(screen.getByText("Não foi possível carregar as vagas.")).toBeTruthy();
-    });
+    expect(await screen.findByText("Não foi possível carregar as vagas.")).toBeTruthy();
 
     (endpoints.getJobFeed as jest.Mock).mockResolvedValueOnce({
       data: { items: [], nextCursor: null },
     });
 
-    fireEvent.press(screen.getByText("Tentar novamente"));
+    await fireEvent.press(screen.getByText("Tentar novamente"));
 
-    await waitFor(() => {
-      expect(
-        screen.getByText("Nenhuma vaga encontrada para os critérios selecionados."),
-      ).toBeTruthy();
-    });
+    expect(
+      await screen.findByText("Nenhuma vaga encontrada para os critérios selecionados."),
+    ).toBeTruthy();
   });
 
   test("toggles save/unsave on a job card optimistically", async () => {
@@ -150,19 +144,15 @@ describe("<JobFeedScreen />", () => {
 
     await render(<JobFeedScreen />);
 
-    await waitFor(() => {
-      expect(screen.getByText("Staff Platform Engineer")).toBeTruthy();
-    });
+    expect(await screen.findByText("Staff Platform Engineer")).toBeTruthy();
 
     const saveBtn = screen.getByText("Salvar");
-    fireEvent.press(saveBtn);
+    await fireEvent.press(saveBtn);
 
-    await waitFor(() => {
-      expect(endpoints.saveJob).toHaveBeenCalledWith(
-        expect.objectContaining({ path: { job_id: "test-job-uuid-1" } }),
-      );
-      expect(screen.getByText("Salva")).toBeTruthy();
-    });
+    expect(await screen.findByText("Salva")).toBeTruthy();
+    expect(endpoints.saveJob).toHaveBeenCalledWith(
+      expect.objectContaining({ path: { job_id: "test-job-uuid-1" } }),
+    );
   });
 
   test("dismisses job card from feed", async () => {
@@ -188,18 +178,16 @@ describe("<JobFeedScreen />", () => {
 
     await render(<JobFeedScreen />);
 
-    await waitFor(() => {
-      expect(screen.getByText("DevOps Specialist")).toBeTruthy();
-    });
+    expect(await screen.findByText("DevOps Specialist")).toBeTruthy();
 
-    fireEvent.press(screen.getByText("Ocultar"));
+    await fireEvent.press(screen.getByText("Ocultar"));
 
     await waitFor(() => {
-      expect(endpoints.dismissJob).toHaveBeenCalledWith(
-        expect.objectContaining({ path: { job_id: "test-job-uuid-1" } }),
-      );
       expect(screen.queryByText("DevOps Specialist")).toBeNull();
     });
+    expect(endpoints.dismissJob).toHaveBeenCalledWith(
+      expect.objectContaining({ path: { job_id: "test-job-uuid-1" } }),
+    );
   });
 
   test("rolls back optimistic save when server returns error", async () => {
@@ -227,16 +215,12 @@ describe("<JobFeedScreen />", () => {
 
     await render(<JobFeedScreen />);
 
-    await waitFor(() => {
-      expect(screen.getByText("Senior Backend Engineer")).toBeTruthy();
-    });
+    expect(await screen.findByText("Senior Backend Engineer")).toBeTruthy();
 
-    fireEvent.press(screen.getByText("Salvar"));
+    await fireEvent.press(screen.getByText("Salvar"));
 
-    await waitFor(() => {
-      expect(screen.getByText("Salvar")).toBeTruthy();
-      expect(screen.getByText("Não foi possível carregar as vagas.")).toBeTruthy();
-    });
+    expect(await screen.findByText("Não foi possível carregar as vagas.")).toBeTruthy();
+    expect(screen.getByText("Salvar")).toBeTruthy();
   });
 
   test("does not trigger evaluation on each keystroke (submit explícito policy)", async () => {
@@ -246,16 +230,14 @@ describe("<JobFeedScreen />", () => {
 
     await render(<JobFeedScreen />);
 
-    await waitFor(() => {
-      expect(
-        screen.getByText("Nenhuma vaga encontrada para os critérios selecionados."),
-      ).toBeTruthy();
-    });
+    expect(
+      await screen.findByText("Nenhuma vaga encontrada para os critérios selecionados."),
+    ).toBeTruthy();
 
     const searchInput = screen.getByPlaceholderText("Buscar por título...");
-    fireEvent.changeText(searchInput, "p");
-    fireEvent.changeText(searchInput, "py");
-    fireEvent.changeText(searchInput, "python");
+    await fireEvent.changeText(searchInput, "p");
+    await fireEvent.changeText(searchInput, "py");
+    await fireEvent.changeText(searchInput, "python");
 
     // While typing, feed evaluations remain 1 (0 extra evaluations)
     expect(endpoints.getJobFeed).toHaveBeenCalledTimes(1);
@@ -275,11 +257,9 @@ describe("<JobFeedScreen />", () => {
       },
     });
 
-    fireEvent(searchInput, "submitEditing", { nativeEvent: { text: "python" } });
+    await fireEvent(searchInput, "submitEditing", { nativeEvent: { text: "python" } });
 
-    await waitFor(() => {
-      expect(screen.getByText("Python Engineer Found")).toBeTruthy();
-    });
+    expect(await screen.findByText("Python Engineer Found")).toBeTruthy();
     expect(endpoints.getJobFeed).toHaveBeenCalledTimes(2);
   });
 });

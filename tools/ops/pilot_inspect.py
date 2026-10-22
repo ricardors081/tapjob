@@ -234,9 +234,9 @@ def inspect_recent_envelopes(session: Session, limit: int = 10) -> list[dict[str
     stmt = sa.text(
         "SELECT id, provider, external_event_id, event_type, status, "
         "normalized_event, processing_attempts, processing_lease_expires_at, "
-        "error_details, created_at "
+        "error_details, received_at "
         "FROM provider_event_envelopes "
-        "ORDER BY created_at DESC "
+        "ORDER BY received_at DESC "
         "LIMIT :limit"
     )
     rows = session.execute(stmt, {"limit": limit}).fetchall()
@@ -297,10 +297,10 @@ def inspect_participant(session: Session, phone_or_jid: str) -> dict[str, Any]:
     # Inbound envelopes for participant
     env_stmt = sa.text(
         "SELECT id, event_type, status, normalized_event, processing_attempts, "
-        "created_at, error_details "
+        "received_at, error_details "
         "FROM provider_event_envelopes "
         "WHERE normalized_event->>'sender_external_id' LIKE :pattern "
-        "ORDER BY created_at DESC LIMIT 50"
+        "ORDER BY received_at DESC LIMIT 50"
     )
     env_rows = session.execute(env_stmt, {"pattern": f"%{clean_digits}%"}).fetchall()
     inbound_events = []
@@ -338,8 +338,94 @@ def inspect_participant(session: Session, phone_or_jid: str) -> dict[str, Any]:
             }
         )
 
+    # Resolve linked user
+    user_row = session.execute(
+        sa.text(
+            "SELECT cil.user_id "
+            "FROM channel_identity_links cil "
+            "JOIN channel_identities ci ON cil.channel_identity_id = ci.id "
+            "WHERE ci.external_id LIKE :pattern LIMIT 1"
+        ),
+        {"pattern": f"%{clean_digits}%"},
+    ).fetchone()
+
+    user_id = str(user_row[0]) if user_row else None
+
+    # Candidate profile facts summary
+    profile_summary: dict[str, Any] = {
+        "user_resolved": user_id is not None,
+        "profile_version": 0,
+        "headline": None,
+        "summary": None,
+        "active_facts_count": 0,
+        "facts_by_type": {},
+    }
+
+    if user_id:
+        cp_row = session.execute(
+            sa.text(
+                "SELECT id, headline, summary, profile_version FROM career_profiles "
+                "WHERE user_id = :user_id LIMIT 1"
+            ),
+            {"user_id": user_id},
+        ).fetchone()
+        if cp_row:
+            profile_summary["headline"] = sanitize_text(cp_row[1]) if cp_row[1] else None
+            profile_summary["summary"] = sanitize_text(cp_row[2]) if cp_row[2] else None
+            profile_summary["profile_version"] = int(cp_row[3] or 0)
+
+        facts_rows = session.execute(
+            sa.text(
+                "SELECT fact_type, count(*) FROM profile_facts "
+                "WHERE user_id = :user_id AND status = 'active' "
+                "GROUP BY fact_type"
+            ),
+            {"user_id": user_id},
+        ).fetchall()
+        facts_by_type = {str(r[0]): int(r[1]) for r in facts_rows}
+        profile_summary["facts_by_type"] = facts_by_type
+        profile_summary["active_facts_count"] = sum(facts_by_type.values())
+
+    # Active target job and latest application state
+    active_target_job: dict[str, Any] | None = None
+    latest_application: dict[str, Any] | None = None
+
+    if user_id:
+        app_row = session.execute(
+            sa.text(
+                "SELECT a.id, a.status, a.apply_mode, a.submitted_at, a.updated_at, "
+                "j.id, j.title, c.name "
+                "FROM applications a "
+                "JOIN jobs j ON a.job_id = j.id "
+                "LEFT JOIN companies c ON j.company_id = c.id "
+                "WHERE a.user_id = :user_id "
+                "ORDER BY a.updated_at DESC LIMIT 1"
+            ),
+            {"user_id": user_id},
+        ).fetchone()
+
+        if app_row:
+            latest_application = {
+                "application_id": str(app_row[0]),
+                "status": str(app_row[1]),
+                "apply_mode": str(app_row[2]),
+                "submitted_at": str(app_row[3]) if app_row[3] else None,
+                "updated_at": str(app_row[4]) if app_row[4] else None,
+                "job_title": sanitize_text(app_row[6]),
+                "company": sanitize_text(app_row[7]) if app_row[7] else "Não informada",
+            }
+            active_target_job = {
+                "job_id": str(app_row[5]),
+                "title": sanitize_text(app_row[6]),
+                "company": sanitize_text(app_row[7]) if app_row[7] else "Não informada",
+            }
+
     return {
         "participant_masked": masked_target,
+        "user_resolved": user_id is not None,
+        "profile_summary": profile_summary,
+        "active_target_job": active_target_job,
+        "latest_application": latest_application,
         "total_inbound": len(inbound_events),
         "total_outbound": len(outbound_events),
         "inbound_events": inbound_events,
@@ -406,6 +492,51 @@ def print_outbox_table(outbox: list[dict[str, Any]]) -> None:
             f"{item['status']:<10} | {item['retry_count']:<3} | {prov_id}"
         )
     _emit("=" * 85)
+
+
+def print_participant_summary(participant: dict[str, Any]) -> None:
+    """Prints a detailed participant timeline, profile facts, and application summary."""
+    _emit("=" * 70)
+    _emit(f" PARTICIPANT INSPECTION: {participant['participant_masked']}")
+    _emit("=" * 70)
+    _emit(f"User Resolved in Core : {'YES' if participant['user_resolved'] else 'NO'}")
+
+    prof = participant.get("profile_summary") or {}
+    _emit("-" * 70)
+    _emit("PROFILE FACTS SUMMARY:")
+    _emit(f"  Profile Version     : {prof.get('profile_version', 0)}")
+    _emit(f"  Headline            : {prof.get('headline') or '[NOT_SET]'}")
+    _emit(f"  Summary             : {prof.get('summary') or '[NOT_SET]'}")
+    _emit(f"  Active Facts Total  : {prof.get('active_facts_count', 0)}")
+    by_type = prof.get("facts_by_type") or {}
+    if by_type:
+        for f_type, f_count in by_type.items():
+            _emit(f"    - {f_type:<16} : {f_count}")
+    else:
+        _emit("    (Nenhum fato confirmado ativo)")
+
+    _emit("-" * 70)
+    _emit("ACTIVE TARGET JOB & APPLICATION STATE:")
+    job = participant.get("active_target_job")
+    app = participant.get("latest_application")
+    if job:
+        _emit(f"  Target Job Title    : {job.get('title')}")
+        _emit(f"  Company             : {job.get('company')}")
+    else:
+        _emit("  Target Job          : [NENHUMA VAGA ASSOCIADA]")
+
+    if app:
+        _emit(f"  Application Status  : {app.get('status')}")
+        _emit(f"  Apply Mode          : {app.get('apply_mode')}")
+        _emit(f"  Last Updated At     : {app.get('updated_at')}")
+    else:
+        _emit("  Application State   : [NENHUMA CANDIDATURA REGISTRADA]")
+
+    _emit("-" * 70)
+    _emit("EVENT TIMELINE:")
+    _emit(f"  Total Inbound Envelopes : {participant['total_inbound']}")
+    _emit(f"  Total Outbound Messages : {participant['total_outbound']}")
+    _emit("=" * 70)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -494,11 +625,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.json:
                 output_data["participant"] = participant
             else:
-                _emit("=" * 60)
-                _emit(f" PARTICIPANT TIMELINE: {participant['participant_masked']}")
-                _emit(f" Inbound Events: {participant['total_inbound']}")
-                _emit(f" Outbound Events: {participant['total_outbound']}")
-                _emit("=" * 60)
+                print_participant_summary(participant)
 
         if args.json:
             _emit(json.dumps(output_data, indent=2))
