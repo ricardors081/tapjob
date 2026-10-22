@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
+from sqlalchemy import Table
 from sqlalchemy.orm import Session
 
 from tapjob_api.identity.models import User, UserStatus
@@ -1740,6 +1741,178 @@ def test_j05_single_fact_rejection_and_confirmation_cascade(mock_session: MagicM
     assert "Versão 1" in reply_step_3
 
 
+def test_j05_real_database_fact_rejection_and_confirmation_persistence() -> None:
+    """J-05 Real Database Persistence Test: Truth Store activation & rejection in isolated DB.
+
+    Executes the canonical persistence pipeline without mocks:
+    1. Pre-confirmation state:
+       - User and ResumeImport in READY_FOR_REVIEW with 5 ResumeImportCandidate rows.
+       - Zero facts in ProfileFact, CareerProfile version is None or 0.
+    2. Individual rejection:
+       - CandidateReviewDraft persisted in DB with decision='reject' for candidate 2.
+       - Asserts zero facts created in ProfileFact, zero premature finalization.
+    3. Final confirmation:
+       - Executes canonical confirm_candidates_and_finalize
+         (from tapjob_api.messaging.document_intake) with CandidateReviewDecision
+         for all 5 candidates (candidate 2 REJECT, others ACCEPT).
+       - Internally executes resume_import_service.finalize_resume_import and
+         career_profile_service.bump_profile_version with NO MOCKS.
+    4. Post-confirmation state:
+       - CareerProfile.profile_version bumped to 1 (advanced strictly on final confirmation).
+       - Exactly 4 active ProfileFact records in database (all FactStatus.ACTIVE).
+       - Candidate 2 review_state in resume_import_candidates transitions to REJECTED.
+       - Candidate 2 was NEVER activated as ProfileFact (Skill 2 absent; Skills 1, 3, 4, 5 present).
+    """
+    from sqlalchemy import create_engine, event, select
+    from sqlalchemy.orm import sessionmaker
+
+    from tapjob_api.career_profile.models import (
+        CareerProfile,
+        CareerProfileRevision,
+        FactStatus,
+        ProfileFact,
+    )
+    from tapjob_api.identity.models import User, UserStatus
+    from tapjob_api.messaging.document_intake import confirm_candidates_and_finalize
+    from tapjob_api.resume_import.candidates import CandidateKind
+    from tapjob_api.resume_import.commands import (
+        CandidateReviewDecision,
+        ReviewDecisionKind,
+    )
+    from tapjob_api.resume_import.models import (
+        CandidateReviewDraft,
+        CandidateReviewState,
+        ImportStatus,
+        Resume,
+        ResumeImport,
+        ResumeImportCandidate,
+        ResumeVersion,
+    )
+
+    engine = create_engine("sqlite:///:memory:")
+
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragma(dbapi_con: Any, con_record: Any) -> None:
+        dbapi_con.create_function("now", 0, lambda: datetime.now(UTC).isoformat())
+
+    from tapjob_api.db.base import Base
+
+    tables = [
+        User.__table__,
+        CareerProfile.__table__,
+        CareerProfileRevision.__table__,
+        ProfileFact.__table__,
+        Resume.__table__,
+        ResumeVersion.__table__,
+        ResumeImport.__table__,
+        ResumeImportCandidate.__table__,
+        CandidateReviewDraft.__table__,
+    ]
+    Base.metadata.create_all(bind=engine, tables=cast(list[Table], tables))
+
+    session_factory = sessionmaker(bind=engine)
+    session = session_factory()
+
+    user = User(
+        id=uuid.uuid4(),
+        status=UserStatus.ACTIVE,
+        locale="pt-BR",
+        timezone="Etc/UTC",
+    )
+    session.add(user)
+    session.commit()
+
+    # Create import and 5 candidates
+    imp = ResumeImport(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        original_filename="curriculo.pdf",
+        media_type="application/pdf",
+        byte_size=1024,
+        checksum_sha256="b" * 64,
+        storage_key="storage/curriculo.pdf",
+        status=ImportStatus.READY_FOR_REVIEW,
+    )
+    session.add(imp)
+    candidates: list[ResumeImportCandidate] = []
+    for i in range(1, 6):
+        c = ResumeImportCandidate(
+            id=uuid.uuid4(),
+            resume_import_id=imp.id,
+            user_id=user.id,
+            candidate_kind=CandidateKind.SKILL.value,
+            value_json={"name": f"Skill {i}", "category": "technical"},
+            confidence=0.9,
+            review_state=CandidateReviewState.PENDING,
+        )
+        session.add(c)
+        candidates.append(c)
+    session.commit()
+
+    # Step 1 Assertions: Pre-confirmation state
+    profile_before = session.scalar(select(CareerProfile).where(CareerProfile.user_id == user.id))
+    facts_before = session.scalars(select(ProfileFact).where(ProfileFact.user_id == user.id)).all()
+    assert profile_before is None or profile_before.profile_version == 0
+    assert len(facts_before) == 0
+
+    # Step 2: Individual rejection of candidate 2
+    draft_c2 = CandidateReviewDraft(
+        user_id=user.id,
+        resume_import_id=imp.id,
+        candidate_id=candidates[1].id,
+        decision=ReviewDecisionKind.REJECT.value,
+    )
+    session.add(draft_c2)
+    session.commit()
+
+    # Step 2 Assertions: Draft persisted, facts remain untouched
+    persisted_drafts = session.scalars(
+        select(CandidateReviewDraft).where(CandidateReviewDraft.user_id == user.id)
+    ).all()
+    assert len(persisted_drafts) == 1
+    assert persisted_drafts[0].candidate_id == candidates[1].id
+    assert persisted_drafts[0].decision == ReviewDecisionKind.REJECT.value
+    facts_step2 = session.scalars(select(ProfileFact).where(ProfileFact.user_id == user.id)).all()
+    assert len(facts_step2) == 0
+
+    # Step 3: Final confirmation via real confirm_candidates_and_finalize
+    decisions = [
+        CandidateReviewDecision(candidate_id=candidates[1].id, decision=ReviewDecisionKind.REJECT)
+    ] + [
+        CandidateReviewDecision(candidate_id=c.id, decision=ReviewDecisionKind.ACCEPT)
+        for i, c in enumerate(candidates)
+        if i != 1
+    ]
+
+    result = confirm_candidates_and_finalize(
+        session,
+        user=user,
+        resume_import_id=imp.id,
+        decisions=decisions,
+        expected_profile_version=0,
+    )
+    session.commit()
+
+    # Step 4 Assertions: Post-confirmation state
+    profile_after = session.scalar(select(CareerProfile).where(CareerProfile.user_id == user.id))
+    assert profile_after is not None
+    assert profile_after.profile_version == 1
+    assert result.resume_version.profile_version == 1
+
+    facts_after = session.scalars(select(ProfileFact).where(ProfileFact.user_id == user.id)).all()
+    assert len(facts_after) == 4
+    for fact in facts_after:
+        assert fact.status == FactStatus.ACTIVE
+
+    session.refresh(candidates[1])
+    assert candidates[1].review_state == CandidateReviewState.REJECTED
+
+    # Invariant: Rejected fact NEVER activated into Truth Store
+    activated_skill_names = [f.value_json.get("name") for f in facts_after]
+    assert "Skill 2" not in activated_skill_names
+    assert set(activated_skill_names) == {"Skill 1", "Skill 3", "Skill 4", "Skill 5"}
+
+
 def test_j09_active_job_match_inquiry_grounded_in_target_job(mock_session: MagicMock) -> None:
     """J-09 Isolated Test: Natural Job Inquiries Scoped & Grounded in Target Job.
 
@@ -1855,20 +2028,22 @@ def test_j09_active_job_match_inquiry_grounded_in_target_job(mock_session: Magic
     assert "Envie o link ou texto da vaga" in reply_no_job
 
 
-def test_j22_inbound_message_replay_idempotency_prevents_duplicate_domain_effects(
+def test_j22_dispatch_orchestration_replay_idempotency_keys(
     mock_session: MagicMock,
 ) -> None:
-    """J-22 Isolated Integration Test: Replay & Idempotency Safety across Inbound Processing.
+    """J-22 Orchestration Layer Test: Idempotency Key Determinism & Dispatch Replay Safety.
 
-    Proves:
+    Validates at the orchestration layer:
     1. Processing the exact same inbound message twice through dispatch_inbound_message
-       results in:
-       - No duplicate Applications.
-       - No duplicate ApplicationKits.
-       - No duplicate Reminders.
-       - No duplicate OutboundMessageQueue entries.
-       - Domain state completely unchanged on second execution.
-       - Idempotency keys returned are identical between execution 1 and 2.
+       produces identical idempotency keys across replays.
+    2. Simulated domain callers maintain zero key drift across retransmissions.
+
+    NOTE: For end-to-end replay with real PostgreSQL, Redis, and Celery workers,
+    see primary integration tests in services/api/tests/messaging/test_ingress_e2e_canary.py:
+    - test_real_ingress_e2e_canary_vertical_slice (webhook retransmission, 0 duplicate user/outbox)
+    - test_first_contact_job_url_and_replays_vertical_slice (job URL intake replay)
+    - test_conversational_e2e_canary_vertical_slice (application replay, 0 duplicate kit/app)
+    - test_finalize_review_crash_between_domain_commit_and_effect_completion_postgres
     """
     from tapjob_api.messaging.applications import (
         Application,
@@ -2074,3 +2249,166 @@ def test_j22_inbound_message_replay_idempotency_prevents_duplicate_domain_effect
             "Outbound message was duplicated on reminder replay!"
         )
         assert rem_keys_run1 == rem_keys_run2, "Reminder idempotency keys differed!"
+
+
+def test_j22_real_database_inbound_effect_and_reminder_idempotency() -> None:
+    """J-22 Real Database Idempotency Test: InboundEffect and Reminder deduplication.
+
+    Proves in isolated database:
+    1. ProviderEventEnvelope DB uniqueness:
+       Duplicate (provider, provider_instance, external_event_id) is rejected by
+       DB constraint uq_provider_event_envelopes_dedup.
+    2. InboundEffect idempotency:
+       reserve_inbound_effect and complete_inbound_effect write real DB state.
+       Replaying completion on an already completed effect returns the existing row
+       without creating duplicate records.
+    3. Reminder idempotency:
+       create_reminder checks DB for existing idempotency_key.
+       Calling create_reminder twice with same idempotency_key returns the existing
+       Reminder row, producing zero duplicates.
+
+    NOTE: Full end-to-end replay with PostgreSQL, Redis, and Celery worker is verified
+    in CI (backend-integration) via:
+    - test_real_ingress_e2e_canary_vertical_slice (webhook retransmission, 0 duplicate user/outbox)
+    - test_first_contact_job_url_and_replays_vertical_slice (job URL intake replay)
+    - test_conversational_e2e_canary_vertical_slice (application replay, 0 duplicate kit/app)
+    - test_finalize_review_crash_between_domain_commit_and_effect_completion_postgres
+    """
+    from sqlalchemy import create_engine, event, select
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.orm import sessionmaker
+
+    from tapjob_api.identity.models import User, UserStatus
+    from tapjob_api.messaging.inbound import (
+        InboundEffect,
+        InboundEffectState,
+        ProviderEventEnvelope,
+        ProviderEventProcessingStatus,
+        ProviderEventType,
+    )
+    from tapjob_api.messaging.inbound_service import (
+        complete_inbound_effect,
+        reserve_inbound_effect,
+    )
+    from tapjob_api.messaging.reminders import Reminder
+    from tapjob_api.messaging.reminders_service import create_reminder
+
+    engine = create_engine("sqlite:///:memory:")
+
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragma(dbapi_con: Any, con_record: Any) -> None:
+        dbapi_con.create_function("now", 0, lambda: datetime.now(UTC).isoformat())
+
+    from tapjob_api.db.base import Base
+
+    tables = [
+        User.__table__,
+        ProviderEventEnvelope.__table__,
+        InboundEffect.__table__,
+        Reminder.__table__,
+    ]
+    Base.metadata.create_all(bind=engine, tables=cast(list[Table], tables))
+
+    session_factory = sessionmaker(bind=engine)
+    session = session_factory()
+
+    user = User(
+        id=uuid.uuid4(),
+        status=UserStatus.ACTIVE,
+        locale="pt-BR",
+        timezone="Etc/UTC",
+    )
+    session.add(user)
+    session.commit()
+
+    # 1. Envelope Unique Constraint Deduplication
+    env1 = ProviderEventEnvelope(
+        id=1,
+        provider="whatsapp",
+        provider_instance="tapjob_test",
+        external_event_id="evt_replay_j22_unique",
+        event_type=ProviderEventType.MESSAGE_RECEIVED,
+        normalized_event={"text": "teste"},
+        status=ProviderEventProcessingStatus.PROCESSING,
+    )
+    session.add(env1)
+    session.commit()
+
+    env2_duplicate = ProviderEventEnvelope(
+        id=2,
+        provider="whatsapp",
+        provider_instance="tapjob_test",
+        external_event_id="evt_replay_j22_unique",
+        event_type=ProviderEventType.MESSAGE_RECEIVED,
+        normalized_event={"text": "teste"},
+        status=ProviderEventProcessingStatus.PROCESSING,
+    )
+    session.add(env2_duplicate)
+    with pytest.raises(IntegrityError):
+        session.commit()
+    session.rollback()
+
+    # 2. InboundEffect Reservation & Completion Replay Safety
+    eff1 = reserve_inbound_effect(
+        session,
+        envelope_id=1,
+        inbound_message_id="msg_j22_eff",
+        effect_kind="schedule_followup",
+        resource_id=str(user.id),
+    )
+    session.commit()
+    assert eff1.operation_state == InboundEffectState.PENDING.value
+
+    eff_completed = complete_inbound_effect(
+        session,
+        envelope_id=1,
+        effect_kind="schedule_followup",
+        resource_id=str(user.id),
+        effect_payload={"status": "scheduled"},
+    )
+    session.commit()
+    assert eff_completed.operation_state == InboundEffectState.COMPLETED.value
+
+    # Replay: completing already COMPLETED effect returns existing row safely
+    eff_replay = complete_inbound_effect(
+        session,
+        envelope_id=1,
+        effect_kind="schedule_followup",
+        resource_id=str(user.id),
+        effect_payload={"status": "scheduled"},
+    )
+    session.commit()
+    assert eff_replay.id == eff_completed.id
+    all_effects = session.scalars(select(InboundEffect).where(InboundEffect.envelope_id == 1)).all()
+    assert len(all_effects) == 1, "Duplicate InboundEffect created on replay!"
+
+    # 3. Reminder Real Database Idempotency
+    fake_link_id = uuid.uuid4()
+    rem_key = f"rem_{user.id}_j22_replay_test"
+    rem_time = datetime.now(UTC)
+    r1 = create_reminder(
+        session,
+        user=user,
+        remind_at=rem_time,
+        intent="application_follow_up",
+        payload={"note": "Follow up with recruiter"},
+        channel_identity_link_id=fake_link_id,
+        idempotency_key=rem_key,
+    )
+    session.commit()
+
+    r2 = create_reminder(
+        session,
+        user=user,
+        remind_at=rem_time,
+        intent="application_follow_up",
+        payload={"note": "Follow up with recruiter"},
+        channel_identity_link_id=fake_link_id,
+        idempotency_key=rem_key,
+    )
+    session.commit()
+    assert r1.id == r2.id
+
+    all_reminders = session.scalars(select(Reminder).where(Reminder.user_id == user.id)).all()
+    assert len(all_reminders) == 1, "Duplicate Reminder created on replay!"
+    assert all_reminders[0].idempotency_key == rem_key

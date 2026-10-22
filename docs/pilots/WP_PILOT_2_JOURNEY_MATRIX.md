@@ -51,8 +51,11 @@ Cada fluxo é especificado no formato padrão:
 - **Contexto Necessário:** `ResumeImport` ativo no estado `READY_FOR_REVIEW` com lista de itens numerados.
 - **Ação:** Registro de rascunho de decisão (`CandidateReviewDraft`) marcando o item como rejeitado ou com valor editado (`EDIT_ACCEPT`).
 - **Resposta Esperada:** Confirmação da alteração específica realizada (ex: "Fato 2 rejeitado com sucesso") e relatório dos fatos ainda pendentes de decisão.
-- **Evidência:** Registros em `candidate_review_drafts`, status atualizado, nenhuma perda de consistência no Truth Store. Testes automatizados: `services/api/tests/messaging/test_pilot_flow.py::test_j05_single_fact_rejection_and_confirmation_cascade` e `services/api/tests/messaging/test_candidate_review_drafts.py`.
-- **Status:** PASS (Cobertura completa isolada de rejeição e cascata de confirmação)
+- **Evidência:**
+  1. Conversacional e rascunhos: `services/api/tests/messaging/test_pilot_flow.py::test_j05_single_fact_rejection_and_confirmation_cascade` e `services/api/tests/messaging/test_candidate_review_drafts.py`.
+  2. Persistência real em banco de dados isolado (sem mocks do finalizador): `services/api/tests/messaging/test_pilot_flow.py::test_j05_real_database_fact_rejection_and_confirmation_persistence`. Comprova que a confirmação via `confirm_candidates_and_finalize` -> `resume_import_service.finalize_resume_import` e `career_profile_service.bump_profile_version` produz exatamente quatro fatos ativos em `profile_facts`, avança a versão do perfil para 1 apenas na confirmação final, e mantém o fato 2 com `review_state == 'rejected'` sem nunca ativá-lo no Truth Store.
+  3. Recuperação de crash e idempotência em CI com PostgreSQL: `services/api/tests/messaging/test_ingress_e2e_canary.py::test_finalize_review_crash_between_domain_commit_and_effect_completion_postgres`.
+- **Status:** PASS (Comprovação ponta a ponta com persistência real em banco isolado e integração CI)
 
 ### J-06: Envio de Link de Vaga
 - **Input Humano:** "Olha essa vaga aqui: https://boards.greenhouse.io/empresa/jobs/123456", "o que acha desse link https://vagas.com/exemplo?"
@@ -88,7 +91,7 @@ Cada fluxo é especificado no formato padrão:
 - **Ação:** Análise contextual dos requisitos e descrição da vaga contra o perfil da pessoa candidata, respondendo pontualmente à dúvida levantada.
 - **Resposta Esperada:** Resposta direta e fundamentada estritamente nas informações da vaga e fatos reais do candidato, sem alucinação de dados.
 - **Evidência:** Mensagem outbox explicativa contextualizada. Testes automatizados: `services/api/tests/messaging/test_pilot_flow.py::test_j09_active_job_match_inquiry_grounded_in_target_job` e `test_pilot_natural_language.py`.
-- **Status:** PARCIAL (Análise e explicabilidade de compatibilidade da vaga ativa via `MATCH_EXPLANATION` totalmente comprovada; Q&A livre descritivo sobre o texto da vaga como 'Essa empresa é remota?' retido sob portão arquitetural por demandar pipeline dedicado de LLM/Q&A).
+- **Status:** PARCIAL / GATED (Análise e explicabilidade de compatibilidade da vaga ativa via `MATCH_EXPLANATION` com `tool_explain_match` / `tool_match_job` comprovada estruturalmente; Q&A livre descritivo sobre o texto da vaga como 'Essa empresa é remota?' retido sob portão de produto por demandar pipeline dedicado de LLM/Q&A e decisão formal de produto / ADR).
 
 ### J-10: Pedido Natural Para Candidatura
 - **Input Humano:** "Quero me candidatar", "curti essa vaga, como faço?", "me ajuda a aplicar", "quero tentar essa oportunidade", "faz minha candidatura", "vamos tentar essa", "bora aplicar".
@@ -204,5 +207,13 @@ Cada fluxo é especificado no formato padrão:
 - **Contexto Necessário:** `inbound_domain_effects` gravado ou chave de idempotência de outbox já gerada.
 - **Ação:** Detecção de efeito pré-existente (`get_inbound_effect`); reutilização do resultado persistido sem duplicar `ResumeImport`, `Application` ou disparos outbox.
 - **Resposta Esperada:** A mesma resposta esperada do fluxo original, sem duplicação de mensagens no WhatsApp do usuário.
-- **Evidência:** `inbound_domain_effects` marcado como COMPLETED, chave de outbox `uq_outbound_idempotency_key` respeitada. Processamento duplo da mesma mensagem inbound via `dispatch_inbound_message` comprovando zero duplicação de `Application`, `ApplicationKit`, `Reminder` ou mensagens na `outbound_message_queue`. Testes automatizados: `services/api/tests/messaging/test_pilot_flow.py::test_j22_inbound_message_replay_idempotency_prevents_duplicate_domain_effects`, `test_inbound_claim_and_fencing.py` e `test_applications_service_unit.py`.
-- **Status:** PASS (Cobertura completa isolada de replay e idempotência de efeitos de domínio)
+- **Evidência:**
+  1. Suíte Primária de Integração em CI (`backend-integration` com PostgreSQL e Redis reais provisionados):
+     - `test_ingress_e2e_canary.py::test_real_ingress_e2e_canary_vertical_slice`: retransmissão de webhook com mesmo ID comprova zero duplicação de `User`, zero duplicação de `ChannelIdentityLink`, e zero duplicação de mensagens na `outbound_message_queue`.
+     - `test_ingress_e2e_canary.py::test_conversational_e2e_canary_vertical_slice`: replay de webhook de candidatura comprova zero duplicação de `ApplicationKit` e zero duplicação de `Application` no PostgreSQL.
+     - `test_ingress_e2e_canary.py::test_first_contact_job_url_and_replays_vertical_slice`: replay de intake de vaga comprova zero duplicação de `Job`, zero duplicação de `MatchResult` e zero duplicação de outbox no PostgreSQL.
+     - `test_ingress_e2e_canary.py::test_finalize_review_crash_between_domain_commit_and_effect_completion_postgres`: recuperação de crash e replay idempotente com `InboundEffect` e confirmação canônica.
+  2. Suíte de Banco Isolado e Orquestração:
+     - `test_pilot_flow.py::test_j22_real_database_inbound_effect_and_reminder_idempotency`: desduplicação por constraint de envelope (`uq_provider_event_envelopes_dedup`), idempotência de `InboundEffect` e idempotência de `Reminder` com persistência real em banco isolado.
+     - `test_pilot_flow.py::test_j22_dispatch_orchestration_replay_idempotency_keys`: determinismo de chaves de idempotência na camada de orquestração.
+- **Status:** PARCIAL (Ponta a ponta garantido no ambiente de CI com PostgreSQL/Redis provisionados; ambiente de teste local isolado valida contratos de chave, desduplicação de envelope, InboundEffect e Reminder).
