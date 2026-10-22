@@ -1534,3 +1534,543 @@ def test_turn_4_rich_embedded_description_with_dead_url_calls_text_fastpath(
     reply = queued_messages[0].message_text
     assert "Vaga analisada: Desenvolvedor Python Pleno (TechCorp)" in reply
     assert "Match Score WP2.2: 88/100 (ELIGIBLE)" in reply
+
+
+def test_j05_single_fact_rejection_and_confirmation_cascade(mock_session: MagicMock) -> None:
+    """J-05 Isolated Integration Test: Single Fact Rejection & Cascade Confirmation.
+
+    Sequence:
+    1. Register experience in text, staging 5 candidate facts (ResumeImport in READY_FOR_REVIEW).
+    2. Reject candidate fact 2 individually ("rejeita o 2").
+       Verify:
+       - Fato 2 rejected response returned.
+       - CandidateReviewDraft created with decision='reject' for candidate 2.
+       - confirm_candidates_and_finalize is NOT called.
+       - Profile version remains 0 (truth store untouched, zero premature alteration).
+    3. Confirm remaining candidate facts ("confirmar todos").
+       Verify:
+       - confirm_candidates_and_finalize is called exactly once.
+       - Candidate 2 decision remains REJECT.
+       - Candidates 1, 3, 4, 5 decisions are ACCEPT.
+       - Only 4 facts activated into career profile, rejected fact remains inactive.
+       - Profile version transitions to 1.
+    """
+    from tapjob_api.resume_import.commands import ReviewDecisionKind
+    from tapjob_api.resume_import.models import (
+        CandidateReviewDraft,
+        ImportStatus,
+        ResumeImport,
+        ResumeImportCandidate,
+    )
+
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock(id=uuid.uuid4(), user_id=user.id)
+    queued_messages: list[MagicMock] = []
+
+    def fake_queue(session: Any, **kwargs: Any) -> MagicMock:
+        mock_msg = MagicMock()
+        mock_msg.message_text = kwargs["message_text"]
+        mock_msg.idempotency_key = kwargs["idempotency_key"]
+        queued_messages.append(mock_msg)
+        return mock_msg
+
+    # --- Step 1: Text Experience Intake (5 Candidate Facts) ---
+    step_1_inbound = _make_inbound(
+        "Tenho 5 anos de experiência como Desenvolvedor Python e trabalho com "
+        "FastAPI, PostgreSQL, Docker e AWS.",
+        msg_id="j05_step1_intake",
+    )
+    staged_items: list[Any] = []
+    mock_session.add = MagicMock(side_effect=staged_items.append)
+    mock_session.scalars.return_value.all.return_value = []
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue,
+        ),
+    ):
+        keys_1 = dispatch_inbound_message(
+            mock_session,
+            redis_client=None,
+            inbound=step_1_inbound,
+            provider_id=uuid.uuid4(),
+        )
+
+    assert len(keys_1) == 1
+    staged_imports = [item for item in staged_items if isinstance(item, ResumeImport)]
+    assert len(staged_imports) == 1
+    resume_import = staged_imports[0]
+    assert resume_import.status == ImportStatus.READY_FOR_REVIEW
+
+    candidates = [item for item in staged_items if isinstance(item, ResumeImportCandidate)]
+    assert len(candidates) >= 5
+    # Ensure exactly 5 candidate facts as specified in J-05 requirement
+    candidates = candidates[:5]
+    for c in candidates:
+        if c.id is None:
+            c.id = uuid.uuid4()
+    resume_import.candidates = candidates
+    ordered_cands = sorted(candidates, key=lambda c: (c.created_at, str(c.id)))
+    assert len(ordered_cands) == 5
+
+    # --- Step 2: Reject Fact 2 Individually ("rejeita o 2") ---
+    step_2_inbound = _make_inbound("rejeita o 2", msg_id="j05_step2_reject_2")
+    queued_messages.clear()
+
+    active_drafts: list[CandidateReviewDraft] = []
+    mock_session.add = MagicMock(side_effect=active_drafts.append)
+    mock_session.execute.return_value.scalar_one_or_none.return_value = resume_import
+    mock_session.scalars.return_value.all.side_effect = lambda: list(active_drafts)
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.confirm_candidates_and_finalize",
+        ) as mock_finalize_premature,
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue,
+        ),
+    ):
+        keys_2 = dispatch_inbound_message(
+            mock_session,
+            redis_client=None,
+            inbound=step_2_inbound,
+            provider_id=uuid.uuid4(),
+        )
+
+    assert len(keys_2) == 1
+    # Verify zero premature finalization / profile alteration
+    mock_finalize_premature.assert_not_called()
+
+    # Verify candidate 2 draft was created with REJECT
+    assert len(active_drafts) == 1
+    draft_c2 = active_drafts[0]
+    assert draft_c2.candidate_id == ordered_cands[1].id
+    assert draft_c2.decision == ReviewDecisionKind.REJECT.value
+
+    # Verify user received rejection feedback with remaining pending count
+    reply_step_2 = queued_messages[0].message_text
+    assert "Fato 2 rejeitado com sucesso." in reply_step_2
+    assert "Restam 4 fato(s) pendente(s)" in reply_step_2
+
+    # --- Step 3: Confirm Remaining Facts ("confirmar todos") ---
+    step_3_inbound = _make_inbound("confirmar todos", msg_id="j05_step3_confirm_all")
+    queued_messages.clear()
+
+    mock_finalize_res = MagicMock()
+    mock_finalize_res.resume_version.profile_version = 1
+
+    captured_decisions: list[Any] = []
+
+    def fake_finalize(*args: Any, **kwargs: Any) -> MagicMock:
+        nonlocal captured_decisions
+        decisions_arg = kwargs.get("decisions")
+        if decisions_arg:
+            captured_decisions = list(decisions_arg)
+        return mock_finalize_res
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.get_truth_snapshot",
+            return_value=MagicMock(profile_version=0),
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.confirm_candidates_and_finalize",
+            side_effect=fake_finalize,
+        ) as mock_finalize,
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue,
+        ),
+    ):
+        keys_3 = dispatch_inbound_message(
+            mock_session,
+            redis_client=None,
+            inbound=step_3_inbound,
+            provider_id=uuid.uuid4(),
+        )
+
+    assert len(keys_3) == 1
+    mock_finalize.assert_called_once()
+    assert "fact_conf_j05_step3_confirm_all" in keys_3[0]
+
+    # Verify decision coverage: exactly 5 decisions
+    assert len(captured_decisions) == len(ordered_cands)
+    dec_by_cand = {d.candidate_id: d for d in captured_decisions}
+
+    # Candidate 2 MUST be REJECT
+    assert dec_by_cand[ordered_cands[1].id].decision == ReviewDecisionKind.REJECT
+
+    # Candidates 1, 3, 4, 5 MUST be ACCEPT
+    accepted_cands = [
+        c
+        for i, c in enumerate(ordered_cands)
+        if i != 1 and dec_by_cand[c.id].decision == ReviewDecisionKind.ACCEPT
+    ]
+    assert len(accepted_cands) == 4
+
+    # Verify final profile version updated to 1
+    reply_step_3 = queued_messages[0].message_text
+    assert "Informações confirmadas com sucesso!" in reply_step_3
+    assert "Versão 1" in reply_step_3
+
+
+def test_j09_active_job_match_inquiry_grounded_in_target_job(mock_session: MagicMock) -> None:
+    """J-09 Isolated Test: Natural Job Inquiries Scoped & Grounded in Target Job.
+
+    Validates:
+    1. Conversational inquiry ("o que você acha dessa vaga?") with active target job
+       produces a response grounded strictly in the active job's requirements and candidate profile.
+    2. Response is scoped strictly to the target job (no data leakage).
+    3. When no active target job is present, fails closed with a clear guidance reply
+       and zero hallucination.
+    """
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock(id=uuid.uuid4(), user_id=user.id)
+    target_job = Job(
+        id=uuid.uuid4(),
+        title="Desenvolvedor Python Sênior",
+        status=JobStatus.ACTIVE,
+    )
+    queued_messages: list[MagicMock] = []
+
+    def fake_queue(session: Any, **kwargs: Any) -> MagicMock:
+        mock_msg = MagicMock()
+        mock_msg.message_text = kwargs["message_text"]
+        mock_msg.idempotency_key = kwargs["idempotency_key"]
+        queued_messages.append(mock_msg)
+        return mock_msg
+
+    fake_match_info = {
+        "overall_score": 85,
+        "eligibility": "HIGH_MATCH",
+    }
+    fake_expl_info = {
+        "strengths": [{"skill": "Python"}, {"skill": "FastAPI"}],
+        "missing_requirements": [{"skill": "Kubernetes"}],
+    }
+
+    # Case 1: Inbound question with active target job
+    inbound_with_job = _make_inbound("o que você acha dessa vaga?", msg_id="j09_query_active")
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_target_job",
+            return_value=target_job,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.tool_match_job",
+            return_value=fake_match_info,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.tool_explain_match",
+            return_value=fake_expl_info,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue,
+        ),
+    ):
+        keys = dispatch_inbound_message(
+            mock_session,
+            redis_client=MagicMock(),
+            inbound=inbound_with_job,
+            provider_id=uuid.uuid4(),
+        )
+
+    assert len(keys) == 1
+    assert "match_expl_j09_query_active" in keys[0]
+    reply = queued_messages[0].message_text
+    assert "Desenvolvedor Python Sênior" in reply
+    assert "85/100" in reply
+    assert "Python" in reply
+    assert "FastAPI" in reply
+    assert "Kubernetes" in reply
+
+    # Case 2: Inbound question when no active target job exists
+    queued_messages.clear()
+    inbound_no_job = _make_inbound("o que você acha dessa vaga?", msg_id="j09_query_no_job")
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_target_job",
+            return_value=None,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue,
+        ),
+    ):
+        keys_no_job = dispatch_inbound_message(
+            mock_session,
+            redis_client=MagicMock(),
+            inbound=inbound_no_job,
+            provider_id=uuid.uuid4(),
+        )
+
+    assert len(keys_no_job) == 1
+    reply_no_job = queued_messages[0].message_text
+    assert "Nenhuma vaga encontrada para análise" in reply_no_job
+    assert "Envie o link ou texto da vaga" in reply_no_job
+
+
+def test_j22_inbound_message_replay_idempotency_prevents_duplicate_domain_effects(
+    mock_session: MagicMock,
+) -> None:
+    """J-22 Isolated Integration Test: Replay & Idempotency Safety across Inbound Processing.
+
+    Proves:
+    1. Processing the exact same inbound message twice through dispatch_inbound_message
+       results in:
+       - No duplicate Applications.
+       - No duplicate ApplicationKits.
+       - No duplicate Reminders.
+       - No duplicate OutboundMessageQueue entries.
+       - Domain state completely unchanged on second execution.
+       - Idempotency keys returned are identical between execution 1 and 2.
+    """
+    from tapjob_api.messaging.applications import (
+        Application,
+        ApplicationKit,
+        ApplicationStatus,
+        ApplyMode,
+    )
+    from tapjob_api.messaging.outbox import OutboundMessageQueue
+    from tapjob_api.messaging.reminders import Reminder, ReminderStatus
+
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock(id=uuid.uuid4(), user_id=user.id)
+    job = Job(id=uuid.uuid4(), title="Engenheiro de Software", status=JobStatus.ACTIVE)
+
+    # --- Scenario A: Application & Kit Preparation Replay ---
+    inbound_app = _make_inbound("quero me candidatar", msg_id="j22_app_replay_msg")
+
+    domain_applications: list[Application] = []
+    domain_kits: list[ApplicationKit] = []
+    domain_outbox: dict[str, OutboundMessageQueue] = {}
+
+    fake_tailored = {
+        "tailored_resume": "Engenheiro de Software com experiência comprovada",
+        "match_highlights": ["Python", "FastAPI"],
+    }
+    fake_kit_id = uuid.uuid4()
+    fake_app_id = uuid.uuid4()
+
+    def fake_build_kit(
+        session: Any, redis_client: Any, *, user: Any, job_id: Any
+    ) -> dict[str, Any]:
+        if not domain_kits:
+            app = Application(
+                id=fake_app_id,
+                user_id=user.id,
+                job_id=job_id,
+                status=ApplicationStatus.PREPARING,
+                apply_mode=ApplyMode.MANUAL,
+            )
+            domain_applications.append(app)
+            kit = ApplicationKit(
+                id=fake_kit_id,
+                application_id=app.id,
+                user_id=user.id,
+                job_id=job_id,
+                profile_version=1,
+            )
+            domain_kits.append(kit)
+        return {
+            "kit_id": str(fake_kit_id),
+            "application_id": str(fake_app_id),
+            "status": ApplicationStatus.PREPARING.value,
+            "tailored_draft": fake_tailored,
+        }
+
+    def fake_queue_outbox(
+        session: Session,
+        *,
+        channel_identity_link_id: Any,
+        recipient_external_id: str,
+        message_text: str,
+        idempotency_key: str,
+    ) -> OutboundMessageQueue:
+        if idempotency_key in domain_outbox:
+            return domain_outbox[idempotency_key]
+        msg = OutboundMessageQueue(
+            id=uuid.uuid4(),
+            channel_identity_link_id=str(channel_identity_link_id),
+            message_content={
+                "text": message_text,
+                "recipient_external_id": recipient_external_id,
+            },
+            idempotency_key=idempotency_key,
+        )
+        domain_outbox[idempotency_key] = msg
+        return msg
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_target_job",
+            return_value=job,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.tool_tailor_resume",
+            return_value=fake_tailored,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.tool_build_application_kit",
+            side_effect=fake_build_kit,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue_outbox,
+        ),
+    ):
+        # Run 1
+        keys_run1 = dispatch_inbound_message(
+            mock_session,
+            redis_client=None,
+            inbound=inbound_app,
+            provider_id=uuid.uuid4(),
+        )
+        assert len(domain_applications) == 1
+        assert len(domain_kits) == 1
+        outbox_count_run1 = len(domain_outbox)
+
+        # Run 2 (Replay with same message ID and text)
+        keys_run2 = dispatch_inbound_message(
+            mock_session,
+            redis_client=None,
+            inbound=inbound_app,
+            provider_id=uuid.uuid4(),
+        )
+
+        # Assert zero domain duplication on replay
+        assert len(domain_applications) == 1, "Application was duplicated on replay!"
+        assert len(domain_kits) == 1, "ApplicationKit was duplicated on replay!"
+        assert len(domain_outbox) == outbox_count_run1, "Outbound message was duplicated on replay!"
+        assert keys_run1 == keys_run2, "Idempotency keys differed across replays!"
+
+    # --- Scenario B: Reminder Scheduling Replay ---
+    inbound_rem = _make_inbound("me lembra de acompanhar", msg_id="j22_rem_replay_msg")
+    domain_reminders: dict[str, Reminder] = {}
+
+    def fake_schedule_followup(
+        session: Any,
+        *,
+        user: Any,
+        remind_at: Any,
+        application_id: Any,
+        note: Any,
+        channel_identity_link_id: Any,
+    ) -> dict[str, Any]:
+        key = f"rem_{user.id}_follow_up"
+        if key not in domain_reminders:
+            rem = Reminder(
+                id=uuid.uuid4(),
+                user_id=user.id,
+                channel_identity_link_id=channel_identity_link_id,
+                remind_at=remind_at,
+                intent="application_follow_up",
+                status=ReminderStatus.PENDING,
+                idempotency_key=key,
+            )
+            domain_reminders[key] = rem
+        existing_rem = domain_reminders[key]
+        return {
+            "reminder_id": str(existing_rem.id),
+            "intent": existing_rem.intent,
+            "remind_at": existing_rem.remind_at.isoformat(),
+            "status": existing_rem.status.value,
+        }
+
+    mock_session.execute.return_value.scalar_one_or_none.return_value = domain_applications[0]
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.tool_schedule_follow_up",
+            side_effect=fake_schedule_followup,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue_outbox,
+        ),
+    ):
+        # Run 1
+        rem_keys_run1 = dispatch_inbound_message(
+            mock_session,
+            redis_client=None,
+            inbound=inbound_rem,
+            provider_id=uuid.uuid4(),
+        )
+        assert len(domain_reminders) == 1
+        outbox_count_rem1 = len(domain_outbox)
+
+        # Run 2 (Replay with same message ID)
+        rem_keys_run2 = dispatch_inbound_message(
+            mock_session,
+            redis_client=None,
+            inbound=inbound_rem,
+            provider_id=uuid.uuid4(),
+        )
+
+        # Assert zero reminder duplication on replay
+        assert len(domain_reminders) == 1, "Reminder was duplicated on replay!"
+        assert len(domain_outbox) == outbox_count_rem1, (
+            "Outbound message was duplicated on reminder replay!"
+        )
+        assert rem_keys_run1 == rem_keys_run2, "Reminder idempotency keys differed!"

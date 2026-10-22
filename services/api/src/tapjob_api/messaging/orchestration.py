@@ -1597,8 +1597,6 @@ def dispatch_inbound_message(
                         )
                         session.add(draft)
                         drafts_by_cand_id[cf.id] = draft
-                    elif draft.decision == ReviewDecisionKind.REJECT.value:
-                        draft.decision = ReviewDecisionKind.ACCEPT.value
                 session.flush()
                 should_finalize = True
 

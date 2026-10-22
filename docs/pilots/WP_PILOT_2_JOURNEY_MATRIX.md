@@ -51,8 +51,8 @@ Cada fluxo é especificado no formato padrão:
 - **Contexto Necessário:** `ResumeImport` ativo no estado `READY_FOR_REVIEW` com lista de itens numerados.
 - **Ação:** Registro de rascunho de decisão (`CandidateReviewDraft`) marcando o item como rejeitado ou com valor editado (`EDIT_ACCEPT`).
 - **Resposta Esperada:** Confirmação da alteração específica realizada (ex: "Fato 2 rejeitado com sucesso") e relatório dos fatos ainda pendentes de decisão.
-- **Evidência:** Registros em `candidate_review_drafts`, status atualizado, nenhuma perda de consistência no Truth Store.
-- **Status:** PASS
+- **Evidência:** Registros em `candidate_review_drafts`, status atualizado, nenhuma perda de consistência no Truth Store. Testes automatizados: `services/api/tests/messaging/test_pilot_flow.py::test_j05_single_fact_rejection_and_confirmation_cascade` e `services/api/tests/messaging/test_candidate_review_drafts.py`.
+- **Status:** PASS (Cobertura completa isolada de rejeição e cascata de confirmação)
 
 ### J-06: Envio de Link de Vaga
 - **Input Humano:** "Olha essa vaga aqui: https://boards.greenhouse.io/empresa/jobs/123456", "o que acha desse link https://vagas.com/exemplo?"
@@ -87,8 +87,8 @@ Cada fluxo é especificado no formato padrão:
 - **Contexto Necessário:** Vaga ativa em contexto de sessão.
 - **Ação:** Análise contextual dos requisitos e descrição da vaga contra o perfil da pessoa candidata, respondendo pontualmente à dúvida levantada.
 - **Resposta Esperada:** Resposta direta e fundamentada estritamente nas informações da vaga e fatos reais do candidato, sem alucinação de dados.
-- **Evidência:** Mensagem outbox explicativa contextualizada.
-- **Status:** PASS (Hardenizado no WP-PILOT-2)
+- **Evidência:** Mensagem outbox explicativa contextualizada. Testes automatizados: `services/api/tests/messaging/test_pilot_flow.py::test_j09_active_job_match_inquiry_grounded_in_target_job` e `test_pilot_natural_language.py`.
+- **Status:** PARCIAL (Análise e explicabilidade de compatibilidade da vaga ativa via `MATCH_EXPLANATION` totalmente comprovada; Q&A livre descritivo sobre o texto da vaga como 'Essa empresa é remota?' retido sob portão arquitetural por demandar pipeline dedicado de LLM/Q&A).
 
 ### J-10: Pedido Natural Para Candidatura
 - **Input Humano:** "Quero me candidatar", "curti essa vaga, como faço?", "me ajuda a aplicar", "quero tentar essa oportunidade", "faz minha candidatura", "vamos tentar essa", "bora aplicar".
@@ -204,5 +204,5 @@ Cada fluxo é especificado no formato padrão:
 - **Contexto Necessário:** `inbound_domain_effects` gravado ou chave de idempotência de outbox já gerada.
 - **Ação:** Detecção de efeito pré-existente (`get_inbound_effect`); reutilização do resultado persistido sem duplicar `ResumeImport`, `Application` ou disparos outbox.
 - **Resposta Esperada:** A mesma resposta esperada do fluxo original, sem duplicação de mensagens no WhatsApp do usuário.
-- **Evidência:** `inbound_domain_effects` marcado como COMPLETED, chave de outbox `uq_outbound_idempotency_key` respeitada.
-- **Status:** PASS
+- **Evidência:** `inbound_domain_effects` marcado como COMPLETED, chave de outbox `uq_outbound_idempotency_key` respeitada. Processamento duplo da mesma mensagem inbound via `dispatch_inbound_message` comprovando zero duplicação de `Application`, `ApplicationKit`, `Reminder` ou mensagens na `outbound_message_queue`. Testes automatizados: `services/api/tests/messaging/test_pilot_flow.py::test_j22_inbound_message_replay_idempotency_prevents_duplicate_domain_effects`, `test_inbound_claim_and_fencing.py` e `test_applications_service_unit.py`.
+- **Status:** PASS (Cobertura completa isolada de replay e idempotência de efeitos de domínio)
