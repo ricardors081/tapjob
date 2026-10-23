@@ -20,7 +20,7 @@ import logging
 import re
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -926,8 +926,8 @@ def dispatch_inbound_message(
                 "suas principais experiências e competências.\n\n"
                 "🔒 Privacidade:\n"
                 "Usamos seus dados profissionais para criar seu perfil, analisar vagas "
-                "e apoiar suas candidaturas. Digite 'privacidade' para saber como seus dados "
-                "são tratados e conhecer seus direitos."
+                "e apoiar suas candidaturas. Você pode consultar sobre privacidade "
+                "a qualquer momento para saber como seus dados são tratados."
             )
             msg = queue_response_message(
                 session,
@@ -943,7 +943,8 @@ def dispatch_inbound_message(
         greeting_text = (
             f"Olá! Bem-vindo ao {config.product_name}. Sou seu assistente de carreira pessoal. "
             "Usamos seus dados profissionais para analisar vagas e apoiar suas candidaturas. "
-            "(Digite 'privacidade' a qualquer momento para conhecer seus direitos)."
+            "(Você pode consultar sobre privacidade a qualquer momento para conhecer seus "
+            "direitos)."
         )
         msg = queue_response_message(
             session,
@@ -1315,7 +1316,8 @@ def dispatch_inbound_message(
     if intent == ConversationalIntent.CLARIFICATION_NEEDED:
         clarification_msg = interpretation.clarification_question or (
             "Não compreendi com clareza. Você gostaria de analisar uma vaga ou "
-            "atualizar seu perfil? Envie 'ajuda' para ver as opções disponíveis."
+            "atualizar seu perfil? Se precisar, você também pode solicitar ajuda "
+            "para ver tudo o que posso fazer."
         )
         msg = queue_response_message(
             session,
@@ -1365,16 +1367,18 @@ def dispatch_inbound_message(
         if asks_what_data and asks_deletion:
             response_text = (
                 "🔐 *Seus dados no TapJob*\n\n"
-                "Armazenamos apenas as informações que você compartilha para apoiar sua carreira:\n"
-                "- *Perfil profissional:* seu título, resumo e áreas de interesse;\n"
+                "Entre as informações utilizadas pelo TapJob no apoio à sua carreira estão:\n"
+                "- *Perfil profissional:* título, resumo e áreas de interesse profissional;\n"
                 "- *Experiências e competências:* habilidades e histórico confirmados por você;\n"
-                "- *Candidaturas e vagas:* oportunidades analisadas e status das candidaturas.\n\n"
-                "🗑️ *Como solicitar exclusão*\n\n"
+                "- *Vagas e candidaturas:* oportunidades analisadas e acompanhamento registrado;\n"
+                "- *Interações do canal:* histórico de conversas no WhatsApp para viabilizar "
+                "o atendimento.\n\n"
+                "🗑️ *Como funciona a solicitação de exclusão*\n\n"
                 "Respeitamos integralmente sua privacidade e os termos da LGPD.\n\n"
                 "Durante a fase piloto controlada, para sua segurança, a exclusão definitiva "
-                "do seu cadastro e histórico é processada mediante solicitação formal ao "
-                "operador do piloto. Basta solicitar por aqui e daremos andamento imediato ao "
-                "procedimento autorizado. 😊"
+                "da sua conta e dados não é executada automaticamente por mensagens de chat. "
+                "A solicitação pode ser formalizada junto ao operador do piloto, que conduzirá "
+                "o procedimento humano autorizado aplicável. 😊"
             )
         elif asks_deletion:
             response_text = (
@@ -1868,7 +1872,8 @@ def dispatch_inbound_message(
                     response_text = (
                         "Ainda restam fatos pendentes de decisão explícita no seu currículo.\n"
                         f"Fatos pendentes: {pending_str}.\n"
-                        "Envie 'aceitar fato <N>', 'rejeitar fato <N>', ou 'confirmar todos'."
+                        "Você pode aceitar ou rejeitar itens específicos, ou confirmar "
+                        "todos para avançar."
                     )
         else:
             response_text = (
@@ -2230,8 +2235,24 @@ def dispatch_inbound_message(
         q in lower_text for q in ("me lembra", "lembrete", "follow-up", "acompanhar")
     ):
         target_time, time_desc = parse_natural_reminder_time(text)
-        remind_at = target_time or (datetime.now(UTC) + timedelta(days=3))
-        formatted_desc = time_desc or "em 3 dias"
+        if target_time is None:
+            response_text = (
+                "Com certeza! 😊 Para quando você gostaria de agendar esse lembrete?\n\n"
+                "Basta me informar o momento desejado, por exemplo daqui a alguns minutos, "
+                "horas, amanhã ou em alguns dias."
+            )
+            msg = queue_response_message(
+                session,
+                channel_identity_link_id=link_id,
+                recipient_external_id=external_id,
+                message_text=response_text,
+                idempotency_key=f"rem_clarify_{inbound.provider_message_id}",
+            )
+            queued_keys.append(msg.idempotency_key)
+            return queued_keys
+
+        remind_at = target_time
+        formatted_desc = time_desc or "no momento solicitado"
 
         latest_app = session.execute(
             select(Application)
@@ -2328,8 +2349,8 @@ def dispatch_inbound_message(
                 else:
                     status_desc = f"Candidatura em preparação (Status: {app_status_display})"
                     cta_text = (
-                        "Assim que submeter sua candidatura, pode me avisar dizendo "
-                        "'já me candidatei' para acompanharmos juntos! 😊"
+                        "Assim que submeter sua candidatura, pode me avisar por aqui "
+                        "para acompanharmos os próximos passos juntos! 😊"
                     )
 
                 kit_messages = format_tailored_application_kit_messages(
@@ -2569,14 +2590,16 @@ def dispatch_inbound_message(
         config = get_product_config()
         response_text = (
             f"Como posso te ajudar no *{config.product_name}*:\n\n"
-            "📄 *Currículo:* envie seu currículo em PDF ou compartilhe "
-            "suas experiências aqui no chat.\n"
-            "🔍 *Vagas & Match:* envie o link ou cole o texto de uma vaga "
-            "para avaliarmos a compatibilidade.\n"
-            "✨ *Candidatura:* peça para preparar sua candidatura para gerarmos seu kit adaptado.\n"
-            "📌 *Acompanhamento:* diga 'já me candidatei' após submeter para acompanhar o status.\n"
-            "⏰ *Lembretes:* peça 'me lembra de acompanhar' para agendar um lembrete.\n"
-            "🔒 *Privacidade:* envie 'privacidade' para consultar como cuidamos dos seus dados."
+            "📄 *Currículo e Perfil:* analiso seu currículo em PDF ou relato das suas "
+            "experiências profissionais para estruturar seu perfil;\n"
+            "🔍 *Análise de Vagas e Match:* avalio a compatibilidade do seu perfil com links "
+            "ou descrições de vagas que você compartilhar;\n"
+            "✨ *Candidatura e Kit:* preparo materiais adaptados e cartas para apoiar "
+            "sua candidatura;\n"
+            "📌 *Acompanhamento de Status:* registro o andamento e status das suas candidaturas;\n"
+            "⏰ *Lembretes de Carreira:* agendo lembretes para prazos, follow-ups e entrevistas;\n"
+            "🔒 *Privacidade e Dados:* esclareço como suas informações são tratadas com "
+            "segurança e respeito à LGPD."
         )
         msg = queue_response_message(
             session,
@@ -2604,10 +2627,10 @@ def dispatch_inbound_message(
                 f"Olá! Bom ter você de volta ao *{config.product_name}*. 😊\n\n"
                 f"Seu perfil profissional está ativo (Versão {v_num}, {facts_info}).\n\n"
                 "Como posso te ajudar hoje?\n"
-                "- Enviar o link de uma vaga para analisarmos compatibilidade;\n"
-                "- Consultar seu perfil ('o que você sabe sobre meu perfil?');\n"
-                "- Agendar lembretes profissionais;\n"
-                "- Ou pedir 'ajuda' para ver todas as opções."
+                "- Compartilhar uma nova vaga para analisarmos a compatibilidade;\n"
+                "- Consultar as informações registradas no seu perfil;\n"
+                "- Agendar lembretes para acompanhar suas oportunidades;\n"
+                "- Ou solicitar informações sobre tudo o que posso fazer."
             )
         else:
             response_text = (
@@ -2645,11 +2668,11 @@ def dispatch_inbound_message(
         response_text = (
             f"Seu perfil está ativo (Versão {v_num}, {f_cnt} competências confirmadas).\n\n"
             "Como posso te ajudar agora?\n"
-            "- Envie um link ou texto de vaga para analisar compatibilidade\n"
-            "- Peça para preparar sua candidatura para a última vaga analisada\n"
-            "- Diga 'já me candidatei' para atualizar o status\n"
-            "- Agende lembretes para acompanhar prazos\n"
-            "- Envie 'privacidade' para consultar seus dados armazenados"
+            "- Analisar compatibilidade com uma nova vaga (por link ou texto);\n"
+            "- Preparar sua candidatura e kit adaptado;\n"
+            "- Atualizar o status de uma candidatura enviada;\n"
+            "- Agendar lembretes e prazos de carreira;\n"
+            "- Consultar informações de privacidade e proteção de dados."
         )
 
     msg = queue_response_message(

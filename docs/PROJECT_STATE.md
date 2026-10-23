@@ -515,6 +515,8 @@ Executed on branch `feat/whatsapp-pilot-practical-validation` (PR #20) reconcile
   - `WP_PILOT_2_STATE = CORRECTIVE_ACTION_REQUIRED`
   - `HUMAN_ACCEPTANCE_STATE = CORRECTIVE_ACTION_REQUIRED`
   - `HUMAN_ACCEPTANCE_EXECUTED_BY_RICARDO = YES_CORRECTIVE_ACTION_REQUIRED`
+  - `PDF_CODE_FIX_IMPLEMENTED_AND_TESTED = YES`
+  - `PDF_LIVE_HUMAN_RETEST_PENDING = YES`
   - `REAL_USER_PILOT_AUTHORIZED = NO`
   - `MOBILE_STILL_PAUSED = YES`
   - `AF3_STILL_NOT_AUTHORIZED = YES`
@@ -523,7 +525,7 @@ Executed on branch `feat/whatsapp-pilot-practical-validation` (PR #20) reconcile
   - Addressed all 19 findings identified during Ricardo's human testing:
     - WhatsApp presentation formatted with native bold, lists (`- `), line spacing, and subtle emojis.
     - Magic command prompts removed; natural Portuguese responses supported ("sim", "pode", "claro", "confirma", etc.).
-    - PDF resume intake resilience ("silence is a bug"): unwrap Evolution nested documents (`documentMessage`, `documentWithCaptionMessage`, `viewOnceMessage`), use message ID `msg_id` for retrieval (resolving Baileys mediaKey mismatch), catch all retrieval/storage errors to ensure user always receives a friendly response and zero silent drops.
+    - PDF resume intake resilience ("silence is a bug"): code fix implemented and tested (`PDF_CODE_FIX_IMPLEMENTED_AND_TESTED = YES`, `PDF_LIVE_HUMAN_RETEST_PENDING = YES`). Unwraps Evolution nested documents (`documentMessage`, `documentWithCaptionMessage`, `viewOnceMessage`), uses message ID `msg_id` for retrieval (resolving Baileys mediaKey mismatch), and catches retrieval/storage errors to ensure user always receives a friendly response and zero silent drops. Final confirmation pending live retest by Ricardo.
     - NLU expansion: recognize "Trabalho com...", "Atuo com...", "Minha stack é..." as `TEXT_EXPERIENCE` candidate facts.
     - Profile Query: added explicit `PROFILE_QUERY` intent returning human-friendly profile overview without technical names (`headline`, `summary`, `target_roles`, `profile_facts`).
     - Profile state / greeting: greeting recognizes returning users with `profile_version >= 1` even with 0 active facts, preventing onboarding loops.

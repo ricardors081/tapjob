@@ -411,6 +411,183 @@ def test_reminder_without_application_succeeds_with_career_note() -> None:
     assert "prepare seu Application Kit" not in reply
 
 
+@pytest.mark.parametrize(
+    "ambiguous_phrase",
+    [
+        "me lembra de olhar essa vaga",
+        "me lembra depois",
+    ],
+)
+def test_reminder_ambiguous_time_asks_clarification_and_creates_zero_reminders(
+    ambiguous_phrase: str,
+) -> None:
+    """Finding 1: When reminder time is ambiguous, do NOT invent +3 days,
+    do NOT schedule reminder, ask naturally for clarification.
+    """
+    session = MagicMock(spec=Session)
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock(id=uuid.uuid4())
+    inbound = _make_inbound(ambiguous_phrase)
+
+    queued_messages: list[MagicMock] = []
+
+    def fake_queue(s: Any, **kwargs: Any) -> MagicMock:
+        mock_msg = MagicMock()
+        mock_msg.message_text = kwargs["message_text"]
+        mock_msg.idempotency_key = kwargs["idempotency_key"]
+        queued_messages.append(mock_msg)
+        return mock_msg
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.tool_schedule_follow_up",
+        ) as mock_tool_rem,
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue,
+        ),
+    ):
+        keys = dispatch_inbound_message(
+            session, redis_client=None, inbound=inbound, provider_id=uuid.uuid4()
+        )
+
+    # Invariant 1: Zero reminders created
+    mock_tool_rem.assert_not_called()
+    # Invariant 2: One clarification response returned
+    assert len(keys) == 1
+    reply = queued_messages[0].message_text
+    assert "Para quando você gostaria de agendar esse lembrete" in reply
+    assert "em 3 dias" not in reply
+
+
+def test_reminder_with_candidatar_and_1_minute_creates_reminder() -> None:
+    """Finding 1: 'me lembra de me candidatar nessa vaga daqui 1 minuto' creates
+    a reminder for approximately +1 min and is NEVER redirected to Application Kit.
+    """
+    session = MagicMock(spec=Session)
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock(id=uuid.uuid4())
+    inbound = _make_inbound("me lembra de me candidatar nessa vaga daqui 1 minuto")
+
+    queued_messages: list[MagicMock] = []
+
+    def fake_queue(s: Any, **kwargs: Any) -> MagicMock:
+        mock_msg = MagicMock()
+        mock_msg.message_text = kwargs["message_text"]
+        mock_msg.idempotency_key = kwargs["idempotency_key"]
+        queued_messages.append(mock_msg)
+        return mock_msg
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_target_job",
+            return_value=None,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.tool_schedule_follow_up",
+            return_value={"reminder_id": str(uuid.uuid4())},
+        ) as mock_tool_rem,
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue,
+        ),
+    ):
+        keys = dispatch_inbound_message(
+            session, redis_client=None, inbound=inbound, provider_id=uuid.uuid4()
+        )
+
+    assert len(keys) == 1
+    mock_tool_rem.assert_called_once()
+    remind_at = mock_tool_rem.call_args.kwargs["remind_at"]
+    diff = (remind_at - datetime.now(UTC)).total_seconds()
+    # Approximately +60 seconds
+    assert 40 <= diff <= 80
+
+    reply = queued_messages[0].message_text
+    assert "Lembrete agendado com sucesso" in reply
+    assert "1 minuto" in reply
+    assert "prepare seu Application Kit" not in reply
+
+
+def test_help_and_greeting_do_not_contain_rigid_command_prompts() -> None:
+    """Finding 3: Help menu, greeting, and fallback must NOT teach rigid magic commands
+    with quotes or imperative directives like 'diga ...', 'envie ...', 'peça ...'.
+    """
+    session = MagicMock(spec=Session)
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock(id=uuid.uuid4())
+
+    def get_response_for_phrase(phrase: str) -> str:
+        queued: list[str] = []
+
+        def fake_q(s: Any, **kwargs: Any) -> MagicMock:
+            m = MagicMock()
+            queued.append(kwargs["message_text"])
+            return m
+
+        inb = _make_inbound(phrase)
+        with (
+            patch(
+                "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+                return_value=user,
+            ),
+            patch(
+                "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+                return_value=link,
+            ),
+            patch(
+                "tapjob_api.messaging.orchestration.get_user_profile_status",
+                return_value={
+                    "has_profile": True,
+                    "profile_version": 1,
+                    "fact_count": 2,
+                    "has_facts": True,
+                    "headline": "Dev",
+                    "summary": "Sum",
+                    "target_roles": ["Dev"],
+                },
+            ),
+            patch(
+                "tapjob_api.messaging.orchestration.queue_response_message",
+                side_effect=fake_q,
+            ),
+        ):
+            dispatch_inbound_message(
+                session, redis_client=None, inbound=inb, provider_id=uuid.uuid4()
+            )
+        return queued[0] if queued else ""
+
+    help_text = get_response_for_phrase("ajuda")
+    greet_text = get_response_for_phrase("olá")
+    fallback_text = get_response_for_phrase("algo completamente inesperado")
+
+    for text_sample in (help_text, greet_text, fallback_text):
+        lower = text_sample.lower()
+        assert "diga '" not in lower
+        assert "envie '" not in lower
+        assert "peça '" not in lower
+        assert "digite '" not in lower
+        assert "'já me candidatei'" not in text_sample
+        assert "'privacidade'" not in text_sample
+        assert "'ajuda'" not in text_sample
+
+
 # ==============================================================================
 # 6. LinkedIn SEO Title Sanitization
 # ==============================================================================
@@ -635,11 +812,14 @@ def test_compound_privacy_and_deletion_query_answers_both_parts() -> None:
     assert len(keys) == 1
     reply = queued_messages[0].message_text
 
-    # Part 1: What data is stored
+    # Part 1: What data is used (grounded, not claiming exhaustive 'armazenamos apenas')
     assert "Seus dados no TapJob" in reply
-    assert "Armazenamos apenas as informações" in reply
-    # Part 2: How to delete
-    assert "Como solicitar exclusão" in reply
+    assert "Entre as informações utilizadas pelo TapJob" in reply
+    assert "Armazenamos apenas" not in reply
+    # Part 2: How deletion works (chat does not execute destructive deletion, no SLA promises)
+    assert "Como funciona a solicitação de exclusão" in reply
+    assert "daremos andamento imediato" not in reply
+    assert "não é executada automaticamente por mensagens de chat" in reply
 
 
 # ==============================================================================

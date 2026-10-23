@@ -2186,7 +2186,9 @@ def test_j22_dispatch_orchestration_replay_idempotency_keys(
         assert keys_run1 == keys_run2, "Idempotency keys differed across replays!"
 
     # --- Scenario B: Reminder Scheduling Replay ---
-    inbound_rem = _make_inbound("me lembra de acompanhar", msg_id="j22_rem_replay_msg")
+    inbound_rem = _make_inbound(
+        "me lembra de acompanhar daqui a 2 dias", msg_id="j22_rem_replay_msg"
+    )
     domain_reminders: dict[str, Reminder] = {}
 
     def fake_schedule_followup(
