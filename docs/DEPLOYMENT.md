@@ -15,7 +15,7 @@ For local development and headless Compose runs:
 - no Kubernetes.
 
 For the **WhatsApp Live Gate staging environment** (ADR-0016, D-058):
-- **Runtime control plane:** EasyPanel (v2.36.0+) running on the owner's Linux server, managing isolated services in project `julia`;
+- **Runtime control plane:** EasyPanel (v2.36.0+) running on the owner's Linux server, managing isolated services in project `minimenu`;
 - **Public ingress:** EasyPanel Traefik HTTPS ingress (with Let's Encrypt / automated TLS), routing to `tapjob-api` on internal container port `8000`. Staging domain: `https://tapjob-api-julia.gdxvyl.easypanel.host` (`GET /ready` returns HTTP 200 `{"status":"ok","service":"api","dependencies":{"postgresql":"ok","redis":"ok"}}`);
 - **Services:** dedicated `tapjob-postgres` (PostgreSQL 16, persistent volume, daily local backup `0 0 * * *`), `tapjob-redis` (Redis 7, persistent volume, password protected), `tapjob-api`, `tapjob-worker` (Celery worker, concurrency=2), `tapjob-beat` (Celery beat, persistent volume mounted at `/data/celerybeat`, `--schedule=/data/celerybeat/celerybeat-schedule`), and one-shot `tapjob-migrate` (completed through Alembic head revision 0013, stopped with zero ongoing footprint);
 - **Database Driver Contract:** backend runtime is synchronous SQLAlchemy and requires `DATABASE_URL` with `postgresql+psycopg://` scheme (psycopg 3). `postgresql+asyncpg://` is strictly prohibited for database connection strings;
@@ -162,7 +162,7 @@ held outside this repository. `EXPO_PUBLIC_*` values remain public by convention
 
 ## 8. EasyPanel
 
-Under ADR-0016 (D-058), EasyPanel is authorized as the **runtime/deployment control plane** on the owner's Linux server for staging (project `julia`).
+Under ADR-0016 (D-058), EasyPanel is authorized as the **runtime/deployment control plane** on the owner's Linux server for staging (project `minimenu`).
 
 May:
 - manage service lifecycles (start, restart, stop, health monitoring);
@@ -174,8 +174,8 @@ May:
 May **not**:
 - be the source of truth for application code (images MUST come from GHCR immutable digests);
 - build images from source on the server host;
-- mutate existing non-TapJob services in project `julia` or any other project;
-- bridge or attach project `julia` to project `koglim` networks;
+- mutate existing non-TapJob services in project `minimenu` or any other project;
+- bridge or attach project `minimenu` to project `koglim` networks;
 - hold undocumented configuration that silently drifts from what this repository documents.
 
 ## 9. Ingress & Reverse Proxy (Traefik / Cloudflare)

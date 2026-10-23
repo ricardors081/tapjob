@@ -39,7 +39,7 @@ from tapjob_api.messaging.outbox_service import (
     claim_and_dispatch_outbox_batch,
 )
 from tapjob_api.messaging.reminders_service import dispatch_due_reminders
-from tapjob_api.messaging.service import get_or_create_channel_provider
+from tapjob_api.messaging.service import get_or_create_channel_provider, queue_response_message
 from tapjob_api.ports.messaging_channel import (
     ChannelIdentity,
     InboundAttachment,
@@ -333,6 +333,23 @@ def process_inbound_envelope_task(envelope_id: int) -> None:
                     "backoff_seconds": backoff if is_retryable else None,
                     "next_attempt_at": next_attempt_at.isoformat() if next_attempt_at else None,
                 }
+                if not is_retryable and envelope.normalized_event:
+                    atts = envelope.normalized_event.get("attachments") or []
+                    if atts:
+                        sender_ext = envelope.normalized_event.get("sender_external_id")
+                        if sender_ext:
+                            queue_response_message(
+                                session,
+                                channel_identity_link_id=None,
+                                recipient_external_id=str(sender_ext),
+                                message_text=(
+                                    "📄 *Não conseguimos processar o documento enviado.*\n\n"
+                                    "Por favor, certifique-se de que o arquivo esteja em "
+                                    "formato PDF válido e tente enviá-lo novamente em instantes. 😊"
+                                ),
+                                idempotency_key=f"fail_env_{envelope.id}",
+                            )
+
                 fenced = mark_event_failed(
                     session,
                     envelope_id=envelope_id,

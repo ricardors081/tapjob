@@ -309,7 +309,8 @@ def test_parse_inbound_document_message(test_ctx: CallContext) -> None:
         assert att.filename == "curriculo_candidato.pdf"
         assert att.mime_type == "application/pdf"
         assert att.size_bytes == 10240
-        assert att.provider_media_id == "media_key_abc123"
+        # Prompt Req 3: provider_media_id must be the message ID, not the cryptographic mediaKey
+        assert att.provider_media_id == "msg_doc_123abc"
 
     asyncio.run(scenario())
 
