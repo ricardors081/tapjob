@@ -694,7 +694,7 @@ def test_reminder_intent_without_application_fails_closed() -> None:
         sender=ChannelIdentity(channel="whatsapp", external_id="5511999999999"),
         provider_message_id="msg_rem_1",
         received_at=datetime.now(UTC),
-        text="me lembra de acompanhar a candidatura",
+        text="me lembra de acompanhar a candidatura daqui a 3 dias",
     )
 
     outbox_mock = MagicMock()

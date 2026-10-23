@@ -620,7 +620,9 @@ def test_conversational_e2e_canary_vertical_slice(_identity_schema_ready: None) 
             assert current_app.submitted_at == submitted_at_t1  # Preserved submitted_at == T1
 
             # Step 7: Mensagem pedindo reminder -> Scheduled Reminder -> Outbox delivery
-            post_webhook_and_process(client, text="me lembra de acompanhar a candidatura")
+            post_webhook_and_process(
+                client, text="me lembra de acompanhar a candidatura daqui a 3 dias"
+            )
             session.expire_all()
             reminders: list[Reminder] = list(
                 session.execute(select(Reminder).where(Reminder.user_id == user.id)).scalars().all()
