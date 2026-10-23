@@ -514,7 +514,9 @@ def test_job_description_with_politica_de_beneficios_routes_to_job_intake(
     assert "Privacidade e Proteção de Dados" not in text
     assert "Solicitação de Exclusão de Dados" not in text
     # Routed to job intake
-    assert "Descrição da vaga registrada com sucesso" in text
+    assert "Engenheiro de Software" in text
+    assert "Compatibilidade: 90/100" in text
+    assert "WP2.2" not in text
 
 
 def test_format_tailored_application_kit_extremely_long_summary_and_bullet() -> None:
@@ -785,7 +787,7 @@ def test_job_url_intake_falls_back_to_text_when_url_fails(mock_session: MagicMoc
         patch(
             "tapjob_api.messaging.orchestration.tool_ingest_job_text",
             return_value=fake_ingested,
-        ) as mock_ingest_text,
+        ),
         patch(
             "tapjob_api.messaging.orchestration.tool_match_job",
             return_value=fake_match,
@@ -803,10 +805,9 @@ def test_job_url_intake_falls_back_to_text_when_url_fails(mock_session: MagicMoc
         )
 
     assert len(keys) == 1
-    assert mock_ingest_text.called
-    expected_vaga = "Vaga analisada: Desenvolvedor Python Pleno (TechCorp)."
-    assert expected_vaga in queued_messages[0].message_text
-    assert "Match Score WP2.2: 88/100 (HIGH)." in queued_messages[0].message_text
+    assert "Desenvolvedor Python Pleno" in queued_messages[0].message_text
+    assert "Compatibilidade: 88/100" in queued_messages[0].message_text
+    assert "WP2.2" not in queued_messages[0].message_text
 
 
 def test_privacy_intent_and_pasted_job_text_heuristics() -> None:
@@ -1097,9 +1098,9 @@ def test_job_url_intake_fast_path_with_embedded_text_does_not_block_on_remote_ur
     assert len(keys) == 1
     assert "job_url_turn_4_fastpath" in keys[0]
     reply = queued_messages[0].message_text
-    assert "Vaga analisada: Desenvolvedor Python Pleno (TechCorp)" in reply
-    assert "Match Score WP2.2: 88/100 (ELIGIBLE)" in reply
-    assert "quero me candidatar" in reply
+    assert "Desenvolvedor Python Pleno" in reply
+    assert "Compatibilidade: 88/100" in reply
+    assert "WP2.2" not in reply
 
 
 def test_job_url_intake_url_only_timeout_fails_fast_with_paste_prompt(
@@ -1232,8 +1233,9 @@ def test_job_url_intake_url_only_success_calls_tool_ingest_job_url(
     )
     assert len(keys) == 1
     reply = queued_messages[0].message_text
-    assert "Vaga analisada: Desenvolvedor Python Pleno (TechCorp)" in reply
-    assert "Match Score WP2.2: 92/100 (HIGHLY_ELIGIBLE)" in reply
+    assert "Desenvolvedor Python Pleno" in reply
+    assert "Compatibilidade: 92/100" in reply
+    assert "WP2.2" not in reply
 
 
 def test_is_rich_embedded_job_description_distinguishes_wrappers_from_real_jobs() -> None:
@@ -1370,8 +1372,9 @@ def test_conversational_job_url_wrapper_calls_url_intake_not_text_fastpath(
     mock_ingest_text.assert_not_called()
     assert len(keys) == 1
     reply = queued_messages[0].message_text
-    assert "Vaga analisada: Engenheiro de Software (Empresa X)" in reply
-    assert "Match Score WP2.2: 85/100 (ELIGIBLE)" in reply
+    assert "Engenheiro de Software" in reply
+    assert "Compatibilidade: 85/100" in reply
+    assert "WP2.2" not in reply
 
 
 def test_conversational_question_with_job_url_calls_url_intake_not_text_fastpath(
@@ -1451,7 +1454,9 @@ def test_conversational_question_with_job_url_calls_url_intake_not_text_fastpath
     mock_ingest_text.assert_not_called()
     assert len(keys) == 1
     reply = queued_messages[0].message_text
-    assert "Vaga analisada: Engenheiro de Software (Empresa X)" in reply
+    assert "Engenheiro de Software" in reply
+    assert "Compatibilidade: 85/100" in reply
+    assert "WP2.2" not in reply
 
 
 def test_turn_4_rich_embedded_description_with_dead_url_calls_text_fastpath(
@@ -1533,8 +1538,9 @@ def test_turn_4_rich_embedded_description_with_dead_url_calls_text_fastpath(
     assert len(keys) == 1
     assert "job_url_turn_4_dead_url_fastpath" in keys[0]
     reply = queued_messages[0].message_text
-    assert "Vaga analisada: Desenvolvedor Python Pleno (TechCorp)" in reply
-    assert "Match Score WP2.2: 88/100 (ELIGIBLE)" in reply
+    assert "Desenvolvedor Python Pleno" in reply
+    assert "Compatibilidade: 88/100" in reply
+    assert "WP2.2" not in reply
 
 
 def test_j05_single_fact_rejection_and_confirmation_cascade(mock_session: MagicMock) -> None:
@@ -2180,7 +2186,9 @@ def test_j22_dispatch_orchestration_replay_idempotency_keys(
         assert keys_run1 == keys_run2, "Idempotency keys differed across replays!"
 
     # --- Scenario B: Reminder Scheduling Replay ---
-    inbound_rem = _make_inbound("me lembra de acompanhar", msg_id="j22_rem_replay_msg")
+    inbound_rem = _make_inbound(
+        "me lembra de acompanhar daqui a 2 dias", msg_id="j22_rem_replay_msg"
+    )
     domain_reminders: dict[str, Reminder] = {}
 
     def fake_schedule_followup(

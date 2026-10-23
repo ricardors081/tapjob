@@ -20,7 +20,7 @@ import logging
 import re
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -32,7 +32,8 @@ from sqlalchemy.orm import Session
 from tapjob_api.career_profile.fact_values import SkillFactValue
 from tapjob_api.career_profile.service import get_truth_snapshot
 from tapjob_api.identity.models import User, UserStatus
-from tapjob_api.jobs.models import Job
+from tapjob_api.jobs.extraction import sanitize_job_title_and_company
+from tapjob_api.jobs.models import Company, Job
 from tapjob_api.messaging.applications import Application, ApplicationStatus
 from tapjob_api.messaging.career_agent_tools import (
     tool_build_application_kit,
@@ -70,6 +71,7 @@ from tapjob_api.messaging.natural_language import (
     is_candidate_text_experience,
     is_pasted_job_text_normalized,
     normalize_text,
+    parse_natural_reminder_time,
 )
 from tapjob_api.messaging.outbox import OutboundMessageQueue
 from tapjob_api.messaging.service import (
@@ -113,6 +115,13 @@ logger = logging.getLogger(__name__)
 # Test failure injection hooks for hard-crash recovery validation (Findings 1, 2)
 _crash_hook_after_resume_import_commit: Callable[[], None] | None = None
 _crash_hook_after_finalize_commit: Callable[[], None] | None = None
+
+HUMAN_PROFILE_FIELD_LABELS: dict[str, str] = {
+    "headline": "Título profissional",
+    "summary": "Resumo profissional",
+    "target_roles": "Cargos de interesse",
+    "profile_facts": "Experiências e competências",
+}
 
 
 def format_resume_failure_response(failure_code: str | ImportFailureCode | None) -> str:
@@ -917,8 +926,8 @@ def dispatch_inbound_message(
                 "suas principais experiências e competências.\n\n"
                 "🔒 Privacidade:\n"
                 "Usamos seus dados profissionais para criar seu perfil, analisar vagas "
-                "e apoiar suas candidaturas. Digite 'privacidade' para saber como seus dados "
-                "são tratados e conhecer seus direitos."
+                "e apoiar suas candidaturas. Você pode consultar sobre privacidade "
+                "a qualquer momento para saber como seus dados são tratados."
             )
             msg = queue_response_message(
                 session,
@@ -934,7 +943,8 @@ def dispatch_inbound_message(
         greeting_text = (
             f"Olá! Bem-vindo ao {config.product_name}. Sou seu assistente de carreira pessoal. "
             "Usamos seus dados profissionais para analisar vagas e apoiar suas candidaturas. "
-            "(Digite 'privacidade' a qualquer momento para conhecer seus direitos)."
+            "(Você pode consultar sobre privacidade a qualquer momento para conhecer seus "
+            "direitos)."
         )
         msg = queue_response_message(
             session,
@@ -986,13 +996,11 @@ def dispatch_inbound_message(
                             or "documento"
                         )
                         response_text = (
-                            f"Recebemos seu currículo ({filename}) com sucesso!\n"
-                            f"Identificamos {facts_count} competências e experiências "
-                            "preliminares.\n"
-                            "Para confirmar e salvar essas informações no seu perfil, envie:\n"
-                            "• 'confirmar todos': aceitar todas as sugestões\n"
-                            "• 'rejeitar fato <número>': descartar um item específico\n"
-                            "• 'editar fato <número>: <novo valor>': corrigir um item"
+                            f"📄 *Recebemos seu currículo ({filename}) com sucesso!*\n\n"
+                            f"Identificamos *{facts_count}* itens profissionais preliminares.\n\n"
+                            "Deseja confirmar e adicionar essas informações ao seu perfil? 😊\n\n"
+                            "_(Você também pode me pedir para ajustar ou descartar "
+                            "algum item específico.)_"
                         )
                     msg = queue_response_message(
                         session,
@@ -1072,8 +1080,9 @@ def dispatch_inbound_message(
                     },
                 )
                 response_text = (
-                    "Recebemos seu documento, mas o formato ou arquivo é inválido. "
-                    "Por favor, envie um currículo válido em formato PDF."
+                    "📄 *Não conseguimos baixar seu documento no momento.*\n\n"
+                    "Por favor, certifique-se de que o arquivo esteja em formato PDF válido "
+                    "e tente enviá-lo novamente. 😊"
                 )
                 msg = queue_response_message(
                     session,
@@ -1082,6 +1091,7 @@ def dispatch_inbound_message(
                     message_text=response_text,
                     idempotency_key=f"doc_{inbound.provider_message_id}",
                 )
+                session.commit()
                 queued_keys.append(msg.idempotency_key)
                 return queued_keys
             except (httpx.TimeoutException, httpx.ConnectError) as exc:
@@ -1092,7 +1102,25 @@ def dispatch_inbound_message(
                 raise
 
             if not media_bytes:
-                raise RuntimeError("Provider returned empty media bytes for document attachment")
+                logger.warning(
+                    "orchestration.retrieve_media_empty",
+                    extra={"media_id": doc_att.provider_media_id},
+                )
+                response_text = (
+                    "📄 *Não conseguimos ler o conteúdo do documento recebido.*\n\n"
+                    "Por favor, certifique-se de que o arquivo esteja em formato PDF válido "
+                    "e tente enviá-lo novamente. 😊"
+                )
+                msg = queue_response_message(
+                    session,
+                    channel_identity_link_id=link_id,
+                    recipient_external_id=external_id,
+                    message_text=response_text,
+                    idempotency_key=f"doc_{inbound.provider_message_id}",
+                )
+                session.commit()
+                queued_keys.append(msg.idempotency_key)
+                return queued_keys
 
             import_res: dict[str, Any] | None = None
             try:
@@ -1111,10 +1139,6 @@ def dispatch_inbound_message(
                 ObjectStorageError,
                 TransientProcessingError,
                 ImportLeaseActiveError,
-                httpx.TimeoutException,
-                httpx.ConnectError,
-                TimeoutError,
-                ConnectionError,
             ) as exc:
                 logger.warning(
                     "orchestration.ingest_resume_transient_error",
@@ -1181,16 +1205,11 @@ def dispatch_inbound_message(
                     )
                     session.commit()
             except Exception as exc:
-                if is_transient_inbound_error(exc):
-                    logger.warning(
-                        "orchestration.ingest_resume_transient_generic",
-                        extra={"error": str(exc), "doc_filename": doc_att.filename},
-                    )
-                    raise
                 logger.exception("orchestration.ingest_resume_failed", extra={"error": str(exc)})
                 response_text = (
-                    "Recebemos seu documento, mas não foi possível processá-lo no momento. "
-                    "Por favor, certifique-se de que o arquivo seja um PDF válido."
+                    "📄 *Recebemos seu documento, mas não foi possível processá-lo no momento.*\n\n"
+                    "Por favor, certifique-se de que o arquivo seja um PDF com texto legível "
+                    "e tente novamente. 😊"
                 )
 
             if import_res is not None:
@@ -1217,13 +1236,11 @@ def dispatch_inbound_message(
                         session.commit()
                     doc_filename = doc_att.filename or "documento"
                     response_text = (
-                        f"Recebemos seu currículo ({doc_filename}) com sucesso!\n"
-                        f"Identificamos {facts_count} competências e experiências "
-                        "preliminares.\n"
-                        "Para confirmar e salvar essas informações no seu perfil, envie:\n"
-                        "• 'confirmar todos': aceitar todas as sugestões\n"
-                        "• 'rejeitar fato <número>': descartar um item específico\n"
-                        "• 'editar fato <número>: <novo valor>': corrigir um item"
+                        f"📄 *Recebemos seu currículo ({doc_filename}) com sucesso!*\n\n"
+                        f"Identificamos *{facts_count}* itens profissionais preliminares.\n\n"
+                        "Deseja confirmar e adicionar essas informações ao seu perfil? 😊\n\n"
+                        "_(Você também pode me pedir para ajustar "
+                        "ou descartar algum item específico.)_"
                     )
                 elif import_status == ImportStatus.FAILED.value:
                     failure_code_str = import_res.get("failure_code")
@@ -1299,7 +1316,8 @@ def dispatch_inbound_message(
     if intent == ConversationalIntent.CLARIFICATION_NEEDED:
         clarification_msg = interpretation.clarification_question or (
             "Não compreendi com clareza. Você gostaria de analisar uma vaga ou "
-            "atualizar seu perfil? Envie 'ajuda' para ver as opções disponíveis."
+            "atualizar seu perfil? Se precisar, você também pode solicitar ajuda "
+            "para ver tudo o que posso fazer."
         )
         msg = queue_response_message(
             session,
@@ -1326,9 +1344,43 @@ def dispatch_inbound_message(
         )
     ):
         deletion_words = ("excluir", "apagar", "remover", "deletar", "exclusao", "exclusão")
-        if intent == ConversationalIntent.DELETION_REQUEST or any(
+        asks_deletion = intent == ConversationalIntent.DELETION_REQUEST or any(
             w in lower_text for w in deletion_words
-        ):
+        )
+        asks_what_data = any(
+            w in lower_text
+            for w in (
+                "quais dados",
+                "que dados",
+                "quais informacoes",
+                "quais informações",
+                "o que voce guarda",
+                "o que você guarda",
+                "o que guarda",
+                "o que sabe",
+                "o que tem",
+                "privacidade",
+                "lgpd",
+            )
+        )
+
+        if asks_what_data and asks_deletion:
+            response_text = (
+                "🔐 *Seus dados no TapJob*\n\n"
+                "Entre as informações utilizadas pelo TapJob no apoio à sua carreira estão:\n"
+                "- *Perfil profissional:* título, resumo e áreas de interesse profissional;\n"
+                "- *Experiências e competências:* habilidades e histórico confirmados por você;\n"
+                "- *Vagas e candidaturas:* oportunidades analisadas e acompanhamento registrado;\n"
+                "- *Interações do canal:* histórico de conversas no WhatsApp para viabilizar "
+                "o atendimento.\n\n"
+                "🗑️ *Como funciona a solicitação de exclusão*\n\n"
+                "Respeitamos integralmente sua privacidade e os termos da LGPD.\n\n"
+                "Durante a fase piloto controlada, para sua segurança, a exclusão definitiva "
+                "da sua conta e dados não é executada automaticamente por mensagens de chat. "
+                "A solicitação pode ser formalizada junto ao operador do piloto, que conduzirá "
+                "o procedimento humano autorizado aplicável. 😊"
+            )
+        elif asks_deletion:
             response_text = (
                 "Solicitação de Exclusão de Dados (LGPD):\n\n"
                 "Respeitamos integralmente seus direitos de privacidade e exclusão de dados.\n\n"
@@ -1338,23 +1390,23 @@ def dispatch_inbound_message(
                 "O cancelamento e a eliminação dos seus dados podem ser solicitados formalmente ao "
                 "operador do piloto ou pelo canal de suporte. Sua solicitação será registrada e "
                 "processada pelo procedimento canônico autorizado.\n\n"
-                "Nenhum dado é excluído automaticamente sem essa validação prévia."
+                "Nenhum dado é excluído automaticamente sem essa validação prévia. 😊"
             )
         else:
             response_text = (
                 "Privacidade e Proteção de Dados — TapJob:\n\n"
-                "• Dados Coletados: Coletamos e processamos informações profissionais "
+                "- *Dados Coletados:* coletamos e processamos informações profissionais "
                 "(experiências, competências, formação e histórico) fornecidas por você através "
                 "de currículos ou mensagens.\n"
-                "• Finalidade: Utilizamos esses dados exclusivamente para estruturar seu perfil "
-                "profissional, calcular compatibilidade (match) com vagas de interesse e gerar "
-                "kits adaptados de candidatura.\n"
-                "• Retenção: Seus dados permanecem armazenados com segurança enquanto sua conta "
+                "- *Finalidade:* utilizamos esses dados exclusivamente para estruturar seu perfil "
+                "profissional, calcular compatibilidade com vagas e preparar candidaturas "
+                "adaptadas.\n"
+                "- *Retenção:* seus dados permanecem armazenados com segurança enquanto sua conta "
                 "estiver ativa na plataforma ou até você solicitar sua remoção.\n"
-                "• Seus Direitos: Você pode consultar seus dados, solicitar correções ou pedir a "
-                "exclusão enviando 'excluir meus dados'.\n\n"
-                "Para continuar sua busca de carreira, envie seu currículo em PDF ou compartilhe "
-                "o link de uma vaga!"
+                "- *Seus Direitos:* você pode consultar seus dados, solicitar correções ou pedir "
+                "para excluir meus dados a qualquer momento.\n\n"
+                "Para continuar sua busca de carreira, você pode me enviar seu currículo em PDF "
+                "ou o link de uma vaga! 😊"
             )
 
         msg = queue_response_message(
@@ -1820,7 +1872,8 @@ def dispatch_inbound_message(
                     response_text = (
                         "Ainda restam fatos pendentes de decisão explícita no seu currículo.\n"
                         f"Fatos pendentes: {pending_str}.\n"
-                        "Envie 'aceitar fato <N>', 'rejeitar fato <N>', ou 'confirmar todos'."
+                        "Você pode aceitar ou rejeitar itens específicos, ou confirmar "
+                        "todos para avançar."
                     )
         else:
             response_text = (
@@ -1886,12 +1939,21 @@ def dispatch_inbound_message(
                 job_id = uuid.UUID(job_info["job_id"])
                 match_info = tool_match_job(session, redis_client, user=user, job_id=job_id)
                 overall = match_info["overall_score"]
-                eligibility = match_info["eligibility"]
+                s_title, s_comp, _ = sanitize_job_title_and_company(
+                    job_info["title"], job_info["company"]
+                )
+                p_status = get_user_profile_status(session, user_id=user.id)
+                profile_note = (
+                    "\n\n_Nota: Essa análise é preliminar porque faltam "
+                    "algumas informações no seu perfil._"
+                    if not p_status["has_facts"] or p_status["fact_count"] < 3
+                    else ""
+                )
                 response_text = (
-                    f"Vaga analisada: {job_info['title']} ({job_info['company']}).\n"
-                    f"Match Score WP2.2: {overall}/100 ({eligibility}).\n\n"
-                    "Deseja gerar o Application Kit completo para esta vaga? "
-                    "Envie: 'quero me candidatar'."
+                    f"🎯 *{s_title}*\n"
+                    f"{s_comp}\n\n"
+                    f"📊 *Compatibilidade: {overall}/100*{profile_note}\n\n"
+                    "Deseja que eu prepare sua candidatura para esta oportunidade? 😊"
                 )
             except Exception as fast_path_exc:
                 logger.warning(
@@ -1909,12 +1971,21 @@ def dispatch_inbound_message(
                 job_id = uuid.UUID(job_info["job_id"])
                 match_info = tool_match_job(session, redis_client, user=user, job_id=job_id)
                 overall = match_info["overall_score"]
-                eligibility = match_info["eligibility"]
+                s_title, s_comp, _ = sanitize_job_title_and_company(
+                    job_info["title"], job_info["company"]
+                )
+                p_status = get_user_profile_status(session, user_id=user.id)
+                profile_note = (
+                    "\n\n_Nota: Essa análise é preliminar porque faltam "
+                    "algumas informações no seu perfil._"
+                    if not p_status["has_facts"] or p_status["fact_count"] < 3
+                    else ""
+                )
                 response_text = (
-                    f"Vaga analisada: {job_info['title']} ({job_info['company']}).\n"
-                    f"Match Score WP2.2: {overall}/100 ({eligibility}).\n\n"
-                    "Deseja gerar o Application Kit completo para esta vaga? "
-                    "Envie: 'quero me candidatar'."
+                    f"🎯 *{s_title}*\n"
+                    f"{s_comp}\n\n"
+                    f"📊 *Compatibilidade: {overall}/100*{profile_note}\n\n"
+                    "Deseja que eu prepare sua candidatura para esta oportunidade? 😊"
                 )
             except SoftTimeLimitExceeded:
                 raise
@@ -1947,7 +2018,6 @@ def dispatch_inbound_message(
     if intent == ConversationalIntent.TEXT_EXPERIENCE:
         portfolio_url = interpretation.extracted_entities.get("portfolio_url")
         skills = extract_skills_from_text(text)
-        skills_str = ", ".join(skills) if skills else "Gerais"
         if portfolio_url:
             clean_headline = f"Portfólio / Perfil Online: {portfolio_url}"
         else:
@@ -2013,12 +2083,12 @@ def dispatch_inbound_message(
                 extra={"user_id": str(user.id), "error": str(stage_exc)},
             )
 
+        skills_lines = "\n".join(f"- {s}" for s in skills) if skills else "- Experiência geral"
         response_text = (
-            f"Recebemos suas experiências profissionais com sucesso!\n"
-            f"• Perfil / Resumo: {clean_headline}\n"
-            f"• Competências identificadas: {skills_str}\n\n"
-            "Deseja confirmar e adicionar essas informações ao seu perfil profissional?\n"
-            "Envie: 'pode confirmar' ou 'confirmar todos'."
+            "💼 *Recebemos suas experiências profissionais com sucesso!*\n\n"
+            f"*Resumo:* {clean_headline}\n\n"
+            f"*Competências identificadas:*\n{skills_lines}\n\n"
+            "Deseja confirmar e adicionar essas informações ao seu perfil? 😊"
         )
         msg = queue_response_message(
             session,
@@ -2060,12 +2130,17 @@ def dispatch_inbound_message(
         job_id = uuid.UUID(job_info["job_id"])
         match_info = tool_match_job(session, redis_client, user=user, job_id=job_id)
 
+        s_title, _, _ = sanitize_job_title_and_company(job_info["title"], "Empresa")
+        p_status = get_user_profile_status(session, user_id=user.id)
+        profile_note = (
+            "\n\n_Nota: Essa análise é preliminar porque faltam algumas informações no seu perfil._"
+            if not p_status["has_facts"] or p_status["fact_count"] < 3
+            else ""
+        )
         response_text = (
-            f"Descrição da vaga registrada com sucesso: {job_info['title']}.\n"
-            f"Match Score WP2.2: {match_info['overall_score']}/100 "
-            f"({match_info['eligibility']}).\n\n"
-            "Deseja preparar seu currículo e kit para esta oportunidade? "
-            "Envie: 'quero me candidatar'."
+            f"🎯 *{s_title}*\n\n"
+            f"📊 *Compatibilidade: {match_info['overall_score']}/100*{profile_note}\n\n"
+            "Deseja que eu prepare sua candidatura para esta oportunidade? 😊"
         )
         msg = queue_response_message(
             session,
@@ -2108,13 +2183,34 @@ def dispatch_inbound_message(
                 or "Nenhum gap crítico"
             )
 
+            comp_name = "Empresa"
+            if (
+                hasattr(latest_job, "company")
+                and latest_job.company
+                and hasattr(latest_job.company, "name")
+            ):
+                comp_name = latest_job.company.name
+            elif getattr(latest_job, "company_id", None):
+                c = session.get(Company, latest_job.company_id)
+                if c and c.name:
+                    comp_name = c.name
+
+            s_title, s_comp, _ = sanitize_job_title_and_company(latest_job.title, comp_name)
+            p_status = get_user_profile_status(session, user_id=user.id)
+            profile_note = (
+                "\n_Nota: Essa análise é preliminar porque faltam "
+                "algumas informações no seu perfil._\n"
+                if not p_status["has_facts"] or p_status["fact_count"] < 3
+                else ""
+            )
             response_text = (
-                f"Análise detalhada para {latest_job.title}:\n"
-                f"• Match Score WP2.2: {match_info['overall_score']}/100 "
-                f"({match_info['eligibility']})\n"
+                f"🎯 *{s_title}*\n"
+                f"{s_comp}\n\n"
+                f"📊 *Compatibilidade: {match_info['overall_score']}/100*\n"
                 f"• Pontos fortes: {strengths_str}\n"
-                f"• Requisitos pendentes: {gaps_str}\n\n"
-                "Para preparar seu Application Kit grounded, envie: 'quero me candidatar'."
+                f"• Requisitos pendentes: {gaps_str}\n"
+                f"{profile_note}\n"
+                "Deseja que eu prepare sua candidatura para esta oportunidade? 😊"
             )
         else:
             response_text = (
@@ -2132,10 +2228,90 @@ def dispatch_inbound_message(
         queued_keys.append(msg.idempotency_key)
         return queued_keys
 
-    # 7. Application Kit & Tailoring preparation (Findings 2, 3, J-10, J-11)
+    # 7. Reminder scheduling (Finding 4, J-14, Prompt Requirements 8, 9, 10)
+    # MUST be placed before APPLICATION_REQUEST so reminder requests mentioning "candidatar"
+    # are never hijacked by application preparation.
+    if intent == ConversationalIntent.REMINDER_FOLLOWUP or any(
+        q in lower_text for q in ("me lembra", "lembrete", "follow-up", "acompanhar")
+    ):
+        target_time, time_desc = parse_natural_reminder_time(text)
+        if target_time is None:
+            response_text = (
+                "Com certeza! 😊 Para quando você gostaria de agendar esse lembrete?\n\n"
+                "Basta me informar o momento desejado, por exemplo daqui a alguns minutos, "
+                "horas, amanhã ou em alguns dias."
+            )
+            msg = queue_response_message(
+                session,
+                channel_identity_link_id=link_id,
+                recipient_external_id=external_id,
+                message_text=response_text,
+                idempotency_key=f"rem_clarify_{inbound.provider_message_id}",
+            )
+            queued_keys.append(msg.idempotency_key)
+            return queued_keys
+
+        remind_at = target_time
+        formatted_desc = time_desc or "no momento solicitado"
+
+        latest_app = session.execute(
+            select(Application)
+            .where(Application.user_id == user.id)
+            .order_by(Application.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+
+        target_job = resolve_user_target_job(session, user=user)
+
+        if latest_app is not None:
+            app_id = latest_app.id
+            app_job = session.get(Job, latest_app.job_id) if latest_app.job_id else None
+            job_name = app_job.title if app_job else "sua candidatura"
+            note = f"Follow-up de candidatura ({job_name})"
+            ctx_msg = f"para acompanhar sua candidatura em *{job_name}*"
+        elif target_job is not None:
+            app_id = None
+            note = f"Lembrete para vaga: {target_job.title}"
+            ctx_msg = f"para a oportunidade *{target_job.title}*"
+        else:
+            app_id = None
+            note = "Lembrete profissional de carreira"
+            ctx_msg = "sobre seus próximos passos profissionais"
+
+        tool_schedule_follow_up(
+            session,
+            user=user,
+            remind_at=remind_at,
+            application_id=app_id,
+            note=note,
+            channel_identity_link_id=link_id,
+        )
+
+        response_text = (
+            "⏰ *Lembrete agendado com sucesso!*\n\n"
+            f"Vou te lembrar {formatted_desc} {ctx_msg}.\n\n"
+            "Avisaremos você por aqui no WhatsApp quando chegar o momento! 😊"
+        )
+
+        msg = queue_response_message(
+            session,
+            channel_identity_link_id=link_id,
+            recipient_external_id=external_id,
+            message_text=response_text,
+            idempotency_key=f"rem_sched_{inbound.provider_message_id}",
+        )
+        queued_keys.append(msg.idempotency_key)
+        return queued_keys
+
+    # 8. Application Kit & Tailoring preparation (Findings 2, 3, J-10, J-11, Requirements 2, 13)
     if intent == ConversationalIntent.APPLICATION_REQUEST or any(
         q in lower_text
-        for q in ("quero me candidatar", "candidatar", "gerar kit", "preparar candidatura")
+        for q in (
+            "quero me candidatar",
+            "me candidatar a essa vaga",
+            "gerar kit",
+            "preparar candidatura",
+        )
     ):
         target_job = resolve_user_target_job(session, user=user)
 
@@ -2152,14 +2328,14 @@ def dispatch_inbound_message(
                 if app_status_display == ApplicationStatus.APPLIED.value:
                     status_desc = "Candidatura já enviada (Status: applied)"
                     cta_text = (
-                        "Sua candidatura já está registrada como enviada. Se desejar, envie: "
-                        "'me lembra de acompanhar' para agendar um follow-up."
+                        "Sua candidatura já está registrada como enviada. Se desejar, "
+                        "peça um lembrete para agendarmos o follow-up! 😊"
                     )
                 elif app_status_display == ApplicationStatus.INTERVIEWING.value:
                     status_desc = "Candidatura em processo seletivo (Status: interviewing)"
                     cta_text = (
                         "Esta candidatura já avançou para a fase de entrevistas! "
-                        "Conte comigo para praticar respostas e se preparar."
+                        "Conte comigo para praticar respostas e se preparar. 😊"
                     )
                 elif app_status_display in (
                     ApplicationStatus.REJECTED.value,
@@ -2168,13 +2344,13 @@ def dispatch_inbound_message(
                     status_desc = f"Candidatura encerrada (Status: {app_status_display})"
                     cta_text = (
                         "Esta candidatura foi encerrada. "
-                        "Envie uma nova vaga para prepararmos um novo Application Kit!"
+                        "Envie uma nova vaga para prepararmos sua candidatura! 😊"
                     )
                 else:
                     status_desc = f"Candidatura em preparação (Status: {app_status_display})"
                     cta_text = (
-                        "Assim que submeter sua candidatura, nos avise enviando: "
-                        "'já me candidatei'."
+                        "Assim que submeter sua candidatura, pode me avisar por aqui "
+                        "para acompanharmos os próximos passos juntos! 😊"
                     )
 
                 kit_messages = format_tailored_application_kit_messages(
@@ -2200,13 +2376,24 @@ def dispatch_inbound_message(
                 if is_transient_inbound_error(exc):
                     raise
                 logger.exception("orchestration.kit_generation_failed", extra={"error": str(exc)})
-                response_text = (
-                    "Não foi possível gerar o Application Kit no momento. "
-                    "Verifique se o seu perfil profissional possui fatos confirmados."
-                )
+                p_status = get_user_profile_status(session, user_id=user.id)
+                if not p_status["has_facts"] or p_status["fact_count"] == 0:
+                    response_text = (
+                        "Para preparar sua candidatura e adaptar seu currículo com precisão, "
+                        "precisamos de informações profissionais confirmadas no seu perfil.\n\n"
+                        "Envie seu currículo em PDF ou compartilhe suas experiências aqui no chat "
+                        "para ativarmos seu perfil! 😊"
+                    )
+                else:
+                    response_text = (
+                        "Não foi possível preparar sua candidatura para esta vaga neste momento. "
+                        "Verifique se o seu perfil profissional possui informações "
+                        "suficientes confirmadas."
+                    )
         else:
             response_text = (
-                "Envie primeiro o link ou a descrição da vaga antes de gerar o Application Kit."
+                "Envie primeiro o link ou a descrição da vaga que deseja analisar "
+                "antes de preparar sua candidatura! 😊"
             )
 
         msg = queue_response_message(
@@ -2219,7 +2406,7 @@ def dispatch_inbound_message(
         queued_keys.append(msg.idempotency_key)
         return queued_keys
 
-    # 8. Application Status update (Finding 3, J-12)
+    # 9. Application Status update (Finding 3, J-12)
     if intent == ConversationalIntent.APPLICATION_STATUS_UPDATE or any(
         q in lower_text
         for q in ("já me candidatei", "me candidatei", "candidatura enviada", "marcar aplicada")
@@ -2239,14 +2426,14 @@ def dispatch_inbound_message(
                 new_status=ApplicationStatus.APPLIED,
             )
             response_text = (
-                "Parabéns! Atualizamos o status da sua candidatura para "
-                "'APPLIED' (Candidatura Enviada).\n\n"
-                "Deseja que eu lembre você de fazer um follow-up? Envie: 'me lembra de acompanhar'."
+                "Parabéns! Atualizamos o status da sua candidatura para enviada! 🎉\n\n"
+                "Se desejar agendar um lembrete para acompanhar o processo, "
+                "é só me pedir! 😊"
             )
         else:
             response_text = (
                 "Você ainda não possui nenhuma candidatura em andamento. "
-                "Envie uma vaga para prepararmos seu Application Kit!"
+                "Envie uma vaga para prepararmos sua candidatura!"
             )
 
         msg = queue_response_message(
@@ -2259,7 +2446,7 @@ def dispatch_inbound_message(
         queued_keys.append(msg.idempotency_key)
         return queued_keys
 
-    # 8.5 Application Status query (J-13)
+    # 9.5 Application Status query (J-13)
     if intent == ConversationalIntent.APPLICATION_STATUS_QUERY:
         app_rows = session.execute(
             select(Application, Job)
@@ -2269,17 +2456,27 @@ def dispatch_inbound_message(
             .limit(5)
         ).all()
         if app_rows:
-            lines = ["Suas candidaturas registradas:"]
+            lines = ["📋 *Suas candidaturas registradas:*", ""]
+            status_labels = {
+                "preparing": "Em preparação",
+                "applied": "Enviada",
+                "interviewing": "Em processo seletivo",
+                "offer": "Proposta recebida",
+                "rejected": "Encerrada",
+                "withdrawn": "Desistência",
+            }
             for app, job in app_rows:
-                job_title = job.title if job else "Vaga"
-                status_str = app.status.value if hasattr(app.status, "value") else str(app.status)
-                lines.append(f"• {job_title} — Status: {status_str}")
-            lines.append("\nPara marcar uma candidatura como enviada, envie: 'já me candidatei'.")
+                job_title = job.title if job else "Oportunidade"
+                raw_st = app.status.value if hasattr(app.status, "value") else str(app.status)
+                st_label = status_labels.get(raw_st, raw_st)
+                lines.append(f"- *{job_title}* — Status: {st_label}")
+            lines.append("")
+            lines.append("Para atualizar o status de alguma delas após envio, basta me avisar! 😊")
             response_text = "\n".join(lines)
         else:
             response_text = (
                 "Você ainda não possui nenhuma candidatura registrada. "
-                "Envie o link de uma vaga para prepararmos seu Application Kit!"
+                "Envie o link ou texto de uma vaga para prepararmos sua candidatura! 😊"
             )
 
         msg = queue_response_message(
@@ -2292,53 +2489,64 @@ def dispatch_inbound_message(
         queued_keys.append(msg.idempotency_key)
         return queued_keys
 
-    # 9. Reminder scheduling (Finding 4, J-14)
-    if intent == ConversationalIntent.REMINDER_FOLLOWUP or any(
-        q in lower_text for q in ("me lembra", "lembrete", "follow-up", "acompanhar")
-    ):
-        latest_app = session.execute(
-            select(Application)
-            .where(Application.user_id == user.id)
-            .order_by(Application.created_at.desc())
-            .limit(1)
-        ).scalar_one_or_none()
+    # 9.8 Profile Query (Finding 5, Prompt Requirement 5)
+    if intent == ConversationalIntent.PROFILE_QUERY:
+        snapshot = get_truth_snapshot(session, user=user)
+        status = get_user_profile_status(session, user_id=user.id)
 
-        if latest_app is None:
-            response_text = (
-                "Você ainda não possui nenhuma candidatura registrada para acompanhar. "
-                "Envie uma vaga e prepare seu Application Kit antes de agendar o follow-up!"
+        blocks = ["👤 *Seu Perfil Profissional*", ""]
+        if snapshot.headline:
+            blocks.append(f"*{HUMAN_PROFILE_FIELD_LABELS['headline']}:* {snapshot.headline}")
+            blocks.append("")
+        if snapshot.summary:
+            blocks.append(f"*{HUMAN_PROFILE_FIELD_LABELS['summary']}:* {snapshot.summary}")
+            blocks.append("")
+        if snapshot.target_roles:
+            roles_str = ", ".join(snapshot.target_roles)
+            blocks.append(f"*{HUMAN_PROFILE_FIELD_LABELS['target_roles']}:* {roles_str}")
+            blocks.append("")
+
+        if snapshot.facts:
+            blocks.append(f"*{HUMAN_PROFILE_FIELD_LABELS['profile_facts']}:*")
+            for f in snapshot.facts:
+                v = f.value_json if isinstance(f.value_json, dict) else {}
+                item_name = (
+                    v.get("name")
+                    or v.get("title")
+                    or (f"{v.get('title')} na {v.get('employer')}" if v.get("employer") else None)
+                    or f.fact_type.value
+                )
+                blocks.append(f"- {item_name}")
+            blocks.append("")
+        else:
+            blocks.append("_Ainda não há competências ou experiências confirmadas no seu perfil._")
+            blocks.append("")
+
+        if not status["has_facts"] or not snapshot.summary or not snapshot.target_roles:
+            missing_items = []
+            if not snapshot.headline:
+                missing_items.append(HUMAN_PROFILE_FIELD_LABELS["headline"])
+            if not snapshot.summary:
+                missing_items.append(HUMAN_PROFILE_FIELD_LABELS["summary"])
+            if not snapshot.target_roles:
+                missing_items.append(HUMAN_PROFILE_FIELD_LABELS["target_roles"])
+            if not snapshot.facts:
+                missing_items.append(HUMAN_PROFILE_FIELD_LABELS["profile_facts"])
+            blocks.append(
+                f"💡 *Para completar seu perfil, ainda faltam:* {', '.join(missing_items)}."
             )
-            msg = queue_response_message(
-                session,
-                channel_identity_link_id=link_id,
-                recipient_external_id=external_id,
-                message_text=response_text,
-                idempotency_key=f"rem_sched_{inbound.provider_message_id}",
+            blocks.append(
+                "Você pode enviar seu currículo em PDF ou escrever suas "
+                "experiências aqui no chat! 😊"
             )
-            queued_keys.append(msg.idempotency_key)
-            return queued_keys
 
-        remind_at = datetime.now(UTC) + timedelta(days=3)
-        rem_info = tool_schedule_follow_up(
-            session,
-            user=user,
-            remind_at=remind_at,
-            application_id=latest_app.id,
-            note="Follow-up de candidatura",
-            channel_identity_link_id=link_id,
-        )
-        response_text = (
-            f"Lembrete agendado com sucesso (ID: {rem_info['reminder_id'][:8]}...)!\n"
-            "Nós avisaremos você por aqui no WhatsApp quando for o momento "
-            "de acompanhar o processo."
-        )
-
+        response_text = "\n".join(blocks).strip()
         msg = queue_response_message(
             session,
             channel_identity_link_id=link_id,
             recipient_external_id=external_id,
             message_text=response_text,
-            idempotency_key=f"rem_sched_{inbound.provider_message_id}",
+            idempotency_key=f"prof_query_{inbound.provider_message_id}",
         )
         queued_keys.append(msg.idempotency_key)
         return queued_keys
@@ -2350,15 +2558,21 @@ def dispatch_inbound_message(
     ):
         recs = tool_recommend_jobs(session, redis_client, user=user, limit=3)
         if recs:
-            lines = ["Oportunidades recomendadas para o seu perfil:"]
+            lines = ["🎯 *Oportunidades recomendadas para o seu perfil:*", ""]
             for r in recs:
-                lines.append(f"• {r['title']} na {r['company']} — Match: {r['overall_score']}/100")
-            lines.append("\nEnvie o link de uma vaga para analisar ou gerar seu Application Kit.")
+                s_title, s_comp, _ = sanitize_job_title_and_company(
+                    r["title"], r.get("company", "Empresa")
+                )
+                lines.append(
+                    f"- *{s_title}* na {s_comp} — Compatibilidade: {r['overall_score']}/100"
+                )
+            lines.append("")
+            lines.append("Envie o link ou texto de uma vaga para analisarmos em detalhes! 😊")
             response_text = "\n".join(lines)
         else:
             response_text = (
                 "Não encontramos vagas ativas com match no momento. "
-                "Você pode nos enviar o link direto de uma oportunidade para analisarmos!"
+                "Você pode nos enviar o link direto de uma oportunidade para analisarmos! 😊"
             )
 
         msg = queue_response_message(
@@ -2375,13 +2589,17 @@ def dispatch_inbound_message(
     if intent == ConversationalIntent.HELP_MENU:
         config = get_product_config()
         response_text = (
-            f"Como posso te ajudar no {config.product_name}:\n\n"
-            "📄 Currículo: envie seu currículo em PDF ou escreva suas experiências aqui no chat.\n"
-            "🔍 Vagas & Match: envie o link ou cole o texto de uma vaga para analisarmos o match.\n"
-            "✨ Candidatura: diga 'quero me candidatar' para gerar seu Application Kit adaptado.\n"
-            "📌 Acompanhamento: diga 'já me candidatei' após submeter para atualizar o status.\n"
-            "⏰ Lembretes: diga 'me lembra de acompanhar' para agendar um lembrete de follow-up.\n"
-            "🔒 Privacidade: envie 'privacidade' para consultar como cuidamos dos seus dados."
+            f"Como posso te ajudar no *{config.product_name}*:\n\n"
+            "📄 *Currículo e Perfil:* analiso seu currículo em PDF ou relato das suas "
+            "experiências profissionais para estruturar seu perfil;\n"
+            "🔍 *Análise de Vagas e Match:* avalio a compatibilidade do seu perfil com links "
+            "ou descrições de vagas que você compartilhar;\n"
+            "✨ *Candidatura e Kit:* preparo materiais adaptados e cartas para apoiar "
+            "sua candidatura;\n"
+            "📌 *Acompanhamento de Status:* registro o andamento e status das suas candidaturas;\n"
+            "⏰ *Lembretes de Carreira:* agendo lembretes para prazos, follow-ups e entrevistas;\n"
+            "🔒 *Privacidade e Dados:* esclareço como suas informações são tratadas com "
+            "segurança e respeito à LGPD."
         )
         msg = queue_response_message(
             session,
@@ -2393,25 +2611,31 @@ def dispatch_inbound_message(
         queued_keys.append(msg.idempotency_key)
         return queued_keys
 
-    # 10.6 Greeting or Return (J-01, J-18)
+    # 10.6 Greeting or Return (J-01, J-18, Prompt Requirement 6)
     if intent == ConversationalIntent.GREETING_OR_RETURN:
         config = get_product_config()
         status = get_user_profile_status(session, user_id=user.id)
-        if status["has_facts"]:
+        if status["has_profile"] and status["profile_version"] >= 1:
             v_num = status["profile_version"]
             f_cnt = status["fact_count"]
+            if f_cnt > 0:
+                s_sfx = "s" if f_cnt > 1 else ""
+                facts_info = f"com {f_cnt} competência{s_sfx} confirmada{s_sfx}"
+            else:
+                facts_info = "em estruturação"
             response_text = (
-                f"Olá! Bom ter você de volta ao {config.product_name}. "
-                f"Seu perfil está ativo (Versão {v_num}, {f_cnt} competências confirmadas).\n\n"
-                "Como posso te ajudar agora?\n"
-                "• Envie o link de uma vaga para analisarmos o match;\n"
-                "• Envie 'vagas' para ver oportunidades recomendadas;\n"
-                "• Ou envie 'ajuda' para ver todas as opções."
+                f"Olá! Bom ter você de volta ao *{config.product_name}*. 😊\n\n"
+                f"Seu perfil profissional está ativo (Versão {v_num}, {facts_info}).\n\n"
+                "Como posso te ajudar hoje?\n"
+                "- Compartilhar uma nova vaga para analisarmos a compatibilidade;\n"
+                "- Consultar as informações registradas no seu perfil;\n"
+                "- Agendar lembretes para acompanhar suas oportunidades;\n"
+                "- Ou solicitar informações sobre tudo o que posso fazer."
             )
         else:
             response_text = (
-                f"Olá! Sou seu assistente de carreira no {config.product_name}.\n\n"
-                "Para começar a analisar oportunidades e preparar candidaturas, "
+                f"Olá! Sou seu assistente de carreira no *{config.product_name}*. 😊\n\n"
+                "Para começar a analisar oportunidades e preparar candidaturas personalizadas, "
                 "envie seu currículo em PDF ou compartilhe um resumo das suas "
                 "experiências profissionais aqui!"
             )
@@ -2425,27 +2649,30 @@ def dispatch_inbound_message(
         queued_keys.append(msg.idempotency_key)
         return queued_keys
 
-    # 11. Profile readiness & Default Fallback (J-20)
+    # 11. Profile readiness & Default Fallback (J-20, Prompt Requirement 7)
     status = get_user_profile_status(session, user_id=user.id)
     if not status["has_facts"]:
         missing = tool_get_profile_missing_information(session, user=user)
+        missing_labels = [
+            HUMAN_PROFILE_FIELD_LABELS.get(f, f) for f in missing.get("missing_fields", [])
+        ]
         response_text = (
-            "Seu perfil profissional ainda está incompleto. "
-            f"Campos pendentes: {', '.join(missing['missing_fields'])}.\n"
-            "Envie seu currículo em PDF para importarmos suas informações automaticamente."
+            "Seu perfil profissional ainda está em estruturação. "
+            f"Informações pendentes: {', '.join(missing_labels)}.\n\n"
+            "Envie seu currículo em PDF ou escreva suas experiências aqui "
+            "no chat para ativarmos seu perfil! 😊"
         )
     else:
         v_num = status["profile_version"]
         f_cnt = status["fact_count"]
         response_text = (
-            f"Seu perfil está ativo (Versão {v_num}, {f_cnt} competências confirmadas).\n"
-            "Comandos disponíveis:\n"
-            "- 'Vagas': ver oportunidades recomendadas\n"
-            "- Envie um link ou texto de vaga para analisar match\n"
-            "- 'Quero me candidatar': gerar Application Kit\n"
-            "- 'Já me candidatei': atualizar status da candidatura\n"
-            "- 'Me lembra de acompanhar': agendar lembrete\n"
-            "- 'Privacidade': consultar informações sobre seus dados e direitos"
+            f"Seu perfil está ativo (Versão {v_num}, {f_cnt} competências confirmadas).\n\n"
+            "Como posso te ajudar agora?\n"
+            "- Analisar compatibilidade com uma nova vaga (por link ou texto);\n"
+            "- Preparar sua candidatura e kit adaptado;\n"
+            "- Atualizar o status de uma candidatura enviada;\n"
+            "- Agendar lembretes e prazos de carreira;\n"
+            "- Consultar informações de privacidade e proteção de dados."
         )
 
     msg = queue_response_message(

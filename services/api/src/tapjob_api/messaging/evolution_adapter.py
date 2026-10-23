@@ -50,6 +50,27 @@ ALLOWED_DOCUMENT_MIMES = {
 }
 
 
+def _find_document_in_message(m: dict[str, Any]) -> dict[str, Any] | None:
+    """Recursively extracts a documentMessage from Evolution/Baileys nested structures."""
+    if not isinstance(m, dict):
+        return None
+    if "documentMessage" in m and isinstance(m["documentMessage"], dict):
+        return m["documentMessage"]
+    for wrapper in (
+        "documentWithCaptionMessage",
+        "ephemeralMessage",
+        "viewOnceMessage",
+        "viewOnceMessageV2",
+    ):
+        if wrapper in m and isinstance(m[wrapper], dict):
+            inner = m[wrapper].get("message")
+            if isinstance(inner, dict):
+                doc = _find_document_in_message(inner)
+                if doc:
+                    return doc
+    return None
+
+
 class EvolutionAdapter:
     """Evolution API HTTP adapter implementing MessagingChannel protocol."""
 
@@ -297,24 +318,23 @@ class EvolutionAdapter:
             # Check for document attachment in Evolution v2 / Baileys format
             doc_data: dict[str, Any] | None = None
             if "message" in msg and isinstance(msg["message"], dict):
-                m = msg["message"]
-                if "documentMessage" in m and isinstance(m["documentMessage"], dict):
-                    doc_data = m["documentMessage"]
-                elif "documentWithCaptionMessage" in m and isinstance(
-                    m["documentWithCaptionMessage"], dict
-                ):
-                    inner_m = m["documentWithCaptionMessage"].get("message", {})
-                    if isinstance(inner_m, dict) and "documentMessage" in inner_m:
-                        doc_data = inner_m["documentMessage"]
+                doc_data = _find_document_in_message(msg["message"])
             elif "document" in msg and isinstance(msg["document"], dict):
                 doc_data = msg["document"]
 
             if doc_data is not None:
                 filename = doc_data.get("fileName") or doc_data.get("filename") or "document.pdf"
                 mimetype = doc_data.get("mimetype") or doc_data.get("mimeType") or "application/pdf"
+                if str(filename).lower().endswith(".pdf") and mimetype in (
+                    "application/octet-stream",
+                    "binary/octet-stream",
+                ):
+                    mimetype = "application/pdf"
                 size_raw = doc_data.get("fileLength") or doc_data.get("size")
                 size_bytes = int(size_raw) if size_raw else None
-                media_id = str(doc_data.get("mediaKey") or doc_data.get("id") or msg_id)
+                # Evolution v2 /chat/getBase64FromMediaMessage requires the message ID (msg_id),
+                # NOT the cryptographic mediaKey (Finding 3).
+                media_id = str(msg_id or doc_data.get("id") or "")
                 attachments.append(
                     InboundAttachment(
                         provider_media_id=media_id,
@@ -324,7 +344,7 @@ class EvolutionAdapter:
                         kind="document",
                     )
                 )
-                if doc_data.get("caption"):
+                if doc_data.get("caption") and not text:
                     text = str(doc_data["caption"])
 
             if "text" in msg and isinstance(msg["text"], dict):

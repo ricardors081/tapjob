@@ -28,9 +28,9 @@ To achieve live staging validation for the WhatsApp Live Gate without operationa
 - EasyPanel is **NOT** the source of application code or ad-hoc runtime mutations. EasyPanel manages container lifecycle, Traefik ingress routing, TLS certificates, and isolated service networks.
 - All TapJob staging services are isolated within EasyPanel project:
   ```text
-  PROJECT = julia
+  PROJECT = minimenu
   ```
-- No existing services inside project `julia` belong to TapJob. Existing services (e.g. `julia-postgres`, `julia-redis`, `wp6stg-evolution-db`, `wp6stg-evolution-redis`, `teste-ad`) must never be touched, modified, or reused.
+- No existing services inside project `minimenu` belong to TapJob. Existing services must never be touched, modified, or reused.
 
 ### Decision B: Immutable Artifact & GHCR Pipeline
 - Application runtime services run **ONLY** pre-built, immutable image digests from GitHub Container Registry:
@@ -55,18 +55,18 @@ To achieve live staging validation for the WhatsApp Live Gate without operationa
 - TapJob staging operates on a dedicated PostgreSQL service:
   ```text
   SERVICE = tapjob-postgres
-  PROJECT = julia
+  PROJECT = minimenu
   ```
 - Compatibility: PostgreSQL 16 (matching repository specification).
 - Storage: Dedicated persistent Docker volume.
-- Network Isolation: Accessible only within the `julia` project network; **NO** public host port exposure (`POSTGRES_PUBLICLY_EXPOSED = NO`).
+- Network Isolation: Accessible only within the `minimenu` project network; **NO** public host port exposure (`POSTGRES_PUBLICLY_EXPOSED = NO`).
 - Never reuse or share databases with any other project or service on the host.
 
 ### Decision E: Dedicated Redis Service
 - TapJob staging operates on a dedicated Redis service:
   ```text
   SERVICE = tapjob-redis
-  PROJECT = julia
+  PROJECT = minimenu
   ```
 - Compatibility: Redis 7 (matching repository specification).
 - Storage: Persistent Docker volume.
@@ -83,7 +83,7 @@ To achieve live staging validation for the WhatsApp Live Gate without operationa
   DOMAIN  = https://evo.koglim.com.br
   INSTANCE = TapJob
   ```
-- **Network Boundary:** Docker networks of project `julia` and project `koglim` are **NOT** joined together.
+- **Network Boundary:** Docker networks of project `minimenu` and project `koglim` are **NOT** joined together.
 - **Outbound Path:** TapJob worker/api dispatches requests to Evolution via the public HTTPS domain `https://evo.koglim.com.br`.
 - **Inbound Path (Future):** Evolution dispatches webhooks to TapJob via the public HTTPS Traefik domain (`https://<tapjob-staging-domain>/webhooks/whatsapp`).
 - **Webhook State:** For this deployment gate, Evolution webhook remains **STRICTLY DISABLED** (`EVOLUTION_WEBHOOK_ENABLED = NO`). The TapJob receiver endpoint exists with fail-closed security (`WHATSAPP_WEBHOOK_ENABLED = false`), and no live messages will be sent or received (`WHATSAPP_REAL_SENDS = 0`).
@@ -94,7 +94,7 @@ To achieve live staging validation for the WhatsApp Live Gate without operationa
 - n8n is NOT connected between Evolution and TapJob.
 - Critical path:
   ```text
-  WhatsApp ──> Evolution (koglim) ──> TapJob API (julia, Traefik HTTPS)
+  WhatsApp ──> Evolution (koglim) ──> TapJob API (minimenu, Traefik HTTPS)
            ──> PostgreSQL + Redis ──> Celery Worker / Beat
            ──> Evolution (koglim) ──> WhatsApp
   ```
@@ -108,7 +108,7 @@ To achieve live staging validation for the WhatsApp Live Gate without operationa
 - It is NOT production. Production requires separate promotion, approval, and commercial setup.
 
 ### Decision I: Services Topology & Migration
-Initial EasyPanel services inside project `julia`:
+Initial EasyPanel services inside project `minimenu`:
 1. `tapjob-postgres` (PostgreSQL 16, private network only, persistent volume, daily local backup)
 2. `tapjob-redis` (Redis 7, private network only, password protected)
 3. `tapjob-api` (FastAPI app on port 8000, Traefik HTTPS ingress)
@@ -149,10 +149,10 @@ Upstream Evolution API has a reported webhook-configuration persistence issue ac
 ## 5. Factual Staging Topology & Execution Evidence
 
 As verified in this checkpoint:
-- **EasyPanel Project:** `julia`
+- **EasyPanel Project:** `minimenu`
 - **Isolated Dedicated Services Provisioned & Running:**
-  - `tapjob-postgres`: PostgreSQL 16, persistent volume, non-public (`POSTGRES_PUBLICLY_EXPOSED = NO`), internal host `julia_tapjob-postgres:5432`, database `tapjob`, daily local backup scheduled at `0 0 * * *` on Local Disk destination (`cmplbmjgm000001rw79m98ejz`, retention 7).
-  - `tapjob-redis`: Redis 7, persistent volume, non-public (`REDIS_PUBLICLY_EXPOSED = NO`), internal host `julia_tapjob-redis:6379`, password protected.
+  - `tapjob-postgres`: PostgreSQL 16, persistent volume, non-public (`POSTGRES_PUBLICLY_EXPOSED = NO`), internal host `minimenu_tapjob-postgres:5432`, database `tapjob`, daily local backup scheduled at `0 0 * * *` on Local Disk destination (`cmplbmjgm000001rw79m98ejz`, retention 7).
+  - `tapjob-redis`: Redis 7, persistent volume, non-public (`REDIS_PUBLICLY_EXPOSED = NO`), internal host `minimenu_tapjob-redis:6379`, password protected.
   - `tapjob-api`: Running on immutable image digest, resources 1 CPU / 512 MB, Traefik HTTPS domain `https://tapjob-api-julia.gdxvyl.easypanel.host`, internal `/ready` probe HTTP 200, public `/ready` probe HTTP 200 (`status=ok`, `postgresql=ok`, `redis=ok`), `WHATSAPP_WEBHOOK_ENABLED = false`.
   - `tapjob-worker`: Running on immutable image digest, resources 1 CPU / 768 MB, Celery worker concurrency = 2 (`--concurrency=2`), connected to Redis broker, all background tasks registered, zero restart loops.
   - `tapjob-beat`: Running on immutable image digest, resources 0.25 CPU / 256 MB, command `celery -A tapjob_worker.beat:app beat --loglevel=INFO --schedule=/data/celerybeat/celerybeat-schedule`, persistent volume `tapjob-beat-schedule` mounted at `/data/celerybeat`, scheduler `celery.beat.PersistentScheduler`, zero permission errors, adhering to strict least-privilege runtime configuration (broker and runtime settings only; no database, R2, or messaging secrets injected).
@@ -199,7 +199,7 @@ As verified in this checkpoint:
 On branch `ops/whatsapp-live-activation-gate`, Phase A of the WhatsApp Live Activation Gate was executed in staging:
 
 ### 1. Ingress Receiver Enablement
-- **Configuration Change:** `WHATSAPP_WEBHOOK_ENABLED = true` on `tapjob-api` service in project `julia`. All other environment variables (including existing cryptographic `WHATSAPP_WEBHOOK_SECRET`) preserved untouched.
+- **Configuration Change:** `WHATSAPP_WEBHOOK_ENABLED = true` on `tapjob-api` service in project `minimenu`. All other environment variables (including existing cryptographic `WHATSAPP_WEBHOOK_SECRET`) preserved untouched.
 - **Redeployment:** Only `tapjob-api` redeployed. `tapjob-postgres`, `tapjob-redis`, `tapjob-worker`, `tapjob-beat` were not restarted.
 - **Health Verification:** Public probe `GET https://tapjob-api-julia.gdxvyl.easypanel.host/ready` returned HTTP 200 (`status=ok`, `postgresql=ok`, `redis=ok`). Zero restart loops or configuration failures.
 

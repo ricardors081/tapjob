@@ -235,7 +235,7 @@ Do not add a separate vector database without measured need.
 Initial production/staging compute runs on the owner's Linux server with Docker Compose and EasyPanel.
 
 For the **WhatsApp Live Gate staging environment** (ADR-0016, D-058):
-- **Runtime control plane:** EasyPanel (v2.36.0+) managing services within project `julia`;
+- **Runtime control plane:** EasyPanel (v2.36.0+) managing services within project `minimenu`;
 - **Target workloads:**
   - `tapjob-api` (FastAPI backend, Traefik HTTPS domain `https://tapjob-api-julia.gdxvyl.easypanel.host`, `/ready` HTTP 200);
   - `tapjob-worker` (Celery background worker, concurrency=2, Redis connected);

@@ -252,6 +252,9 @@ def get_user_profile_status(
             "profile_version": 0,
             "has_facts": False,
             "fact_count": 0,
+            "headline": None,
+            "summary": None,
+            "target_roles": None,
         }
 
     fact_count = (
@@ -271,6 +274,9 @@ def get_user_profile_status(
         "profile_version": profile.profile_version,
         "has_facts": active_count > 0,
         "fact_count": active_count,
+        "headline": profile.headline,
+        "summary": profile.summary,
+        "target_roles": profile.target_roles,
     }
 
 
