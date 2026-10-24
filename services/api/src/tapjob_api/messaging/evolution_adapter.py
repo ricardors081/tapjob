@@ -71,6 +71,101 @@ def _find_document_in_message(m: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def normalize_provider_int64(value: object) -> int | None:
+    """Normalizes provider int64 representations (int, numeric str, protobuf Long dict).
+
+    Protobuf Long objects in Baileys/Evolution (long.js) are serialized as:
+    {"low": 245434, "high": 0, "unsigned": true}
+    where low and high are 32-bit signed or unsigned integers.
+    """
+    if value is None:
+        return None
+
+    if isinstance(value, bool):
+        raise ValueError("boolean is not a valid provider int64")
+
+    if isinstance(value, int):
+        result = value
+
+    elif isinstance(value, str):
+        try:
+            result = int(value)
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"invalid numeric string: {value}") from exc
+
+    elif isinstance(value, dict):
+        low_raw = value.get("low")
+        high_raw = value.get("high")
+
+        if low_raw is None or high_raw is None:
+            raise ValueError("invalid protobuf Long representation: missing low or high")
+
+        if isinstance(low_raw, bool) or isinstance(high_raw, bool):
+            raise ValueError("boolean is not a valid protobuf Long component")
+
+        try:
+            low = int(low_raw) & 0xFFFFFFFF
+            high = int(high_raw) & 0xFFFFFFFF
+        except (ValueError, TypeError) as exc:
+            raise ValueError("invalid integer in protobuf Long component") from exc
+
+        result = (high << 32) | low
+
+        if not bool(value.get("unsigned", False)) and (high & 0x80000000):
+            result -= 1 << 64
+
+    else:
+        raise ValueError("unsupported provider integer representation")
+
+    if result < 0:
+        raise ValueError("negative media size")
+
+    return result
+
+
+def resolve_canonical_sender(msg: dict[str, Any]) -> str | None:
+    """Resolves canonical sender phone/identifier from Evolution message structure.
+
+    Handles WhatsApp Privacy Addressing Mode (LID):
+    When remoteJid ends in @lid and remoteJidAlt ends in @s.whatsapp.net,
+    the canonical phone number from remoteJidAlt is used so that candidate
+    identities and outbound text dispatches remain tied to real phones.
+    """
+    key_val = msg.get("key")
+    key_dict: dict[str, Any] = key_val if isinstance(key_val, dict) else {}
+    remote_jid = str(key_dict.get("remoteJid") or "")
+    remote_jid_alt = str(key_dict.get("remoteJidAlt") or "")
+
+    # 1. WhatsApp LID addressing mode: prefer remoteJidAlt if it has @s.whatsapp.net
+    if remote_jid.endswith("@lid") and remote_jid_alt.endswith("@s.whatsapp.net"):
+        cand = remote_jid_alt.split("@")[0].strip()
+        if cand:
+            return cand
+
+    # 2. Explicit provider "from" field if present
+    sender_raw = msg.get("from")
+    if sender_raw:
+        cand = str(sender_raw).strip()
+        if "@" in cand:
+            cand = cand.split("@")[0].strip()
+        if cand:
+            return cand
+
+    # 3. Fallback: remoteJidAlt if remoteJid has no @s.whatsapp.net but remoteJidAlt does
+    if not remote_jid.endswith("@s.whatsapp.net") and remote_jid_alt.endswith("@s.whatsapp.net"):
+        cand = remote_jid_alt.split("@")[0].strip()
+        if cand:
+            return cand
+
+    # 4. Standard remoteJid
+    if remote_jid:
+        cand = remote_jid.split("@")[0].strip() if "@" in remote_jid else remote_jid.strip()
+        if cand:
+            return cand
+
+    return None
+
+
 class EvolutionAdapter:
     """Evolution API HTTP adapter implementing MessagingChannel protocol."""
 
@@ -288,16 +383,15 @@ class EvolutionAdapter:
                 )
                 continue
 
-            # Resolve sender phone
-            sender_raw = msg.get("from")
-            if not sender_raw and isinstance(msg.get("key"), dict):
-                remote_jid = msg["key"].get("remoteJid", "")
-                sender_raw = remote_jid.split("@")[0] if "@" in remote_jid else remote_jid
+            # Resolve sender phone using canonical resolver (supports WhatsApp LID + remoteJidAlt)
+            sender_raw = resolve_canonical_sender(msg)
 
-            # Resolve message id
-            msg_id = msg.get("id")
-            if not msg_id and isinstance(msg.get("key"), dict):
+            # Resolve message id (prefer WhatsApp key.id over internal provider record id)
+            msg_id = None
+            if isinstance(msg.get("key"), dict):
                 msg_id = msg["key"].get("id")
+            if not msg_id:
+                msg_id = msg.get("id")
 
             # Resolve timestamp
             ts = msg.get("timestamp") or msg.get("messageTimestamp")
@@ -331,7 +425,23 @@ class EvolutionAdapter:
                 ):
                     mimetype = "application/pdf"
                 size_raw = doc_data.get("fileLength") or doc_data.get("size")
-                size_bytes = int(size_raw) if size_raw else None
+                size_bytes: int | None = None
+                if size_raw is not None:
+                    try:
+                        size_bytes = normalize_provider_int64(size_raw)
+                    except ValueError as exc:
+                        logger.warning(
+                            "evolution.parse_inbound.invalid_file_length",
+                            extra={
+                                "correlation_id": ctx.correlation_id,
+                                "provider": self.provider,
+                                "provider_message_id": str(msg_id) if msg_id else None,
+                                "error_class": type(exc).__name__,
+                                "error_message": str(exc),
+                            },
+                        )
+                        size_bytes = None
+
                 # Evolution v2 /chat/getBase64FromMediaMessage requires the message ID (msg_id),
                 # NOT the cryptographic mediaKey (Finding 3).
                 media_id = str(msg_id or doc_data.get("id") or "")

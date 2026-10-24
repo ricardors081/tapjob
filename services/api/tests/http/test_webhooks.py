@@ -225,11 +225,9 @@ def test_whatsapp_webhook_rejects_unauthorized(auth_client: TestClient) -> None:
     """When webhook secret is configured, unauthorized requests return 401."""
     payload: dict[str, Any] = {"messages": []}
 
-    # No secret header
     response = auth_client.post("/webhooks/whatsapp", json=payload)
     assert response.status_code == 401
 
-    # Wrong secret
     response = auth_client.post(
         "/webhooks/whatsapp",
         json=payload,
@@ -237,14 +235,12 @@ def test_whatsapp_webhook_rejects_unauthorized(auth_client: TestClient) -> None:
     )
     assert response.status_code == 401
 
-    # Secret in query parameter must be REJECTED (query auth removed)
     response = auth_client.post(
         "/webhooks/whatsapp?secret=super-secret-token",
         json=payload,
     )
     assert response.status_code == 401
 
-    # Correct secret in header
     response = auth_client.post(
         "/webhooks/whatsapp",
         json=payload,
@@ -278,9 +274,7 @@ def test_whatsapp_webhook_does_not_execute_orchestration_inline(client: TestClie
             headers={"X-Webhook-Secret": "test-webhook-secret"},
         )
         assert response.status_code == 202
-        # Orchestration MUST NOT be called inline during the request
         assert mock_dispatch.call_count == 0
-        # Background task MUST be enqueued
         assert mock_task.delay.call_count == 1
 
 
@@ -369,9 +363,7 @@ def test_whatsapp_webhook_broker_failure_retains_envelope(
             json=payload,
             headers={"X-Webhook-Secret": "test-webhook-secret"},
         )
-        # Fast 202 still returned to provider
         assert response.status_code == 202
-        # Database commit happened
         assert mock_db_session.commit.called
 
 
@@ -404,3 +396,77 @@ def test_recover_unprocessed_inbound_envelopes_sweep() -> None:
         dispatched = recover_unprocessed_inbound_envelopes_task(stale_seconds=0.0)
         assert dispatched == 1
         mock_task.delay.assert_called_once_with(99)
+
+
+# ==============================================================================
+# PDF Live Failure Forensic Tests: Webhook Ingress & Error Boundary Hardening
+# ==============================================================================
+
+
+def test_whatsapp_webhook_sanitized_real_pdf_payload_accepted(
+    client: TestClient, mock_db_session: MagicMock
+) -> None:
+    """Verifies the sanitized real Human Acceptance payload is accepted 202 without uncaught 500."""
+    from unittest.mock import patch
+
+    from fixtures.evolution_real_payload_sanitized import (
+        make_sanitized_pdf_document_webhook_payload,
+    )
+
+    payload = make_sanitized_pdf_document_webhook_payload()
+
+    with patch("tapjob_api.http.webhooks.process_inbound_envelope_task") as mock_task:
+        response = client.post(
+            "/webhooks/whatsapp",
+            json=payload,
+            headers={"X-Webhook-Secret": "test-webhook-secret"},
+        )
+        assert response.status_code == 202
+        assert response.json()["status"] == "accepted"
+        assert mock_task.delay.call_count == 1
+        assert mock_db_session.commit.called
+
+
+def test_whatsapp_webhook_unexpected_parse_error_returns_retryable_500(
+    client: TestClient,
+) -> None:
+    """Unexpected parser defects return a controlled retryable 500, not non-retryable 400."""
+    from unittest.mock import patch
+
+    payload = {"some": "malformed_or_unexpected_structure"}
+
+    with patch(
+        "tapjob_api.messaging.evolution_adapter.EvolutionAdapter.parse_inbound",
+        side_effect=TypeError("Unexpected type mismatch in provider parser"),
+    ):
+        response = client.post(
+            "/webhooks/whatsapp",
+            json=payload,
+            headers={"X-Webhook-Secret": "test-webhook-secret"},
+        )
+        assert response.status_code == 500
+
+
+def test_whatsapp_webhook_port_error_invalid_request_returns_400(client: TestClient) -> None:
+    """Verifies PortError(INVALID_REQUEST) in adapter returns controlled 400."""
+    from unittest.mock import patch
+
+    from tapjob_api.ports._common import PortError, PortErrorCode
+
+    payload = {"some": "invalid_structure"}
+
+    with patch(
+        "tapjob_api.messaging.evolution_adapter.EvolutionAdapter.parse_inbound",
+        side_effect=PortError(
+            PortErrorCode.INVALID_REQUEST,
+            provider="evolution",
+            message="Malformed document structure",
+        ),
+    ):
+        response = client.post(
+            "/webhooks/whatsapp",
+            json=payload,
+            headers={"X-Webhook-Secret": "test-webhook-secret"},
+        )
+        assert response.status_code == 400
+        assert response.json()["code"] == "INVALID_REQUEST"

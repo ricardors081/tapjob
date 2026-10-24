@@ -10,7 +10,11 @@ from typing import Any
 import httpx
 import pytest
 
-from tapjob_api.messaging.evolution_adapter import EvolutionAdapter
+from tapjob_api.messaging.evolution_adapter import (
+    EvolutionAdapter,
+    normalize_provider_int64,
+    resolve_canonical_sender,
+)
 from tapjob_api.ports._common import (
     AdapterHealthStatus,
     CallContext,
@@ -456,5 +460,180 @@ def test_parse_inbound_missing_from_me_processed(test_ctx: CallContext) -> None:
         assert messages[0].sender.external_id == "5511987654321"
         assert messages[0].provider_message_id == "legacy_msg_id_123"
         assert messages[0].text == "mensagem sem campo fromMe"
+
+    asyncio.run(scenario())
+
+
+# ==============================================================================
+# PDF Live Failure Forensic Tests: Protobuf Long, LID Addressing, Ingress Hardening
+# ==============================================================================
+
+
+def test_normalize_provider_int64_valid() -> None:
+    """Verifies normalize_provider_int64 accepts int, str, and protobuf Long representations."""
+    # Plain integers
+    assert normalize_provider_int64(245434) == 245434
+    assert normalize_provider_int64(0) == 0
+
+    # Numeric strings
+    assert normalize_provider_int64("245434") == 245434
+    assert normalize_provider_int64("0") == 0
+
+    # Protobuf Long from real Human Acceptance payload: {"low": 245434, "high": 0, "unsigned": True}
+    real_long = {"low": 245434, "high": 0, "unsigned": True}
+    assert normalize_provider_int64(real_long) == 245434
+
+    # Protobuf Long signed positive
+    assert normalize_provider_int64({"low": 245434, "high": 0}) == 245434
+
+    # None returns None
+    assert normalize_provider_int64(None) is None
+
+    # Low signed negative with unsigned=True (unsigned 32-bit wrap)
+    # e.g., low=-10 -> (-10 & 0xFFFFFFFF) == 4294967286
+    assert normalize_provider_int64({"low": -10, "high": 0, "unsigned": True}) == 4294967286
+
+    # High non-zero (64-bit value)
+    assert normalize_provider_int64({"low": 100, "high": 2, "unsigned": True}) == (2 << 32) + 100
+
+
+def test_normalize_provider_int64_invalid() -> None:
+    """Verifies normalize_provider_int64 rejects invalid representations with ValueError."""
+    # Booleans are not valid ints
+    with pytest.raises(ValueError, match="boolean is not a valid provider int64"):
+        normalize_provider_int64(True)
+    with pytest.raises(ValueError, match="boolean is not a valid provider int64"):
+        normalize_provider_int64(False)
+
+    # Negative integer
+    with pytest.raises(ValueError, match="negative media size"):
+        normalize_provider_int64(-1)
+
+    # Negative string
+    with pytest.raises(ValueError, match="negative media size"):
+        normalize_provider_int64("-500")
+
+    # Non-numeric string
+    with pytest.raises(ValueError, match="invalid numeric string"):
+        normalize_provider_int64("not_a_number")
+
+    # Protobuf Long signed negative result
+    with pytest.raises(ValueError, match="negative media size"):
+        normalize_provider_int64({"low": -1, "high": -1, "unsigned": False})
+
+    # Missing low or high in dict
+    with pytest.raises(ValueError, match="invalid protobuf Long representation"):
+        normalize_provider_int64({"low": 100})
+    with pytest.raises(ValueError, match="invalid protobuf Long representation"):
+        normalize_provider_int64({"high": 100})
+
+    # Non-int component in protobuf Long
+    with pytest.raises(ValueError, match="boolean is not a valid protobuf Long component"):
+        normalize_provider_int64({"low": True, "high": 0})
+    with pytest.raises(ValueError, match="invalid integer in protobuf Long component"):
+        normalize_provider_int64({"low": "abc", "high": 0})
+
+    # Unsupported data structure
+    with pytest.raises(ValueError, match="unsupported provider integer representation"):
+        normalize_provider_int64([10, 20])
+
+
+def test_resolve_canonical_sender() -> None:
+    """Verifies WhatsApp sender resolution under standard, LID, and fallback conditions."""
+    # 1. Standard remoteJid with @s.whatsapp.net
+    msg_std = {"key": {"remoteJid": "5511999999999@s.whatsapp.net"}}
+    assert resolve_canonical_sender(msg_std) == "5511999999999"
+
+    # 2. WhatsApp LID addressing mode: remoteJid=@lid and remoteJidAlt=@s.whatsapp.net
+    # Real Human Acceptance pattern: phone number must be recovered from remoteJidAlt
+    msg_lid = {
+        "key": {
+            "remoteJid": "53378004578377@lid",
+            "remoteJidAlt": "5511988887777@s.whatsapp.net",
+            "addressingMode": "lid",
+        }
+    }
+    assert resolve_canonical_sender(msg_lid) == "5511988887777"
+
+    # 3. LID addressing mode with absent remoteJidAlt (falls back gracefully to LID)
+    msg_lid_no_alt = {"key": {"remoteJid": "53378004578377@lid"}}
+    assert resolve_canonical_sender(msg_lid_no_alt) == "53378004578377"
+
+    # 4. LID addressing mode with malformed remoteJidAlt (not ending in @s.whatsapp.net)
+    msg_lid_malformed_alt = {
+        "key": {
+            "remoteJid": "53378004578377@lid",
+            "remoteJidAlt": "malformed_jid_without_domain",
+        }
+    }
+    assert resolve_canonical_sender(msg_lid_malformed_alt) == "53378004578377"
+
+    # 5. Explicit "from" field
+    msg_from = {"from": "5511977776666@s.whatsapp.net"}
+    assert resolve_canonical_sender(msg_from) == "5511977776666"
+
+    # 6. Completely empty message
+    assert resolve_canonical_sender({}) is None
+
+
+def test_real_payload_sanitized_regression(test_ctx: CallContext) -> None:
+    """Regression test: Exact shape of the real Human Acceptance failure parses successfully."""
+    from fixtures.evolution_real_payload_sanitized import (
+        make_sanitized_pdf_document_webhook_payload,
+    )
+
+    async def scenario() -> None:
+        adapter = EvolutionAdapter(
+            api_url="https://evolution.test.local",
+            api_key="test_key_123",
+            instance_name="test_instance",
+        )
+        payload = make_sanitized_pdf_document_webhook_payload()
+        raw_body = json.dumps(payload).encode("utf-8")
+        messages = await adapter.parse_inbound(raw_body, {}, test_ctx)
+
+        assert len(messages) == 1
+        msg = messages[0]
+
+        # Sender canonical identity derived from remoteJidAlt (not LID)
+        assert msg.sender.channel == "whatsapp"
+        assert msg.sender.external_id == "5511988887777"
+        assert msg.provider_message_id == "3A8424FAE89C98FF36B6"
+
+        # Document attachment properly parsed from protobuf Long
+        assert len(msg.attachments) == 1
+        att = msg.attachments[0]
+        assert att.kind == "document"
+        assert att.mime_type == "application/pdf"
+        assert att.size_bytes == 245434
+        assert att.filename == "curriculo - teste.pdf"
+        assert att.provider_media_id == "3A8424FAE89C98FF36B6"
+
+    asyncio.run(scenario())
+
+
+def test_parse_inbound_invalid_file_length_handled_gracefully(test_ctx: CallContext) -> None:
+    """Verifies malformed fileLength does not raise TypeError and sets size_bytes=None safely."""
+    from fixtures.evolution_real_payload_sanitized import (
+        make_sanitized_pdf_document_webhook_payload,
+    )
+
+    async def scenario() -> None:
+        adapter = EvolutionAdapter(
+            api_url="https://evolution.test.local",
+            api_key="test_key_123",
+            instance_name="test_instance",
+        )
+        # Pass a negative media size representation
+        payload = make_sanitized_pdf_document_webhook_payload(
+            file_length={"low": -1, "high": -1, "unsigned": False}
+        )
+        raw_body = json.dumps(payload).encode("utf-8")
+        messages = await adapter.parse_inbound(raw_body, {}, test_ctx)
+
+        assert len(messages) == 1
+        assert len(messages[0].attachments) == 1
+        # size_bytes defaults to None safely without crashing
+        assert messages[0].attachments[0].size_bytes is None
 
     asyncio.run(scenario())
