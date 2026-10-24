@@ -561,6 +561,7 @@ def resolve_user_conversation_context(
         logger.debug("Failed resolving latest application for context")
 
     last_prompt = None
+    last_routed_intent = None
     if link_id is not None:
         try:
             latest_outbox = session.execute(
@@ -569,8 +570,20 @@ def resolve_user_conversation_context(
                 .order_by(OutboundMessageQueue.created_at.desc())
                 .limit(1)
             ).scalar_one_or_none()
-            if latest_outbox and isinstance(getattr(latest_outbox, "message_content", None), dict):
-                last_prompt = str(latest_outbox.message_content.get("text", ""))
+            if latest_outbox:
+                if isinstance(getattr(latest_outbox, "message_content", None), dict):
+                    last_prompt = str(latest_outbox.message_content.get("text", ""))
+                idem_key = getattr(latest_outbox, "idempotency_key", "") or ""
+                if idem_key.startswith("rem_clarify_"):
+                    last_routed_intent = ConversationalIntent.REMINDER_FOLLOWUP
+                elif idem_key.startswith("kit_") or idem_key.startswith("tailor_"):
+                    last_routed_intent = ConversationalIntent.APPLICATION_REQUEST
+                elif idem_key.startswith("match_"):
+                    last_routed_intent = ConversationalIntent.MATCH_EXPLANATION
+                elif idem_key.startswith("rec_"):
+                    last_routed_intent = ConversationalIntent.JOB_RECOMMENDATIONS
+                elif idem_key.startswith("help_"):
+                    last_routed_intent = ConversationalIntent.HELP_MENU
         except Exception:
             logger.debug("Failed resolving latest outbox for context")
 
@@ -584,6 +597,7 @@ def resolve_user_conversation_context(
         target_job_company=target_job_company,
         latest_application_status=latest_app_status,
         last_assistant_prompt=last_prompt,
+        last_routed_intent=last_routed_intent,
     )
 
 

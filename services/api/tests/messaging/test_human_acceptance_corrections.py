@@ -45,6 +45,7 @@ from tapjob_api.messaging.natural_language import (
     extract_skills_from_text,
     interpret_conversational_message,
     is_candidate_text_experience,
+    is_waiting_for_reminder_time_prompt,
     parse_natural_reminder_time,
 )
 from tapjob_api.messaging.orchestration import (
@@ -523,6 +524,320 @@ def test_reminder_with_candidatar_and_1_minute_creates_reminder() -> None:
     assert "Lembrete agendado com sucesso" in reply
     assert "1 minuto" in reply
     assert "prepare seu Application Kit" not in reply
+
+
+def test_reminder_two_turn_continuation_with_amanha() -> None:
+    """Blocker: Multi-turn reminder continuation.
+    Turn 1: 'me lembra de olhar essa vaga' -> asks clarification, zero reminders created.
+    Turn 2: 'amanhã' -> schedules reminder for tomorrow, zero Application Kit calls.
+    """
+    session = MagicMock(spec=Session)
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock(id=uuid.uuid4())
+
+    domain_outbox: list[MagicMock] = []
+    scheduled_reminders: list[dict[str, Any]] = []
+
+    def fake_queue(s: Any, **kwargs: Any) -> MagicMock:
+        mock_msg = MagicMock()
+        mock_msg.message_text = kwargs["message_text"]
+        mock_msg.idempotency_key = kwargs["idempotency_key"]
+        mock_msg.channel_identity_link_id = str(kwargs.get("channel_identity_link_id"))
+        mock_msg.message_content = {"text": kwargs["message_text"]}
+        domain_outbox.append(mock_msg)
+        return mock_msg
+
+    def fake_schedule(s: Any, **kwargs: Any) -> dict[str, Any]:
+        res = {
+            "reminder_id": str(uuid.uuid4()),
+            "remind_at": kwargs["remind_at"],
+            "note": kwargs.get("note"),
+            "application_id": kwargs.get("application_id"),
+        }
+        scheduled_reminders.append(res)
+        return res
+
+    def fake_execute(stmt: Any) -> MagicMock:
+        res = MagicMock()
+        stmt_str = str(stmt).lower()
+        if "outbound_message_queue" in stmt_str:
+            res.scalar_one_or_none.return_value = domain_outbox[-1] if domain_outbox else None
+        else:
+            res.scalar_one_or_none.return_value = None
+        return res
+
+    session.execute.side_effect = fake_execute
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_target_job",
+            return_value=None,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.tool_schedule_follow_up",
+            side_effect=fake_schedule,
+        ) as mock_tool_rem,
+        patch(
+            "tapjob_api.messaging.orchestration.tool_build_application_kit",
+        ) as mock_app_kit,
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue,
+        ),
+    ):
+        # Turn 1: Ambiguous reminder request
+        inbound_1 = _make_inbound("me lembra de olhar essa vaga", msg_id="msg_t1")
+        keys_1 = dispatch_inbound_message(
+            session, redis_client=None, inbound=inbound_1, provider_id=uuid.uuid4()
+        )
+
+        # Invariant 1: Zero reminders created on Turn 1
+        assert len(scheduled_reminders) == 0
+        mock_tool_rem.assert_not_called()
+        mock_app_kit.assert_not_called()
+
+        # Invariant 2: Clarification asked naturally
+        assert len(keys_1) == 1
+        assert keys_1[0].startswith("rem_clarify_")
+        reply_1 = domain_outbox[0].message_text
+        assert "Para quando você gostaria de agendar esse lembrete" in reply_1
+
+        # Turn 2: Natural temporal expression 'amanhã'
+        inbound_2 = _make_inbound("amanhã", msg_id="msg_t2")
+        keys_2 = dispatch_inbound_message(
+            session, redis_client=None, inbound=inbound_2, provider_id=uuid.uuid4()
+        )
+
+        # Invariant 3: Reminder scheduled successfully on Turn 2
+        assert len(scheduled_reminders) == 1
+        mock_tool_rem.assert_called_once()
+        remind_at = scheduled_reminders[0]["remind_at"]
+        diff = (remind_at - datetime.now(UTC)).total_seconds()
+        # Approximately +1 day (86400 seconds)
+        assert 86200 <= diff <= 86600
+
+        # Invariant 4: Zero Application Kit calls
+        mock_app_kit.assert_not_called()
+
+        # Invariant 5: Confirmation message queued
+        assert len(keys_2) == 1
+        assert keys_2[0].startswith("rem_sched_")
+        reply_2 = domain_outbox[1].message_text
+        assert "Lembrete agendado com sucesso" in reply_2
+        assert "amanhã" in reply_2
+
+
+def test_reminder_two_turn_continuation_with_daqui_2_horas() -> None:
+    """Turn 1: 'me lembra depois' -> asks clarification.
+    Turn 2: 'daqui 2 horas' -> schedules reminder for ~+2 hours, zero Application Kit calls.
+    """
+    session = MagicMock(spec=Session)
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock(id=uuid.uuid4())
+
+    domain_outbox: list[MagicMock] = []
+    scheduled_reminders: list[dict[str, Any]] = []
+
+    def fake_queue(s: Any, **kwargs: Any) -> MagicMock:
+        mock_msg = MagicMock()
+        mock_msg.message_text = kwargs["message_text"]
+        mock_msg.idempotency_key = kwargs["idempotency_key"]
+        mock_msg.channel_identity_link_id = str(kwargs.get("channel_identity_link_id"))
+        mock_msg.message_content = {"text": kwargs["message_text"]}
+        domain_outbox.append(mock_msg)
+        return mock_msg
+
+    def fake_schedule(s: Any, **kwargs: Any) -> dict[str, Any]:
+        res = {
+            "reminder_id": str(uuid.uuid4()),
+            "remind_at": kwargs["remind_at"],
+            "note": kwargs.get("note"),
+            "application_id": kwargs.get("application_id"),
+        }
+        scheduled_reminders.append(res)
+        return res
+
+    def fake_execute(stmt: Any) -> MagicMock:
+        res = MagicMock()
+        stmt_str = str(stmt).lower()
+        if "outbound_message_queue" in stmt_str:
+            res.scalar_one_or_none.return_value = domain_outbox[-1] if domain_outbox else None
+        else:
+            res.scalar_one_or_none.return_value = None
+        return res
+
+    session.execute.side_effect = fake_execute
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_target_job",
+            return_value=None,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.tool_schedule_follow_up",
+            side_effect=fake_schedule,
+        ) as mock_tool_rem,
+        patch(
+            "tapjob_api.messaging.orchestration.tool_build_application_kit",
+        ) as mock_app_kit,
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            side_effect=fake_queue,
+        ),
+    ):
+        # Turn 1
+        inbound_1 = _make_inbound("me lembra depois", msg_id="msg_p1")
+        dispatch_inbound_message(
+            session, redis_client=None, inbound=inbound_1, provider_id=uuid.uuid4()
+        )
+        assert len(scheduled_reminders) == 0
+
+        # Turn 2
+        inbound_2 = _make_inbound("daqui 2 horas", msg_id="msg_p2")
+        keys_2 = dispatch_inbound_message(
+            session, redis_client=None, inbound=inbound_2, provider_id=uuid.uuid4()
+        )
+
+        assert len(scheduled_reminders) == 1
+        mock_tool_rem.assert_called_once()
+        remind_at = scheduled_reminders[0]["remind_at"]
+        diff = (remind_at - datetime.now(UTC)).total_seconds()
+        # Approximately +2 hours (7200 seconds)
+        assert 7100 <= diff <= 7300
+
+        mock_app_kit.assert_not_called()
+        assert len(keys_2) == 1
+        assert keys_2[0].startswith("rem_sched_")
+        reply_2 = domain_outbox[1].message_text
+        assert "Lembrete agendado com sucesso" in reply_2
+        assert "daqui a 2 horas" in reply_2
+
+
+def test_isolated_amanha_without_reminder_context_creates_zero_reminders() -> None:
+    """Random 'amanhã' without pending reminder context must NEVER create a reminder."""
+    session = MagicMock(spec=Session)
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock(id=uuid.uuid4())
+
+    session.execute.return_value.scalar_one_or_none.return_value = None
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.tool_schedule_follow_up",
+        ) as mock_tool_rem,
+        patch(
+            "tapjob_api.messaging.orchestration.tool_build_application_kit",
+        ) as mock_app_kit,
+        patch(
+            "tapjob_api.messaging.orchestration.tool_get_profile_missing_information",
+            return_value={"missing_fields": []},
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+        ) as mock_queue,
+    ):
+        inbound = _make_inbound("amanhã")
+        dispatch_inbound_message(
+            session, redis_client=None, inbound=inbound, provider_id=uuid.uuid4()
+        )
+
+    # Invariant: Zero reminders created, Zero Application Kit calls
+    mock_tool_rem.assert_not_called()
+    mock_app_kit.assert_not_called()
+    mock_queue.assert_called_once()
+    reply = mock_queue.call_args.kwargs["message_text"]
+    assert "Lembrete agendado" not in reply
+
+
+def test_is_waiting_for_reminder_time_prompt_logic() -> None:
+    """Verifies precision of reminder waiting prompt detector."""
+    assert (
+        is_waiting_for_reminder_time_prompt(
+            "Com certeza! 😊 Para quando você gostaria de agendar esse lembrete?\n\n"
+            "Basta me informar o momento desejado..."
+        )
+        is True
+    )
+    assert (
+        is_waiting_for_reminder_time_prompt("Para quando você gostaria de agendar esse lembrete?")
+        is True
+    )
+    assert (
+        is_waiting_for_reminder_time_prompt(
+            "⏰ *Lembrete agendado com sucesso!*\n\nVou te lembrar amanhã..."
+        )
+        is False
+    )
+    assert is_waiting_for_reminder_time_prompt("Olá! Como posso ajudar hoje?") is False
+    assert is_waiting_for_reminder_time_prompt(None) is False
+    assert is_waiting_for_reminder_time_prompt("") is False
+
+
+def test_interpret_conversational_message_reminder_context_continuity() -> None:
+    """Tests semantic interpretation of temporal expressions under different context states."""
+    # Context with REMINDER_FOLLOWUP
+    ctx_rem = ConversationContext(last_routed_intent=ConversationalIntent.REMINDER_FOLLOWUP)
+    interp = interpret_conversational_message("amanhã", context=ctx_rem)
+    assert interp.intent == ConversationalIntent.REMINDER_FOLLOWUP
+
+    interp_2h = interpret_conversational_message("daqui 2 horas", context=ctx_rem)
+    assert interp_2h.intent == ConversationalIntent.REMINDER_FOLLOWUP
+
+    # Context with prompt waiting for reminder time
+    ctx_prompt = ConversationContext(
+        last_assistant_prompt="Com certeza! Para quando você gostaria de agendar esse lembrete?"
+    )
+    assert (
+        interpret_conversational_message("amanhã", context=ctx_prompt).intent
+        == ConversationalIntent.REMINDER_FOLLOWUP
+    )
+    assert (
+        interpret_conversational_message("daqui 2 horas", context=ctx_prompt).intent
+        == ConversationalIntent.REMINDER_FOLLOWUP
+    )
+
+    # No context -> UNKNOWN
+    assert (
+        interpret_conversational_message("amanhã", context=None).intent
+        == ConversationalIntent.UNKNOWN
+    )
+    assert (
+        interpret_conversational_message("daqui 2 horas", context=None).intent
+        == ConversationalIntent.UNKNOWN
+    )
+
+    # Context with completed reminder confirmation -> UNKNOWN (not waiting)
+    ctx_done = ConversationContext(
+        last_assistant_prompt="⏰ *Lembrete agendado com sucesso!*\n\nVou te lembrar amanhã."
+    )
+    assert (
+        interpret_conversational_message("amanhã", context=ctx_done).intent
+        == ConversationalIntent.UNKNOWN
+    )
 
 
 def test_help_and_greeting_do_not_contain_rigid_command_prompts() -> None:

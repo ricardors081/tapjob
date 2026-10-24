@@ -463,6 +463,27 @@ def parse_natural_reminder_time(
     return None, None
 
 
+def is_waiting_for_reminder_time_prompt(prompt: str | None) -> bool:
+    """Checks whether the last assistant prompt indicated waiting for reminder time definition."""
+    if not prompt:
+        return False
+    p_norm = normalize_text(prompt)
+    if "lembrete agendado com sucesso" in p_norm:
+        return False
+    if "lembrete" in p_norm:
+        inquiry_patterns = (
+            "para quando",
+            "quando voce gostaria",
+            "momento desejado",
+            "agendar esse lembrete",
+            "agendar o lembrete",
+            "definir o horario",
+            "horario do lembrete",
+        )
+        return any(pat in p_norm for pat in inquiry_patterns)
+    return False
+
+
 def is_explicit_privacy_inquiry(clean: str, raw_len: int = 0) -> bool:
     """Detects whether clean normalized text represents an explicit privacy/LGPD inquiry.
 
@@ -872,6 +893,26 @@ def interpret_conversational_message(
             confidence=IntentConfidence.HIGH,
             context_used="reminder_pattern",
         )
+
+    # 10.1 Reminder Conversational Continuity (Turn 2 following reminder clarification prompt)
+    if context is not None:
+        is_pending_reminder_time = False
+        if context.last_routed_intent == ConversationalIntent.REMINDER_FOLLOWUP:
+            if context.last_assistant_prompt is None or is_waiting_for_reminder_time_prompt(
+                context.last_assistant_prompt
+            ):
+                is_pending_reminder_time = True
+        elif is_waiting_for_reminder_time_prompt(context.last_assistant_prompt):
+            is_pending_reminder_time = True
+
+        if is_pending_reminder_time:
+            parsed_time, _ = parse_natural_reminder_time(text)
+            if parsed_time is not None:
+                return SemanticInterpretation(
+                    intent=ConversationalIntent.REMINDER_FOLLOWUP,
+                    confidence=IntentConfidence.HIGH,
+                    context_used="context:pending_reminder_time_continuation",
+                )
 
     # 11. Conversational Application Request
     apply_terms = (
