@@ -679,18 +679,22 @@ def test_reminder_intent_without_application_fails_closed() -> None:
     session = MagicMock(spec=Session)
     user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
 
-    # First call: user resolution; second call: link resolution; third call: latest_app (None)
+    # First: user; second: link; third: latest_app (None);
+    # fourth & fifth: target_job queries (None, None); sixth: existing reminder (None)
     session.execute.return_value.scalar_one_or_none.side_effect = [
         user,  # resolve user
         MagicMock(id=uuid.uuid4()),  # resolve link
         None,  # no latest application
+        None,  # no intake job
+        None,  # no app job
+        None,  # no existing reminder
     ]
 
     inbound = InboundMessage(
         sender=ChannelIdentity(channel="whatsapp", external_id="5511999999999"),
         provider_message_id="msg_rem_1",
         received_at=datetime.now(UTC),
-        text="me lembra de acompanhar a candidatura",
+        text="me lembra de acompanhar a candidatura daqui a 3 dias",
     )
 
     outbox_mock = MagicMock()
@@ -1017,7 +1021,7 @@ def test_application_kit_after_applied_conversational_regression() -> None:
         assert apps[0].status.value == ApplicationStatus.APPLIED.value
         t1 = apps[0].submitted_at
         assert t1 is not None
-        assert "APPLIED" in queued_messages[-1].message_text
+        assert "enviada" in queued_messages[-1].message_text.lower()
 
         # Message 3: "quero me candidatar" again with a new provider_message_id
         inbound_3 = InboundMessage(

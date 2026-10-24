@@ -323,7 +323,7 @@ Estado atual dos work packages:
 
 **Execução Operacional Ativa:**
 **WHATSAPP_LIVE_GATE (EasyPanel Staging & Traefik Ingress Authorization, ADR-0016, D-058)**:
-- Staging control plane: EasyPanel no servidor Linux do owner (projeto `julia`);
+- Staging control plane: EasyPanel no servidor Linux do owner (projeto `minimenu`);
 - Ingress público: EasyPanel Traefik HTTPS (`https://tapjob-api-julia.gdxvyl.easypanel.host`, `/ready` HTTP 200);
 - Serviços dedicados isolados em execução: `tapjob-postgres` (PostgreSQL 16, backup diário local `0 0 * * *`), `tapjob-redis` (Redis 7), `tapjob-api`, `tapjob-worker` (concurrency=2), `tapjob-beat` (volume persistente `/data/celerybeat`), `tapjob-migrate` (migração concluída na revisão 0013, stopped);
 - Contrato de driver de banco: `postgresql+psycopg://` (psycopg 3 síncrono);

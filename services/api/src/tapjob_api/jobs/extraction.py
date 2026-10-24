@@ -8,6 +8,15 @@ from tapjob_api.jobs.errors import JobPageRequiresManualPasteError
 from tapjob_api.jobs.normalization import clean_description_text
 
 _TITLE_SEPARATOR_RE = re.compile(r"\s+[-|–—•]\s+|\s+at\s+", re.IGNORECASE)  # noqa: RUF001
+_LINKEDIN_HIRING_RE = re.compile(
+    r"^(?P<company>.+?)\s+(?:hiring|contratando)\s+(?P<title>.+?)"
+    r"(?:\s+(?:in|em)\s+(?P<location>[^|]+))?\s*(?:[|\-–—]\s*LinkedIn)?$",  # noqa: RUF001
+    re.IGNORECASE,
+)
+_TRAILING_LINKEDIN_RE = re.compile(
+    r"\s*[|\-–—]\s*LinkedIn\b.*$|\s*\(LinkedIn\)$",  # noqa: RUF001
+    re.IGNORECASE,
+)
 _META_PROPERTY_RE = re.compile(
     r'<meta\s+[^>]*?(?:property|name)=["\']([^"\']+)["\'][^>]*?content=["\']([^"\']*)["\']',
     re.IGNORECASE,
@@ -68,6 +77,55 @@ def _find_job_posting_ld_json(data: object) -> dict[str, object] | None:
     return None
 
 
+def sanitize_job_title_and_company(
+    candidate_title: str,
+    candidate_company: str,
+    location: str | None = None,
+) -> tuple[str, str, str | None]:
+    """Sanitizes raw SEO/HTML title tags, LinkedIn patterns, and company names.
+    E.g. transforms LinkedIn SEO titles into clean title and company.
+    """
+    clean_title = candidate_title.strip()
+    clean_comp = candidate_company.strip()
+
+    # 1. Match explicit LinkedIn hiring pattern
+    m_hiring = _LINKEDIN_HIRING_RE.match(clean_title)
+    if m_hiring:
+        extracted_comp = m_hiring.group("company").strip()
+        extracted_title = m_hiring.group("title").strip()
+        extracted_loc = m_hiring.group("location").strip() if m_hiring.group("location") else None
+
+        clean_title = extracted_title
+        if not clean_comp or clean_comp.lower() in (
+            "linkedin",
+            "linkedin.com",
+            "unknown organization",
+        ):
+            clean_comp = extracted_comp
+        if not location and extracted_loc:
+            location = extracted_loc
+
+    # 2. Strip trailing '| LinkedIn', '- LinkedIn', '(LinkedIn)'
+    clean_title = _TRAILING_LINKEDIN_RE.sub("", clean_title).strip()
+    clean_comp = _TRAILING_LINKEDIN_RE.sub("", clean_comp).strip()
+
+    # 3. If company still LinkedIn or empty, check if title has separator 'Title - Company'
+    invalid_comp_names = ("linkedin", "linkedin.com", "unknown organization")
+    if (not clean_comp or clean_comp.lower() in invalid_comp_names) and _TITLE_SEPARATOR_RE.search(
+        clean_title
+    ):
+        parts = _TITLE_SEPARATOR_RE.split(clean_title, maxsplit=1)
+        if len(parts) == 2 and len(parts[0]) > 2 and len(parts[1]) > 2:
+            clean_title = parts[0].strip()
+            clean_comp = parts[1].strip()
+
+    # 4. Fallback if company is still empty
+    if not clean_comp:
+        clean_comp = "Unknown Organization"
+
+    return clean_title, clean_comp, location
+
+
 def extract_job_from_html(html_text: str) -> ExtractedJobDetails:
     """Extract job title, company name, and description from HTML document."""
     # 1. Attempt JSON-LD Schema.org JobPosting
@@ -104,11 +162,14 @@ def extract_job_from_html(html_text: str) -> ExtractedJobDetails:
                         location = str(locality)
 
             if title and company_name and len(cleaned_desc) >= 30:
+                s_title, s_comp, s_loc = sanitize_job_title_and_company(
+                    title, company_name, location
+                )
                 return ExtractedJobDetails(
-                    title=title,
-                    company_name=company_name,
+                    title=s_title[:255],
+                    company_name=s_comp[:255],
                     description=cleaned_desc,
-                    location=location,
+                    location=s_loc,
                     is_source_declared=True,
                 )
 
@@ -175,10 +236,14 @@ def extract_job_from_html(html_text: str) -> ExtractedJobDetails:
             "Please paste the job description manually."
         )
 
+    sanitized_title, sanitized_company, sanitized_loc = sanitize_job_title_and_company(
+        candidate_title, candidate_company, None
+    )
+
     return ExtractedJobDetails(
-        title=candidate_title[:255],
-        company_name=(candidate_company or "Unknown Organization")[:255],
+        title=sanitized_title[:255],
+        company_name=sanitized_company[:255],
         description=description,
-        location=None,
+        location=sanitized_loc,
         is_source_declared=bool(og_title or og_desc),
     )

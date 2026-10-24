@@ -47,6 +47,7 @@
     "@hey-api/json-schema-ref-parser": {
       "js-yaml": "4.3.2"
     },
-    "@grpc/grpc-js": "1.14.5"
+    "@grpc/grpc-js": "1.14.5",
+    "zod": "4.6.7"
   }
 }

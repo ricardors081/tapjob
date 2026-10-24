@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 from urllib.parse import urlparse
@@ -121,6 +122,7 @@ class ConversationalIntent(StrEnum):
     GREETING_OR_RETURN = "GREETING_OR_RETURN"
     AFFIRMATIVE_CONTEXTUAL = "AFFIRMATIVE_CONTEXTUAL"
     TEXT_EXPERIENCE = "TEXT_EXPERIENCE"
+    PROFILE_QUERY = "PROFILE_QUERY"
     JOB_TEXT_INTAKE = "JOB_TEXT_INTAKE"
     JOB_URL_INTAKE = "JOB_URL_INTAKE"
     CLARIFICATION_NEEDED = "CLARIFICATION_NEEDED"
@@ -281,17 +283,19 @@ def classify_url_intent(url: str, full_text: str = "") -> SemanticInterpretation
     )
 
 
-def is_pasted_job_text_normalized(clean: str, raw_len: int) -> bool:
+def is_pasted_job_text_normalized(clean: str, raw_len: int = 0) -> bool:
     """Detects whether clean normalized text represents a pasted job description."""
+    norm = normalize_text(clean)
+    effective_len = raw_len or len(clean)
     if (
-        clean.startswith("vaga ")
-        or clean.startswith("oportunidade ")
-        or clean.startswith("vaga:")
-        or clean.startswith("oportunidade:")
+        norm.startswith("vaga ")
+        or norm.startswith("oportunidade ")
+        or norm.startswith("vaga:")
+        or norm.startswith("oportunidade:")
     ):
         return True
-    return raw_len > 80 and any(
-        t in clean
+    return effective_len > 80 and any(
+        t in norm
         for t in (
             "requisitos",
             "responsabilidades",
@@ -308,9 +312,11 @@ def is_pasted_job_text_normalized(clean: str, raw_len: int) -> bool:
     )
 
 
-def is_candidate_text_experience(clean: str, raw_len: int) -> bool:
+def is_candidate_text_experience(clean: str, raw_len: int = 0) -> bool:
     """Detects whether clean text describes a candidate's background, skills, or experience."""
-    if is_pasted_job_text_normalized(clean, raw_len):
+    norm = normalize_text(clean)
+    effective_len = raw_len or len(clean)
+    if is_pasted_job_text_normalized(norm, effective_len):
         return False
     exp_markers = (
         "tenho experiencia",
@@ -319,8 +325,26 @@ def is_candidate_text_experience(clean: str, raw_len: int) -> bool:
         "anos de experiencia",
         "trabalho como",
         "trabalhei como",
+        "trabalho com",
+        "trabalhei com",
+        "trabalho usando",
+        "trabalhei usando",
         "trabalho na",
         "trabalhei na",
+        "atuo com",
+        "atuei com",
+        "atuo como",
+        "atuo na area",
+        "uso profissionalmente",
+        "tenho dominio de",
+        "tenho dominio em",
+        "minha stack e",
+        "minha stack:",
+        "minha stack atual",
+        "venho trabalhando com",
+        "venho atuando com",
+        "experiencia com",
+        "experiencia em",
         "sou desenvolvedor",
         "sou desenvolvedora",
         "sou engenheiro",
@@ -329,14 +353,15 @@ def is_candidate_text_experience(clean: str, raw_len: int) -> bool:
         "minhas habilidades",
         "minhas competencias",
         "meu historico",
-        "atuo como",
-        "atuo na area",
         "formado em",
         "graduado em",
     )
-    if any(m in clean for m in exp_markers):
+    if any(m in norm for m in exp_markers):
         return True
-    return bool(re.search(r"\b\d+\s+anos\s+(?:de\s+)?(?:experiencia|atuacao|carreira)\b", clean))
+    return bool(
+        re.search(r"\b\d+\s+anos\s+(?:de\s+)?(?:experiencia|atuacao|carreira)\b", norm)
+        or re.search(r"\b(?:trabalh\w*|atu\w*)\s+com\b.*?\b(?:ha|a)?\s*\d+\s+anos\b", norm)
+    )
 
 
 def extract_single_action_details(clean: str) -> tuple[str, int | None, str | None]:
@@ -381,6 +406,82 @@ def extract_skills_from_text(text: str) -> list[str]:
         if re.search(r"\b" + re.escape(skill_clean) + r"\b", lower):
             found.append(skill)
     return found
+
+
+def parse_natural_reminder_time(
+    text: str,
+    base_time: datetime | None = None,
+) -> tuple[datetime | None, str | None]:
+    """Deterministically extracts relative or named reminder times from PT-BR natural text.
+
+    Supported patterns:
+    - 'daqui (a)? X minuto(s)' -> base_time + X minutes
+    - 'daqui (a)? X hora(s)' -> base_time + X hours
+    - 'daqui (a)? X dia(s)' -> base_time + X days
+    - 'amanhã' / 'amanha' -> base_time + 1 day
+    - 'daqui a pouco' -> base_time + 1 hour
+    - 'semana que vem' / 'próxima semana' -> base_time + 7 days
+    """
+    if base_time is None:
+        base_time = datetime.now(UTC)
+
+    clean = normalize_text(text)
+
+    # 1. 'daqui (a)? X minuto(s)'
+    m = re.search(r"\bdaqui\s+(?:a\s+)?(\d+)\s*minuto", clean)
+    if m:
+        mins = int(m.group(1))
+        unit = "minuto" if mins == 1 else "minutos"
+        return base_time + timedelta(minutes=mins), f"daqui a {mins} {unit}"
+
+    # 2. 'daqui (a)? X hora(s)'
+    m = re.search(r"\bdaqui\s+(?:a\s+)?(\d+)\s*hora", clean)
+    if m:
+        hrs = int(m.group(1))
+        unit = "hora" if hrs == 1 else "horas"
+        return base_time + timedelta(hours=hrs), f"daqui a {hrs} {unit}"
+
+    # 3. 'daqui (a)? X dia(s)'
+    m = re.search(r"\bdaqui\s+(?:a\s+)?(\d+)\s*dia", clean)
+    if m:
+        days = int(m.group(1))
+        unit = "dia" if days == 1 else "dias"
+        return base_time + timedelta(days=days), f"daqui a {days} {unit}"
+
+    # 4. 'amanhã' / 'amanha'
+    if "amanha" in clean or "amanhã" in clean:
+        return base_time + timedelta(days=1), "amanhã"
+
+    # 5. 'daqui a pouco'
+    if "daqui a pouco" in clean:
+        return base_time + timedelta(hours=1), "daqui a 1 hora"
+
+    # 6. 'semana que vem' / 'próxima semana'
+    if "semana que vem" in clean or "proxima semana" in clean:
+        return base_time + timedelta(days=7), "na próxima semana"
+
+    return None, None
+
+
+def is_waiting_for_reminder_time_prompt(prompt: str | None) -> bool:
+    """Checks whether the last assistant prompt indicated waiting for reminder time definition."""
+    if not prompt:
+        return False
+    p_norm = normalize_text(prompt)
+    if "lembrete agendado com sucesso" in p_norm:
+        return False
+    if "lembrete" in p_norm:
+        inquiry_patterns = (
+            "para quando",
+            "quando voce gostaria",
+            "momento desejado",
+            "agendar esse lembrete",
+            "agendar o lembrete",
+            "definir o horario",
+            "horario do lembrete",
+        )
+        return any(pat in p_norm for pat in inquiry_patterns)
+    return False
 
 
 def is_explicit_privacy_inquiry(clean: str, raw_len: int = 0) -> bool:
@@ -602,6 +703,20 @@ def interpret_conversational_message(
 
     # Contextual confirmation phrases (require active pending fact review)
     contextual_conf_terms = (
+        "sim",
+        "pode",
+        "claro",
+        "confirma",
+        "pode confirmar",
+        "pode adicionar",
+        "pode incluir",
+        "pode colocar",
+        "esta certo",
+        "ta certo",
+        "isso mesmo",
+        "isso ai",
+        "exato",
+        "isso",
         "tudo certo, pode salvar meus dados",
         "tudo certo pode salvar meus dados",
         "tudo certo pode salvar",
@@ -615,13 +730,10 @@ def interpret_conversational_message(
         "salvar perfil",
         "salvar informacoes",
         "salvar informacao",
-        "pode confirmar",
-        "ta certo",
         "tudo certo",
         "tudo ok",
         "perfeito",
         "ta perfeito",
-        "esta certo",
         "show de bola salva",
         "blz pode confirmar",
         "pode cadastrar",
@@ -629,6 +741,9 @@ def interpret_conversational_message(
         "salvar",
         "ok salvar",
         "ta ok",
+        "adicionar",
+        "concordo",
+        "aprovo",
     )
     is_contextual_conf = has_pending_review and any(t in clean for t in contextual_conf_terms)
 
@@ -638,6 +753,51 @@ def interpret_conversational_message(
             intent=ConversationalIntent.FACT_CONFIRM_ALL,
             confidence=IntentConfidence.HIGH,
             context_used=ctx_tag,
+        )
+
+    # 6.5 Profile Information Query (Finding 5)
+    profile_query_terms = (
+        "o que voce sabe sobre meu perfil",
+        "o que voce sabe sobre mim",
+        "o que sabe sobre meu perfil",
+        "o que sabe sobre mim",
+        "como esta meu perfil",
+        "como ta meu perfil",
+        "o que tem no meu perfil",
+        "o que tem em meu perfil",
+        "quais informacoes profissionais voce tem minhas",
+        "quais informacoes voce tem sobre mim",
+        "quais informacoes voce tem do meu perfil",
+        "quais dados voce tem sobre mim",
+        "quais dados voce tem do meu perfil",
+        "me mostra meu perfil",
+        "mostrar meu perfil",
+        "mostra meu perfil",
+        "ver meu perfil",
+        "ver perfil",
+        "consultar meu perfil",
+        "consultar perfil",
+        "informacoes do meu perfil",
+        "dados do meu perfil",
+    )
+    if any(t in clean for t in profile_query_terms) or (
+        "perfil" in clean
+        and any(
+            w in clean
+            for w in (
+                "como esta",
+                "como ta",
+                "o que tem",
+                "me mostra",
+                "mostra",
+                "o que sabe",
+            )
+        )
+    ):
+        return SemanticInterpretation(
+            intent=ConversationalIntent.PROFILE_QUERY,
+            confidence=IntentConfidence.HIGH,
+            context_used="profile_query_pattern",
         )
 
     # 7. Application Status Query
@@ -733,6 +893,26 @@ def interpret_conversational_message(
             confidence=IntentConfidence.HIGH,
             context_used="reminder_pattern",
         )
+
+    # 10.1 Reminder Conversational Continuity (Turn 2 following reminder clarification prompt)
+    if context is not None:
+        is_pending_reminder_time = False
+        if context.last_routed_intent == ConversationalIntent.REMINDER_FOLLOWUP:
+            if context.last_assistant_prompt is None or is_waiting_for_reminder_time_prompt(
+                context.last_assistant_prompt
+            ):
+                is_pending_reminder_time = True
+        elif is_waiting_for_reminder_time_prompt(context.last_assistant_prompt):
+            is_pending_reminder_time = True
+
+        if is_pending_reminder_time:
+            parsed_time, _ = parse_natural_reminder_time(text)
+            if parsed_time is not None:
+                return SemanticInterpretation(
+                    intent=ConversationalIntent.REMINDER_FOLLOWUP,
+                    confidence=IntentConfidence.HIGH,
+                    context_used="context:pending_reminder_time_continuation",
+                )
 
     # 11. Conversational Application Request
     apply_terms = (

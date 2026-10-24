@@ -554,12 +554,14 @@ def test_conversational_e2e_canary_vertical_slice(_identity_schema_ready: None) 
                 session.execute(select(Job).where(Job.title.ilike("%Engenheiro%"))).scalars().all()
             )
             assert len(jobs) >= 1
-            assert "Match Score WP2.2" in (fake_channel.sent_messages[-1].text or "")
+            assert "Compatibilidade" in (fake_channel.sent_messages[-1].text or "")
+            assert "WP2.2" not in (fake_channel.sent_messages[-1].text or "")
 
             # Step 5: Mensagem pedindo análise -> MatchResult explanation
             post_webhook_and_process(client, text="analisa essa vaga")
             session.expire_all()
-            assert "Análise detalhada" in (fake_channel.sent_messages[-1].text or "")
+            assert "Compatibilidade" in (fake_channel.sent_messages[-1].text or "")
+            assert "WP2.2" not in (fake_channel.sent_messages[-1].text or "")
 
             # Step 6: Mensagem pedindo candidatura -> Grounded Tailoring + Kit + Application
             kit_msg_id = f"wamid_conv_kit_{uuid.uuid4().hex[:8]}"
@@ -618,7 +620,9 @@ def test_conversational_e2e_canary_vertical_slice(_identity_schema_ready: None) 
             assert current_app.submitted_at == submitted_at_t1  # Preserved submitted_at == T1
 
             # Step 7: Mensagem pedindo reminder -> Scheduled Reminder -> Outbox delivery
-            post_webhook_and_process(client, text="me lembra de acompanhar a candidatura")
+            post_webhook_and_process(
+                client, text="me lembra de acompanhar a candidatura daqui a 3 dias"
+            )
             session.expire_all()
             reminders: list[Reminder] = list(
                 session.execute(select(Reminder).where(Reminder.user_id == user.id)).scalars().all()
@@ -1119,9 +1123,8 @@ def test_first_contact_job_url_and_replays_vertical_slice(_identity_schema_ready
             session.commit()
             assert len(fake_channel.sent_messages) >= 1
             last_msg = fake_channel.sent_messages[-1]
-            assert "Vaga analisada" in (last_msg.text or "") or "Match Score WP2.2" in (
-                last_msg.text or ""
-            )
+            assert "Compatibilidade" in (last_msg.text or "")
+            assert "WP2.2" not in (last_msg.text or "")
 
             initial_outbox_count = len(
                 list(
