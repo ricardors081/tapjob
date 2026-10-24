@@ -1108,3 +1108,105 @@ def test_application_kit_interviewing_status_aware() -> None:
     assert "entrevistas" in resp_text
     # Finding 5: strictly no contradictory CTA
     assert "já me candidatei" not in resp_text
+
+
+def test_sanitized_real_fixture_media_pipeline_integration() -> None:
+    """End-to-end media pipeline integration test with sanitized real Human Acceptance fixture.
+
+    Proves:
+    1. EvolutionAdapter.parse_inbound parses sanitized real payload without crash.
+    2. channel_adapter.retrieve_media is invoked with doc_att and message_id="3A8424FAE89C98FF36B6".
+    3. tool_ingest_resume is invoked with downloaded PDF bytes and filename="curriculo - teste.pdf".
+    4. Outbox response message is queued confirming receipt ("Recebemos seu currículo").
+    """
+    import asyncio
+    import json
+
+    from fixtures.evolution_real_payload_sanitized import (
+        make_sanitized_pdf_document_webhook_payload,
+    )
+
+    from tapjob_api.messaging.evolution_adapter import EvolutionAdapter
+    from tapjob_api.ports._common import CallContext
+
+    # 1. Parse using EvolutionAdapter
+    adapter = EvolutionAdapter("https://evolution.test.local", "secret", "tapjob")
+    ctx = CallContext.with_timeout(correlation_id="corr-real-pipe", timeout_seconds=10.0)
+    raw_payload = make_sanitized_pdf_document_webhook_payload()
+    inbound_messages = asyncio.run(adapter.parse_inbound(json.dumps(raw_payload).encode(), {}, ctx))
+    assert len(inbound_messages) == 1
+    inbound_msg = inbound_messages[0]
+
+    session = MagicMock(spec=Session)
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    session.execute.return_value.scalar_one_or_none.return_value = user
+
+    fake_import = {
+        "status": ImportStatus.READY_FOR_REVIEW.value,
+        "resume_import_id": str(uuid.uuid4()),
+        "candidate_count": 3,
+        "candidate_facts": [{"id": "f1"}, {"id": "f2"}, {"id": "f3"}],
+    }
+
+    fake_channel = FakeMessagingChannel()
+    valid_pdf_bytes = b"%PDF-1.4 test resume valid content"
+    fake_channel.retrieve_media = AsyncMock(return_value=valid_pdf_bytes)  # type: ignore[method-assign]
+    storage = InMemoryObjectStorage()
+
+    queued_messages: list[Any] = []
+
+    def fake_queue_response_message(
+        sess: Any,
+        *,
+        channel_identity_link_id: Any,
+        recipient_external_id: Any,
+        message_text: Any,
+        idempotency_key: Any,
+    ) -> MagicMock:
+        mock_msg = MagicMock()
+        mock_msg.idempotency_key = idempotency_key
+        mock_msg.message_text = message_text
+        queued_messages.append(mock_msg)
+        return mock_msg
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.tool_ingest_resume",
+            return_value=fake_import,
+        ) as mock_ingest,
+        patch(
+            "tapjob_api.messaging.orchestration.complete_inbound_effect",
+        ) as mock_complete_effect,
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            fake_queue_response_message,
+        ),
+    ):
+        keys = dispatch_inbound_message(
+            session,
+            redis_client=None,
+            inbound=inbound_msg,
+            provider_id=uuid.uuid4(),
+            channel_adapter=fake_channel,
+            storage=storage,
+            envelope_id=101,
+        )
+
+    assert len(keys) == 1
+    assert keys[0] == "doc_3A8424FAE89C98FF36B6"
+    assert fake_channel.retrieve_media.await_count == 1
+    _, kwargs = fake_channel.retrieve_media.call_args
+    assert kwargs.get("message_id") == "3A8424FAE89C98FF36B6"
+
+    # Ingestion was called with bytes and filename
+    mock_ingest.assert_called_once()
+    assert mock_ingest.call_args.kwargs["content"] == valid_pdf_bytes
+    assert mock_ingest.call_args.kwargs["filename"] == "curriculo - teste.pdf"
+    mock_complete_effect.assert_called_once()
+
+    # Outbox message queued
+    assert len(queued_messages) == 1
+    outbox_text = queued_messages[0].message_text
+    assert "Recebemos seu currículo" in outbox_text
+    assert "curriculo - teste.pdf" in outbox_text
+    assert "*3*" in outbox_text

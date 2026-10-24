@@ -28,7 +28,7 @@ from tapjob_api.messaging.evolution_adapter import EvolutionAdapter
 from tapjob_api.messaging.inbound import ProviderEventType
 from tapjob_api.messaging.inbound_service import record_inbound_event
 from tapjob_api.messaging.tasks import process_inbound_envelope_task
-from tapjob_api.ports._common import CallContext
+from tapjob_api.ports._common import CallContext, PortError, PortErrorCode
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +132,44 @@ async def whatsapp_webhook(
         api_key=settings.evolution_api_key or "secret",
         instance_name=instance_name,
     )
-    inbound_messages = await adapter.parse_inbound(body_bytes, dict(request.headers), ctx)
+    try:
+        inbound_messages = await adapter.parse_inbound(body_bytes, dict(request.headers), ctx)
+    except PortError as exc:
+        logger.warning(
+            "webhook.parse_inbound_port_error",
+            extra={
+                "correlation_id": correlation_id,
+                "provider": "evolution",
+                "error_class": type(exc).__name__,
+                "error_code": exc.code.value if hasattr(exc, "code") else str(exc),
+                "error_message": str(exc),
+            },
+        )
+        if exc.code == PortErrorCode.INVALID_REQUEST:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid webhook payload: {exc.message}",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Provider communication error during webhook ingestion",
+        ) from exc
+    except Exception as exc:
+        logger.error(
+            "webhook.parse_inbound_unexpected_error",
+            extra={
+                "correlation_id": correlation_id,
+                "provider": "evolution",
+                "error_class": type(exc).__name__,
+            },
+        )
+        # Evolution's default webhook retry policy treats HTTP 400 as non-retryable.
+        # Unexpected parser failures are server-side defects, not invalid provider payloads,
+        # so return a controlled 500 to preserve the provider's bounded retry behavior.
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Webhook ingestion failed unexpectedly",
+        ) from exc
 
     # 6. Atomic deduplication & commit accepted envelopes BEFORE async dispatch
     new_envelope_ids: list[int] = []
