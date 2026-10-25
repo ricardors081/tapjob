@@ -5,6 +5,7 @@ and mapped to one of these, then to a stable `ErrorCode`/reason code
 """
 
 from datetime import datetime
+from typing import Any
 
 
 class ResumeImportError(Exception):
@@ -104,3 +105,15 @@ class TransientProcessingError(ResumeImportError):
     tampering/corruption) still converges to terminal `FAILED` once `MAX_PROCESSING_ATTEMPTS` is
     exhausted, via the exact same bounded-retry machinery a flaky storage backend already uses --
     never a second, parallel retry mechanism."""
+
+
+class CrossDocumentConflictError(ResumeImportError):
+    """Raised when finalize_resume_import encounters unresolved cross-document conflicts between
+    accepted candidates and existing active profile facts."""
+
+    def __init__(self, conflicts: list[dict[str, Any]]) -> None:
+        self.conflicts = conflicts
+        super().__init__(
+            f"Cannot finalize resume import: {len(conflicts)} "
+            "cross-document conflict(s) require review"
+        )

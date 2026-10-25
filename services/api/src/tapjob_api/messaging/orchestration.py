@@ -88,6 +88,7 @@ from tapjob_api.resume_import import service as resume_import_service
 from tapjob_api.resume_import.candidates import CandidateKind
 from tapjob_api.resume_import.commands import CandidateReviewDecision, ReviewDecisionKind
 from tapjob_api.resume_import.errors import (
+    CrossDocumentConflictError,
     DocumentTooLargeError,
     EncryptedDocumentError,
     ImportLeaseActiveError,
@@ -169,6 +170,67 @@ def format_resume_failure_response(failure_code: str | ImportFailureCode | None)
         "Recebemos seu documento, mas não foi possível processá-lo no momento. "
         "Por favor, certifique-se de que o arquivo seja um PDF válido."
     )
+
+
+def format_cross_document_conflict_question(conflicts: list[dict[str, Any]]) -> str:
+    """Formats a user-facing WhatsApp message asking the user to resolve cross-document
+    conflicts.
+    """
+    count = len(conflicts)
+    info_word = "1 informação diferente" if count == 1 else f"{count} informações diferentes"
+    header = (
+        f"Atualizei as informações que estavam claras. "
+        f"Encontrei {info_word} do que já consta no seu perfil e preciso confirmar com você.\n\n"
+    )
+    details: list[str] = []
+    for c in conflicts:
+        fact_type = c.get("fact_type")
+        ex_val = c.get("existing_value") or {}
+        pr_val = c.get("proposed_value") or {}
+        if fact_type == "language":
+            lang = ex_val.get("language") or pr_val.get("language") or "Idioma"
+            if lang.lower() == "english":
+                lang = "Inglês"
+            elif lang.lower() == "spanish":
+                lang = "Espanhol"
+            ex_prof = ex_val.get("proficiency") or ""
+            pr_prof = pr_val.get("proficiency") or ""
+            prof_map = {
+                "intermediate": "intermediário",
+                "advanced": "avançado",
+                "basic": "básico",
+                "fluent": "fluente",
+                "native": "nativo",
+                "intermediario": "intermediário",
+                "avancado": "avançado",
+                "basico": "básico",
+            }
+            ex_prof_pt = prof_map.get(ex_prof.lower(), ex_prof)
+            pr_prof_pt = prof_map.get(pr_prof.lower(), pr_prof)
+            ex_str = f"{lang} {ex_prof_pt}".strip()
+            pr_str = f"{lang} {pr_prof_pt}".strip()
+            details.append(
+                f"No seu perfil consta {ex_str}, mas este currículo indica {pr_str}. "
+                "Qual informação está correta?"
+            )
+        elif fact_type == "experience":
+            title = ex_val.get("title") or pr_val.get("title") or "Cargo"
+            employer = ex_val.get("employer") or pr_val.get("employer") or "Empresa"
+            ex_end = ex_val.get("end")
+            pr_end = pr_val.get("end")
+            ex_status = "atual" if not ex_end else f"até {ex_end.get('year', '')}"
+            pr_status = "atual" if not pr_end else f"até {pr_end.get('year', '')}"
+            details.append(
+                f"No seu perfil consta {title} na {employer} ({ex_status}), mas este "
+                f"currículo indica {title} na {employer} ({pr_status}). "
+                "Qual informação está correta?"
+            )
+        else:
+            details.append(
+                f"No seu perfil consta {ex_val}, mas este currículo indica {pr_val}. "
+                "Qual informação está correta?"
+            )
+    return header + "\n\n".join(details)
 
 
 def reconcile_reserved_resume_import(
@@ -529,6 +591,7 @@ def resolve_user_conversation_context(
 
     has_pending_fact_review = False
     pending_facts_count = 0
+    pending_import_id = None
     try:
         pending_import = session.execute(
             select(ResumeImport)
@@ -541,6 +604,7 @@ def resolve_user_conversation_context(
         ).scalar_one_or_none()
         if pending_import is not None and isinstance(pending_import, ResumeImport):
             has_pending_fact_review = True
+            pending_import_id = str(pending_import.id)
             cands = getattr(pending_import, "candidates", None)
             pending_facts_count = len(cands) if cands and hasattr(cands, "__len__") else 0
     except Exception:
@@ -609,6 +673,7 @@ def resolve_user_conversation_context(
         profile_version=profile_version,
         has_pending_fact_review=has_pending_fact_review,
         pending_facts_count=pending_facts_count,
+        pending_import_id=pending_import_id,
         has_target_job=has_target_job,
         target_job_title=target_job_title,
         target_job_company=target_job_company,
@@ -1490,54 +1555,12 @@ def dispatch_inbound_message(
 
     action_type, extracted_idx, extracted_val = extract_single_action_details(normalize_text(text))
 
-    natural_confirm_terms = (
-        "sim",
-        "sim.",
-        "sim!",
-        "sim por favor",
-        "sim, por favor",
-        "pode adicionar",
-        "pode salvar",
-        "pode atualizar",
-        "atualiza",
-        "atualizar",
-        "confirmo",
-    )
-    is_potentially_natural_confirm = lower_text.strip() in natural_confirm_terms or any(
-        p in lower_text
-        for p in (
-            "pode adicionar",
-            "pode salvar",
-            "pode atualizar",
-            "atualiza o perfil",
-            "atualizar meu perfil",
-        )
-    )
-
-    has_active_review_context = False
-    if is_potentially_natural_confirm and user is not None:
-        try:
-            exec_res = session.execute(
-                select(func.count(ResumeImport.id)).where(
-                    ResumeImport.user_id == user.id,
-                    ResumeImport.status == ImportStatus.READY_FOR_REVIEW,
-                )
-            )
-            count_val = (
-                exec_res.scalar_one_or_none()
-                if hasattr(exec_res, "scalar_one_or_none")
-                else (exec_res.scalar() if hasattr(exec_res, "scalar") else None)
-            )
-            has_active_review_context = bool(isinstance(count_val, (int, float)) and count_val > 0)
-        except Exception:
-            has_active_review_context = False
-
-    is_natural_confirm = is_potentially_natural_confirm and has_active_review_context
+    is_natural_confirm = intent == ConversationalIntent.FACT_CONFIRM_ALL
 
     is_confirm_all = (
         not has_privacy_or_deletion_terms
         and (
-            intent == ConversationalIntent.FACT_CONFIRM_ALL
+            is_natural_confirm
             or any(
                 k in lower_text
                 for k in (
@@ -1548,7 +1571,6 @@ def dispatch_inbound_message(
                 )
             )
             or lower_text.strip() in ("confirmar", "confirmar.")
-            or is_natural_confirm
         )
         and not any(
             k in lower_text for k in ("rejeitar", "ignorar", "descartar", "editar", "corrigir")
@@ -1708,15 +1730,33 @@ def dispatch_inbound_message(
 
             latest_import = target_import
         else:
-            latest_import = session.execute(
-                select(ResumeImport)
-                .where(
-                    ResumeImport.user_id == user.id,
-                    ResumeImport.status == ImportStatus.READY_FOR_REVIEW,
-                )
-                .order_by(ResumeImport.created_at.desc())
-                .limit(1)
-            ).scalar_one_or_none()
+            target_import_id_str = (
+                interpretation.extracted_entities.get("target_import_id")
+                if isinstance(getattr(interpretation, "extracted_entities", None), dict)
+                else None
+            )
+            if target_import_id_str:
+                try:
+                    target_uuid = uuid.UUID(str(target_import_id_str))
+                    latest_import = session.execute(
+                        select(ResumeImport).where(
+                            ResumeImport.id == target_uuid,
+                            ResumeImport.user_id == user.id,
+                            ResumeImport.status == ImportStatus.READY_FOR_REVIEW,
+                        )
+                    ).scalar_one_or_none()
+                except Exception:
+                    latest_import = None
+            if latest_import is None:
+                latest_import = session.execute(
+                    select(ResumeImport)
+                    .where(
+                        ResumeImport.user_id == user.id,
+                        ResumeImport.status == ImportStatus.READY_FOR_REVIEW,
+                    )
+                    .order_by(ResumeImport.created_at.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
 
         if latest_import and latest_import.candidates:
             ordered_candidates = sorted(
@@ -1902,61 +1942,96 @@ def dispatch_inbound_message(
 
             if should_finalize:
                 try:
-                    if envelope_id is not None and existing_finalize_effect is None:
-                        # Durably reserve finalization intent BEFORE canonical finalize (Finding 1)
-                        reserve_inbound_effect(
-                            session,
-                            envelope_id=envelope_id,
-                            inbound_message_id=inbound.provider_message_id,
-                            effect_kind=InboundEffectKind.FINALIZE_REVIEW.value,
-                            resource_id=str(latest_import.id),
-                        )
-                        session.commit()
-
                     decisions = assemble_candidate_review_decisions(
                         ordered_candidates, drafts_by_cand_id
                     )
-                    current_truth = get_truth_snapshot(session, user=user)
-                    finalize_res = confirm_candidates_and_finalize(
-                        session,
-                        user=user,
-                        resume_import_id=latest_import.id,
-                        decisions=decisions,
-                        expected_profile_version=current_truth.profile_version,
-                    )
-                    session.commit()
-                    if _crash_hook_after_finalize_commit is not None:
-                        _crash_hook_after_finalize_commit()
 
-                    v_num = finalize_res.resume_version.profile_version
-                    all_rejected = all(d.decision == ReviewDecisionKind.REJECT for d in decisions)
-                    if envelope_id is not None:
-                        # Durably mark review finalization effect as COMPLETED (Finding 1)
-                        complete_inbound_effect(
+                    # Check for cross-document conflicts before reserving finalization effect
+                    accepted_pairs: list[tuple[ResumeImportCandidate, dict[str, Any]]] = []
+                    for cand in ordered_candidates:
+                        if cand.id not in drafts_by_cand_id:
+                            continue
+                        draft = drafts_by_cand_id[cand.id]
+                        if draft.decision == ReviewDecisionKind.REJECT.value:
+                            continue
+                        if cand.candidate_kind in ("headline", "summary"):
+                            continue
+                        chosen_val: dict[str, Any] = (
+                            dict(draft.edited_value)
+                            if draft.decision == ReviewDecisionKind.EDIT_ACCEPT.value
+                            and isinstance(draft.edited_value, dict)
+                            else dict(cand.value_json or {})
+                        )
+                        accepted_pairs.append((cand, chosen_val))
+                    conflicts = resume_import_service.detect_cross_document_conflicts(
+                        session, user=user, resume_import=latest_import, candidates=accepted_pairs
+                    )
+                    if conflicts:
+                        meta = dict(latest_import.review_metadata or {})
+                        meta["cross_document_conflicts"] = conflicts
+                        meta["conflict_count"] = len(conflicts)
+                        latest_import.review_metadata = meta
+                        session.commit()
+                        response_text = format_cross_document_conflict_question(conflicts)
+                    else:
+                        if envelope_id is not None and existing_finalize_effect is None:
+                            # Durably reserve finalization intent BEFORE canonical
+                            # finalize (Finding 1)
+                            reserve_inbound_effect(
+                                session,
+                                envelope_id=envelope_id,
+                                inbound_message_id=inbound.provider_message_id,
+                                effect_kind=InboundEffectKind.FINALIZE_REVIEW.value,
+                                resource_id=str(latest_import.id),
+                            )
+                            session.commit()
+
+                        current_truth = get_truth_snapshot(session, user=user)
+                        finalize_res = confirm_candidates_and_finalize(
                             session,
-                            envelope_id=envelope_id,
-                            effect_kind=InboundEffectKind.FINALIZE_REVIEW.value,
-                            expected_resource_id=str(latest_import.id),
-                            effect_payload={
-                                "profile_version": v_num,
-                                "all_rejected": all_rejected,
-                            },
+                            user=user,
+                            resume_import_id=latest_import.id,
+                            decisions=decisions,
+                            expected_profile_version=current_truth.profile_version,
                         )
                         session.commit()
-                    if is_reject_all or all_rejected:
-                        response_text = (
-                            "Fatos do currículo rejeitados com sucesso.\n"
-                            "Nenhuma informação foi adicionada ao seu perfil profissional.\n"
-                            "Você pode nos enviar um novo documento quando desejar!"
+                        if _crash_hook_after_finalize_commit is not None:
+                            _crash_hook_after_finalize_commit()
+
+                        v_num = finalize_res.resume_version.profile_version
+                        all_rejected = all(
+                            d.decision == ReviewDecisionKind.REJECT for d in decisions
                         )
-                    else:
-                        response_text = (
-                            f"Informações confirmadas com sucesso!\n"
-                            f"Seu perfil profissional foi atualizado (Versão {v_num}).\n"
-                            "Agora você pode nos enviar vagas (link ou texto) para analisarmos!"
-                        )
+                        if envelope_id is not None:
+                            # Durably mark review finalization effect as COMPLETED (Finding 1)
+                            complete_inbound_effect(
+                                session,
+                                envelope_id=envelope_id,
+                                effect_kind=InboundEffectKind.FINALIZE_REVIEW.value,
+                                expected_resource_id=str(latest_import.id),
+                                effect_payload={
+                                    "profile_version": v_num,
+                                    "all_rejected": all_rejected,
+                                },
+                            )
+                            session.commit()
+                        if is_reject_all or all_rejected:
+                            response_text = (
+                                "Fatos do currículo rejeitados com sucesso.\n"
+                                "Nenhuma informação foi adicionada ao seu perfil profissional.\n"
+                                "Você pode nos enviar um novo documento quando desejar!"
+                            )
+                        else:
+                            response_text = (
+                                f"Informações confirmadas com sucesso!\n"
+                                f"Seu perfil profissional foi atualizado (Versão {v_num}).\n"
+                                "Agora você pode nos enviar vagas (link ou texto) para analisarmos!"
+                            )
                 except SoftTimeLimitExceeded:
                     raise
+                except CrossDocumentConflictError as conflict_err:
+                    session.commit()
+                    response_text = format_cross_document_conflict_question(conflict_err.conflicts)
                 except (IncompleteCandidateReviewError, InvalidCandidateReviewDraftError) as err:
                     logger.warning(
                         "orchestration.review_finalize_refused", extra={"error": str(err)}

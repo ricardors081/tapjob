@@ -18,6 +18,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, cast
 
+import pytest
 from sqlalchemy import Table, create_engine, event, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -39,6 +40,7 @@ from tapjob_api.resume_import.commands import (
     FinalizeResumeImportCommand,
     ReviewDecisionKind,
 )
+from tapjob_api.resume_import.errors import CrossDocumentConflictError
 from tapjob_api.resume_import.models import (
     CandidateReviewDraft,
     CandidateReviewState,
@@ -408,7 +410,7 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
         assert resume_version.profile_version == 4
 
 
-def test_cross_document_language_proficiency_change_not_deduped() -> None:
+def test_cross_document_language_conflict_does_not_finalize_success() -> None:
     session_factory = _setup_sqlite_db()
 
     with session_factory() as session:
@@ -486,48 +488,37 @@ def test_cross_document_language_proficiency_change_not_deduped() -> None:
         session.add(cand2)
         session.commit()
 
-        res2 = resume_import_service.finalize_resume_import(
-            session,
-            user=u,
-            import_id=imp2.id,
-            command=FinalizeResumeImportCommand(
-                expected_profile_version=1,
-                decisions=[
-                    CandidateReviewDecision(
-                        candidate_id=cand2.id, decision=ReviewDecisionKind.ACCEPT
-                    )
-                ],
-            ),
-        )
+        # Fails closed with CrossDocumentConflictError -- does not report success
+        with pytest.raises(CrossDocumentConflictError) as exc_info:
+            resume_import_service.finalize_resume_import(
+                session,
+                user=u,
+                import_id=imp2.id,
+                command=FinalizeResumeImportCommand(
+                    expected_profile_version=1,
+                    decisions=[
+                        CandidateReviewDecision(
+                            candidate_id=cand2.id, decision=ReviewDecisionKind.ACCEPT
+                        )
+                    ],
+                ),
+            )
         session.commit()
-        assert res2.resume_version.profile_version == 2
+        assert len(exc_info.value.conflicts) == 1
         imp2_id = imp2.id
 
-    # Verification: Conflict is created for review, existing fact is preserved,
-    # ACTIVE English count remains 1 until human resolution
+    # Verification: Import remains READY_FOR_REVIEW (non-terminal)
     with session_factory() as session:
-        active_langs = list(
-            session.scalars(
-                select(ProfileFact).where(
-                    ProfileFact.user_id == user_id,
-                    ProfileFact.fact_type == FactType.LANGUAGE,
-                    ProfileFact.status == FactStatus.ACTIVE,
-                )
-            )
-        )
-        assert len(active_langs) == 1
-        assert active_langs[0].value_json.get("proficiency") == "intermediate"
-
         imp2_db = session.get(ResumeImport, imp2_id)
         assert imp2_db is not None
+        assert imp2_db.status == ImportStatus.READY_FOR_REVIEW
         assert imp2_db.review_metadata is not None
         conflicts = imp2_db.review_metadata.get("cross_document_conflicts", [])
         assert len(conflicts) == 1
         assert list(conflicts[0]["semantic_identity"]) == ["language", "english"]
-        assert conflicts[0]["proposed_value"]["proficiency"] == "advanced"
 
 
-def test_cross_document_current_role_end_change_creates_conflict() -> None:
+def test_cross_document_experience_conflict_does_not_finalize_success() -> None:
     session_factory = _setup_sqlite_db()
 
     with session_factory() as session:
@@ -617,47 +608,468 @@ def test_cross_document_current_role_end_change_creates_conflict() -> None:
         session.add(cand2)
         session.commit()
 
+        with pytest.raises(CrossDocumentConflictError) as exc_info:
+            resume_import_service.finalize_resume_import(
+                session,
+                user=u,
+                import_id=imp2.id,
+                command=FinalizeResumeImportCommand(
+                    expected_profile_version=1,
+                    decisions=[
+                        CandidateReviewDecision(
+                            candidate_id=cand2.id, decision=ReviewDecisionKind.ACCEPT
+                        )
+                    ],
+                ),
+            )
+        session.commit()
+        assert len(exc_info.value.conflicts) == 1
+        imp2_id = imp2.id
+
+    with session_factory() as session:
+        imp2_db = session.get(ResumeImport, imp2_id)
+        assert imp2_db is not None
+        assert imp2_db.status == ImportStatus.READY_FOR_REVIEW
+        assert imp2_db.review_metadata is not None
+        conflicts = imp2_db.review_metadata.get("cross_document_conflicts", [])
+        assert len(conflicts) == 1
+
+
+def test_conflict_preserves_existing_active_fact() -> None:
+    session_factory = _setup_sqlite_db()
+
+    with session_factory() as session:
+        user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE, locale="pt-BR", timezone="UTC")
+        session.add(user)
+        session.commit()
+        user_id = user.id
+
+    # Import 1 with English Intermediate
+    with session_factory() as session:
+        u = session.get(User, user_id)
+        assert u is not None
+        imp1 = ResumeImport(
+            id=uuid.uuid4(),
+            user_id=u.id,
+            status=ImportStatus.READY_FOR_REVIEW,
+            original_filename="cv_v1.pdf",
+            media_type="application/pdf",
+            byte_size=1000,
+            checksum_sha256="checksum_v1",
+            storage_key="k1",
+        )
+        session.add(imp1)
+        c1 = ResumeImportCandidate(
+            id=uuid.uuid4(),
+            resume_import_id=imp1.id,
+            user_id=u.id,
+            candidate_kind="language",
+            value_json={"kind": "language", "language": "English", "proficiency": "intermediate"},
+            confidence=1.0,
+            review_state=CandidateReviewState.PENDING,
+        )
+        session.add(c1)
+        session.commit()
+
         resume_import_service.finalize_resume_import(
+            session,
+            user=u,
+            import_id=imp1.id,
+            command=FinalizeResumeImportCommand(
+                expected_profile_version=0,
+                decisions=[
+                    CandidateReviewDecision(candidate_id=c1.id, decision=ReviewDecisionKind.ACCEPT)
+                ],
+            ),
+        )
+        session.commit()
+
+    # Import 2 with English Advanced (causes conflict)
+    with session_factory() as session:
+        u = session.get(User, user_id)
+        assert u is not None
+        imp2 = ResumeImport(
+            id=uuid.uuid4(),
+            user_id=u.id,
+            status=ImportStatus.READY_FOR_REVIEW,
+            original_filename="cv_v2.pdf",
+            media_type="application/pdf",
+            byte_size=1100,
+            checksum_sha256="checksum_v2",
+            storage_key="k2",
+        )
+        session.add(imp2)
+        c2 = ResumeImportCandidate(
+            id=uuid.uuid4(),
+            resume_import_id=imp2.id,
+            user_id=u.id,
+            candidate_kind="language",
+            value_json={"kind": "language", "language": "English", "proficiency": "advanced"},
+            confidence=1.0,
+            review_state=CandidateReviewState.PENDING,
+        )
+        session.add(c2)
+        session.commit()
+
+        with pytest.raises(CrossDocumentConflictError):
+            resume_import_service.finalize_resume_import(
+                session,
+                user=u,
+                import_id=imp2.id,
+                command=FinalizeResumeImportCommand(
+                    expected_profile_version=1,
+                    decisions=[
+                        CandidateReviewDecision(
+                            candidate_id=c2.id, decision=ReviewDecisionKind.ACCEPT
+                        )
+                    ],
+                ),
+            )
+        session.commit()
+
+    # Verification: Existing fact remains strictly ACTIVE with original values
+    with session_factory() as session:
+        active_facts = list(
+            session.scalars(
+                select(ProfileFact).where(
+                    ProfileFact.user_id == user_id,
+                    ProfileFact.fact_type == FactType.LANGUAGE,
+                    ProfileFact.status == FactStatus.ACTIVE,
+                )
+            )
+        )
+        assert len(active_facts) == 1
+        assert active_facts[0].value_json.get("proficiency") == "intermediate"
+        assert active_facts[0].status == FactStatus.ACTIVE
+        assert active_facts[0].inactive_from_profile_version is None
+
+
+def test_conflict_proposed_fact_not_active() -> None:
+    session_factory = _setup_sqlite_db()
+
+    with session_factory() as session:
+        user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE, locale="pt-BR", timezone="UTC")
+        session.add(user)
+        session.commit()
+        user_id = user.id
+
+    with session_factory() as session:
+        u = session.get(User, user_id)
+        assert u is not None
+        imp1 = ResumeImport(
+            id=uuid.uuid4(),
+            user_id=u.id,
+            status=ImportStatus.READY_FOR_REVIEW,
+            original_filename="cv_v1.pdf",
+            media_type="application/pdf",
+            byte_size=1000,
+            checksum_sha256="checksum_v1",
+            storage_key="k1",
+        )
+        session.add(imp1)
+        c1 = ResumeImportCandidate(
+            id=uuid.uuid4(),
+            resume_import_id=imp1.id,
+            user_id=u.id,
+            candidate_kind="language",
+            value_json={"kind": "language", "language": "English", "proficiency": "intermediate"},
+            confidence=1.0,
+            review_state=CandidateReviewState.PENDING,
+        )
+        session.add(c1)
+        session.commit()
+
+        resume_import_service.finalize_resume_import(
+            session,
+            user=u,
+            import_id=imp1.id,
+            command=FinalizeResumeImportCommand(
+                expected_profile_version=0,
+                decisions=[
+                    CandidateReviewDecision(candidate_id=c1.id, decision=ReviewDecisionKind.ACCEPT)
+                ],
+            ),
+        )
+        session.commit()
+
+    # Import 2 with English Advanced (conflict)
+    with session_factory() as session:
+        u = session.get(User, user_id)
+        assert u is not None
+        imp2 = ResumeImport(
+            id=uuid.uuid4(),
+            user_id=u.id,
+            status=ImportStatus.READY_FOR_REVIEW,
+            original_filename="cv_v2.pdf",
+            media_type="application/pdf",
+            byte_size=1100,
+            checksum_sha256="checksum_v2",
+            storage_key="k2",
+        )
+        session.add(imp2)
+        c2 = ResumeImportCandidate(
+            id=uuid.uuid4(),
+            resume_import_id=imp2.id,
+            user_id=u.id,
+            candidate_kind="language",
+            value_json={"kind": "language", "language": "English", "proficiency": "advanced"},
+            confidence=1.0,
+            review_state=CandidateReviewState.PENDING,
+        )
+        session.add(c2)
+        session.commit()
+
+        with pytest.raises(CrossDocumentConflictError):
+            resume_import_service.finalize_resume_import(
+                session,
+                user=u,
+                import_id=imp2.id,
+                command=FinalizeResumeImportCommand(
+                    expected_profile_version=1,
+                    decisions=[
+                        CandidateReviewDecision(
+                            candidate_id=c2.id, decision=ReviewDecisionKind.ACCEPT
+                        )
+                    ],
+                ),
+            )
+        session.commit()
+
+    # Verification: Proposed value "advanced" is NEVER in ACTIVE facts
+    with session_factory() as session:
+        all_user_facts = list(
+            session.scalars(select(ProfileFact).where(ProfileFact.user_id == user_id))
+        )
+        advanced_facts = [
+            f for f in all_user_facts if f.value_json.get("proficiency") == "advanced"
+        ]
+        assert len(advanced_facts) == 0
+
+
+def test_conflict_remains_resolvable() -> None:
+    session_factory = _setup_sqlite_db()
+
+    with session_factory() as session:
+        user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE, locale="pt-BR", timezone="UTC")
+        session.add(user)
+        session.commit()
+        user_id = user.id
+
+    with session_factory() as session:
+        u = session.get(User, user_id)
+        assert u is not None
+        imp1 = ResumeImport(
+            id=uuid.uuid4(),
+            user_id=u.id,
+            status=ImportStatus.READY_FOR_REVIEW,
+            original_filename="cv_v1.pdf",
+            media_type="application/pdf",
+            byte_size=1000,
+            checksum_sha256="checksum_v1",
+            storage_key="k1",
+        )
+        session.add(imp1)
+        c1 = ResumeImportCandidate(
+            id=uuid.uuid4(),
+            resume_import_id=imp1.id,
+            user_id=u.id,
+            candidate_kind="language",
+            value_json={"kind": "language", "language": "English", "proficiency": "intermediate"},
+            confidence=1.0,
+            review_state=CandidateReviewState.PENDING,
+        )
+        session.add(c1)
+        session.commit()
+
+        resume_import_service.finalize_resume_import(
+            session,
+            user=u,
+            import_id=imp1.id,
+            command=FinalizeResumeImportCommand(
+                expected_profile_version=0,
+                decisions=[
+                    CandidateReviewDecision(candidate_id=c1.id, decision=ReviewDecisionKind.ACCEPT)
+                ],
+            ),
+        )
+        session.commit()
+
+    # Import 2 enters conflict
+    with session_factory() as session:
+        u = session.get(User, user_id)
+        assert u is not None
+        imp2 = ResumeImport(
+            id=uuid.uuid4(),
+            user_id=u.id,
+            status=ImportStatus.READY_FOR_REVIEW,
+            original_filename="cv_v2.pdf",
+            media_type="application/pdf",
+            byte_size=1100,
+            checksum_sha256="checksum_v2",
+            storage_key="k2",
+        )
+        session.add(imp2)
+        c2 = ResumeImportCandidate(
+            id=uuid.uuid4(),
+            resume_import_id=imp2.id,
+            user_id=u.id,
+            candidate_kind="language",
+            value_json={"kind": "language", "language": "English", "proficiency": "advanced"},
+            confidence=1.0,
+            review_state=CandidateReviewState.PENDING,
+        )
+        session.add(c2)
+        session.commit()
+        imp2_id = imp2.id
+        c2_id = c2.id
+
+        with pytest.raises(CrossDocumentConflictError):
+            resume_import_service.finalize_resume_import(
+                session,
+                user=u,
+                import_id=imp2.id,
+                command=FinalizeResumeImportCommand(
+                    expected_profile_version=1,
+                    decisions=[
+                        CandidateReviewDecision(
+                            candidate_id=c2.id, decision=ReviewDecisionKind.ACCEPT
+                        )
+                    ],
+                ),
+            )
+        session.commit()
+
+    # Conflict remains resolvable: user rejects the conflicting candidate
+    with session_factory() as session:
+        u = session.get(User, user_id)
+        assert u is not None
+        res = resume_import_service.finalize_resume_import(
+            session,
+            user=u,
+            import_id=imp2_id,
+            command=FinalizeResumeImportCommand(
+                expected_profile_version=1,
+                decisions=[
+                    CandidateReviewDecision(candidate_id=c2_id, decision=ReviewDecisionKind.REJECT)
+                ],
+            ),
+        )
+        session.commit()
+        assert res.resume_import.status == ImportStatus.FINALIZED
+
+    # Verification: Import transitioned to FINALIZED, conflict resolved
+    with session_factory() as session:
+        imp2_db = session.get(ResumeImport, imp2_id)
+        assert imp2_db is not None
+        assert imp2_db.status == ImportStatus.FINALIZED
+        if imp2_db.review_metadata:
+            assert "cross_document_conflicts" not in imp2_db.review_metadata
+
+
+def test_no_conflict_import_still_finalizes_normally() -> None:
+    session_factory = _setup_sqlite_db()
+
+    with session_factory() as session:
+        user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE, locale="pt-BR", timezone="UTC")
+        session.add(user)
+        session.commit()
+        user_id = user.id
+
+    # Import 1 with Python skill
+    with session_factory() as session:
+        u = session.get(User, user_id)
+        assert u is not None
+        imp1 = ResumeImport(
+            id=uuid.uuid4(),
+            user_id=u.id,
+            status=ImportStatus.READY_FOR_REVIEW,
+            original_filename="cv_v1.pdf",
+            media_type="application/pdf",
+            byte_size=1000,
+            checksum_sha256="checksum_v1",
+            storage_key="k1",
+        )
+        session.add(imp1)
+        c1 = ResumeImportCandidate(
+            id=uuid.uuid4(),
+            resume_import_id=imp1.id,
+            user_id=u.id,
+            candidate_kind="skill",
+            value_json={"kind": "skill", "name": "Python"},
+            confidence=1.0,
+            review_state=CandidateReviewState.PENDING,
+        )
+        session.add(c1)
+        session.commit()
+
+        resume_import_service.finalize_resume_import(
+            session,
+            user=u,
+            import_id=imp1.id,
+            command=FinalizeResumeImportCommand(
+                expected_profile_version=0,
+                decisions=[
+                    CandidateReviewDecision(candidate_id=c1.id, decision=ReviewDecisionKind.ACCEPT)
+                ],
+            ),
+        )
+        session.commit()
+
+    # Import 2 (different checksum) with Docker skill (different identity -> ADD, no conflict)
+    with session_factory() as session:
+        u = session.get(User, user_id)
+        assert u is not None
+        imp2 = ResumeImport(
+            id=uuid.uuid4(),
+            user_id=u.id,
+            status=ImportStatus.READY_FOR_REVIEW,
+            original_filename="cv_v2.pdf",
+            media_type="application/pdf",
+            byte_size=1100,
+            checksum_sha256="checksum_v2",
+            storage_key="k2",
+        )
+        session.add(imp2)
+        c2 = ResumeImportCandidate(
+            id=uuid.uuid4(),
+            resume_import_id=imp2.id,
+            user_id=u.id,
+            candidate_kind="skill",
+            value_json={"kind": "skill", "name": "Docker"},
+            confidence=1.0,
+            review_state=CandidateReviewState.PENDING,
+        )
+        session.add(c2)
+        session.commit()
+
+        res2 = resume_import_service.finalize_resume_import(
             session,
             user=u,
             import_id=imp2.id,
             command=FinalizeResumeImportCommand(
                 expected_profile_version=1,
                 decisions=[
-                    CandidateReviewDecision(
-                        candidate_id=cand2.id, decision=ReviewDecisionKind.ACCEPT
-                    )
+                    CandidateReviewDecision(candidate_id=c2.id, decision=ReviewDecisionKind.ACCEPT)
                 ],
             ),
         )
         session.commit()
-        imp2_id = imp2.id
+        assert res2.resume_import.status == ImportStatus.FINALIZED
+        assert res2.resume_version.profile_version == 2
 
-    # Verification: Conflict is created for review, existing fact is preserved,
-    # ACTIVE logical experience count remains 1 until human resolution
+    # Verification: Both Python and Docker are ACTIVE
     with session_factory() as session:
-        active_exps = list(
+        active_skills = list(
             session.scalars(
                 select(ProfileFact).where(
                     ProfileFact.user_id == user_id,
-                    ProfileFact.fact_type == FactType.EXPERIENCE,
+                    ProfileFact.fact_type == FactType.SKILL,
                     ProfileFact.status == FactStatus.ACTIVE,
                 )
             )
         )
-        assert len(active_exps) == 1
-        assert active_exps[0].value_json.get("end") is None
-
-        imp2_db = session.get(ResumeImport, imp2_id)
-        assert imp2_db is not None
-        assert imp2_db.review_metadata is not None
-        conflicts = imp2_db.review_metadata.get("cross_document_conflicts", [])
-        assert len(conflicts) == 1
-        assert list(conflicts[0]["semantic_identity"][:3]) == [
-            "experience",
-            "inpasa brasil",
-            "backend lead",
-        ]
+        skill_names = {s.value_json.get("name") for s in active_skills}
+        assert skill_names == {"Python", "Docker"}
 
 
 def test_confirm_all_cannot_accept_structural_conflict() -> None:

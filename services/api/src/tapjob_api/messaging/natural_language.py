@@ -137,6 +137,7 @@ class ConversationContext:
     profile_version: int = 0
     has_pending_fact_review: bool = False
     pending_facts_count: int = 0
+    pending_import_id: str | None = None
     has_target_job: bool = False
     target_job_title: str | None = None
     target_job_company: str | None = None
@@ -1085,9 +1086,13 @@ def interpret_conversational_message(
             # Context Case A: Pending Fact Review waiting for confirmation
             # Only resolves to FACT_CONFIRM_ALL if active prompt matches or no conflict exists
             if not is_unrelated_prompt and context.has_pending_fact_review:
+                extracted = {}
+                if context.pending_import_id is not None:
+                    extracted["target_import_id"] = context.pending_import_id
                 return SemanticInterpretation(
                     intent=ConversationalIntent.FACT_CONFIRM_ALL,
                     confidence=IntentConfidence.HIGH,
+                    extracted_entities=extracted,
                     context_used=(
                         "context:last_prompt_resume_review"
                         if is_resume_prompt
@@ -1107,7 +1112,7 @@ def interpret_conversational_message(
                     context_used=f"context:target_job:{context.target_job_title}",
                 )
 
-            # Context Case C: Assistant recently prompted about application kit or facts
+            # Context Case C: Assistant recently prompted about application kit, jobs, or facts
             if context.last_assistant_prompt:
                 prompt_lower = context.last_assistant_prompt.lower()
                 if (
@@ -1120,16 +1125,36 @@ def interpret_conversational_message(
                         confidence=IntentConfidence.HIGH,
                         context_used="context:last_prompt_kit",
                     )
+                if any(
+                    cue in prompt_lower
+                    for cue in ("vaga", "vagas", "oportunidade", "oportunidades", "recomend")
+                ):
+                    return SemanticInterpretation(
+                        intent=ConversationalIntent.JOB_RECOMMENDATIONS,
+                        confidence=IntentConfidence.HIGH,
+                        context_used="context:last_prompt_job_recommendations",
+                    )
                 if "confirmar" in prompt_lower and (
                     "fato" in prompt_lower
                     or "competencia" in prompt_lower
                     or "informacoes" in prompt_lower
                 ):
+                    extracted = {}
+                    if context.pending_import_id is not None:
+                        extracted["target_import_id"] = context.pending_import_id
                     return SemanticInterpretation(
                         intent=ConversationalIntent.FACT_CONFIRM_ALL,
                         confidence=IntentConfidence.HIGH,
+                        extracted_entities=extracted,
                         context_used="context:last_prompt_confirm",
                     )
+
+            if context.last_routed_intent == ConversationalIntent.JOB_RECOMMENDATIONS:
+                return SemanticInterpretation(
+                    intent=ConversationalIntent.JOB_RECOMMENDATIONS,
+                    confidence=IntentConfidence.HIGH,
+                    context_used="context:last_routed_job_recommendations",
+                )
 
         # Ambiguous casual input without decisive context
         if clean in ("essa parece boa", "gostei dessa", "curti essa"):

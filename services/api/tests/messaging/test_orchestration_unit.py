@@ -40,6 +40,7 @@ from tapjob_api.resume_import.errors import (
 )
 from tapjob_api.resume_import.models import (
     CandidateReviewDraft,
+    CandidateReviewState,
     ImportStatus,
     ResumeImport,
     ResumeImportCandidate,
@@ -1210,3 +1211,266 @@ def test_sanitized_real_fixture_media_pipeline_integration() -> None:
     assert "Recebemos seu currículo" in outbox_text
     assert "curriculo - teste.pdf" in outbox_text
     assert "3 informações profissionais" in outbox_text
+
+
+def test_dispatch_unrelated_sim_does_not_finalize_stale_resume_review() -> None:
+    """Stale READY_FOR_REVIEW import exists; last assistant prompt is about job recommendations;
+    user sends 'sim'. Review is NOT finalized, FINALIZE_REVIEW effect is NOT emitted,
+    and message routes to recommendations rather than hijacking review.
+    """
+    session = MagicMock(spec=Session)
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock(id=uuid.uuid4())
+
+    stale_import_id = uuid.uuid4()
+    cand = ResumeImportCandidate(
+        id=uuid.uuid4(),
+        resume_import_id=stale_import_id,
+        user_id=user.id,
+        candidate_kind="skill",
+        value_json={"kind": "skill", "name": "Python"},
+        confidence=1.0,
+        review_state=CandidateReviewState.PENDING,
+    )
+    stale_import = ResumeImport(
+        id=stale_import_id,
+        user_id=user.id,
+        status=ImportStatus.READY_FOR_REVIEW,
+        original_filename="cv.pdf",
+        media_type="application/pdf",
+        byte_size=1000,
+        checksum_sha256="stale_chk",
+        storage_key="k1",
+        candidates=[cand],
+    )
+
+    outbox_entry = MagicMock()
+    outbox_entry.message_content = {"text": "Gostaria de ver vagas recomendadas para seu perfil?"}
+    outbox_entry.idempotency_key = "rec_prompt_test"
+
+    inbound = InboundMessage(
+        sender=ChannelIdentity(channel="whatsapp", external_id="5511999999999"),
+        provider_message_id="msg_sim_unrelated",
+        received_at=datetime.now(UTC),
+        text="sim",
+    )
+
+    queued_messages: list[Any] = []
+
+    def fake_queue_response_message(
+        sess: Any,
+        *,
+        channel_identity_link_id: Any,
+        recipient_external_id: Any,
+        message_text: Any,
+        idempotency_key: Any,
+    ) -> MagicMock:
+        mock_msg = MagicMock()
+        mock_msg.idempotency_key = idempotency_key
+        mock_msg.message_text = message_text
+        queued_messages.append(mock_msg)
+        return mock_msg
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_target_job",
+            return_value=None,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.complete_inbound_effect",
+        ) as mock_complete_effect,
+        patch(
+            "tapjob_api.messaging.orchestration.confirm_candidates_and_finalize",
+        ) as mock_finalize,
+        patch(
+            "tapjob_api.messaging.orchestration.tool_recommend_jobs",
+            return_value=[{"title": "Backend Dev", "company": "Empresa Tech", "overall_score": 90}],
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            fake_queue_response_message,
+        ),
+    ):
+
+        def fake_session_execute(stmt: Any, *args: Any, **kwargs: Any) -> MagicMock:
+            res = MagicMock()
+            stmt_str = str(stmt).lower()
+            if "outbound_message_queue" in stmt_str:
+                res.scalar_one_or_none.return_value = outbox_entry
+            elif "resume_imports" in stmt_str:
+                res.scalar_one_or_none.return_value = stale_import
+            else:
+                res.scalar_one_or_none.return_value = None
+            return res
+
+        session.execute = fake_session_execute
+
+        dispatched_keys = dispatch_inbound_message(
+            session,
+            redis_client=None,
+            inbound=inbound,
+            provider_id=uuid.uuid4(),
+            envelope_id=202,
+        )
+
+    # 1. Finalize was NEVER called
+    assert isinstance(dispatched_keys, list)
+    mock_finalize.assert_not_called()
+    mock_complete_effect.assert_not_called()
+
+    # 2. Stale import status remains READY_FOR_REVIEW
+    assert stale_import.status == ImportStatus.READY_FOR_REVIEW
+
+    # 3. Response was queued for recommendations, not review confirmation
+    assert len(queued_messages) == 1
+    resp_text = queued_messages[0].message_text
+    assert "Informações confirmadas com sucesso!" not in resp_text
+    assert "Oportunidades recomendadas" in resp_text
+    assert "Backend Dev" in resp_text
+
+
+def test_dispatch_sim_targets_current_resume_review() -> None:
+    """When last assistant prompt is about resume review and user sends 'sim',
+    dispatch executes review finalization and responds with confirmation.
+    """
+    session = MagicMock(spec=Session)
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock(id=uuid.uuid4())
+
+    import_id = uuid.uuid4()
+    cand = ResumeImportCandidate(
+        id=uuid.uuid4(),
+        resume_import_id=import_id,
+        user_id=user.id,
+        candidate_kind="skill",
+        value_json={"kind": "skill", "name": "Python"},
+        confidence=1.0,
+        review_state=CandidateReviewState.PENDING,
+    )
+    current_import = ResumeImport(
+        id=import_id,
+        user_id=user.id,
+        status=ImportStatus.READY_FOR_REVIEW,
+        original_filename="cv.pdf",
+        media_type="application/pdf",
+        byte_size=1000,
+        checksum_sha256="chk_active",
+        storage_key="k1",
+        candidates=[cand],
+    )
+
+    outbox_entry = MagicMock()
+    outbox_entry.message_content = {
+        "text": (
+            "Recebemos seu currículo! Deseja adicionar essas informações "
+            "profissionais ao seu perfil?"
+        )
+    }
+    outbox_entry.idempotency_key = "doc_msg_test"
+
+    inbound = InboundMessage(
+        sender=ChannelIdentity(channel="whatsapp", external_id="5511999999999"),
+        provider_message_id="msg_sim_review",
+        received_at=datetime.now(UTC),
+        text="sim",
+    )
+
+    queued_messages: list[Any] = []
+
+    def fake_queue_response_message(
+        sess: Any,
+        *,
+        channel_identity_link_id: Any,
+        recipient_external_id: Any,
+        message_text: Any,
+        idempotency_key: Any,
+    ) -> MagicMock:
+        mock_msg = MagicMock()
+        mock_msg.idempotency_key = idempotency_key
+        mock_msg.message_text = message_text
+        queued_messages.append(mock_msg)
+        return mock_msg
+
+    fake_res = MagicMock()
+    fake_res.resume_version.profile_version = 1
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_target_job",
+            return_value=None,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.confirm_candidates_and_finalize",
+            return_value=fake_res,
+        ) as mock_finalize,
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            fake_queue_response_message,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.get_inbound_effect",
+            return_value=None,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.reserve_inbound_effect",
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.complete_inbound_effect",
+        ) as mock_complete_effect,
+        patch(
+            "tapjob_api.messaging.orchestration.resume_import_service.detect_cross_document_conflicts",
+            return_value=[],
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.get_truth_snapshot",
+            return_value=MagicMock(profile_version=1),
+        ),
+    ):
+
+        def fake_session_execute(stmt: Any, *args: Any, **kwargs: Any) -> MagicMock:
+            res = MagicMock()
+            stmt_str = str(stmt).lower()
+            if "outbound_message_queue" in stmt_str:
+                res.scalar_one_or_none.return_value = outbox_entry
+            elif "resume_imports" in stmt_str:
+                res.scalar_one_or_none.return_value = current_import
+            else:
+                res.scalar_one_or_none.return_value = None
+            return res
+
+        session.execute = fake_session_execute
+
+        dispatched_keys = dispatch_inbound_message(
+            session,
+            redis_client=None,
+            inbound=inbound,
+            provider_id=uuid.uuid4(),
+            envelope_id=303,
+        )
+
+    # Finalize was called and completed
+    assert isinstance(dispatched_keys, list)
+    mock_finalize.assert_called_once()
+    mock_complete_effect.assert_called_once()
+
+    # Response confirms success
+    assert len(queued_messages) == 1
+    resp_text = queued_messages[0].message_text
+    assert "Informações confirmadas com sucesso!" in resp_text
+    assert "Versão 1" in resp_text
