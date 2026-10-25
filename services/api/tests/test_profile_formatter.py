@@ -1,6 +1,5 @@
-from typing import Any
-
 import uuid
+from typing import Any
 
 from tapjob_api.career_profile.models import FactStatus, FactType, ProfileFact
 from tapjob_api.career_profile.service import TruthSnapshot
@@ -106,7 +105,9 @@ def test_format_full_profile_no_raw_enum_leaks() -> None:
     # Required WhatsApp sections
     assert "👤 *Seu Perfil Profissional*" in rendered
     assert "*Título profissional*\nSenior Data & AI Professional" in rendered
-    assert "*Resumo profissional*\nSpecialist in data engineering and applied AI systems." in rendered
+    assert (
+        "*Resumo profissional*\nSpecialist in data engineering and applied AI systems." in rendered
+    )
     assert "*Cargos de interesse*\nData Engineer, AI Engineer" in rendered
 
     assert "💼 *Experiência*" in rendered

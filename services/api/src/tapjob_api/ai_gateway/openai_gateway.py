@@ -151,16 +151,13 @@ class OpenAiGateway:
         response_format: dict[str, Any] = {"type": "json_object"}
         # If validator is a Pydantic model class or has model_json_schema
         schema_model: type[BaseModel] | None = None
+        bound_self: Any = getattr(request.validate_output, "__self__", None)
         if isinstance(request.validate_output, type) and issubclass(
             request.validate_output, BaseModel
         ):
             schema_model = request.validate_output
-        elif (
-            hasattr(request.validate_output, "__self__")
-            and isinstance(getattr(request.validate_output, "__self__", None), type)
-            and issubclass(getattr(request.validate_output, "__self__"), BaseModel)
-        ):
-            schema_model = getattr(request.validate_output, "__self__")
+        elif isinstance(bound_self, type) and issubclass(bound_self, BaseModel):
+            schema_model = bound_self
 
         if schema_model is not None and hasattr(schema_model, "model_json_schema"):
             raw_schema = schema_model.model_json_schema()

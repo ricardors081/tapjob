@@ -52,6 +52,12 @@ from tapjob_api.resume_import.errors import (
     TransientProcessingError,
     UnsupportedDocumentTypeError,
 )
+from tapjob_api.resume_import.extraction import (
+    extract_docx_text as extract_docx_text,
+)
+from tapjob_api.resume_import.extraction import (
+    extract_pdf_text as extract_pdf_text,
+)
 from tapjob_api.resume_import.file_validation import DocumentKind, validate_upload
 from tapjob_api.resume_import.limits import (
     DISPATCH_RECOVERY_THRESHOLD_SECONDS,

@@ -1,9 +1,9 @@
-"""Integration tests for Resume Import service with Semantic Parser and Fallback."""
-
+import io
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime
 
+import docx
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -97,17 +97,18 @@ class FlakyAiGateway:
         )
 
 
-RESUME_TEXT = """
-Julia Teste
-Data Scientist
-
-Experiência:
-Alpha Analytics — Data Scientist (2020 - Atual)
-Atuação em modelos preditivos com Python e SQL.
-
-Competências:
-Python, SQL
-"""
+def _make_valid_docx() -> bytes:
+    doc = docx.Document()
+    doc.add_paragraph("Julia Teste")
+    doc.add_paragraph("Data Scientist")
+    doc.add_paragraph("Experiência:")
+    doc.add_paragraph("Alpha Analytics — Data Scientist (2020 - Atual)")
+    doc.add_paragraph("Atuação em modelos preditivos com Python e SQL.")
+    doc.add_paragraph("Competências:")
+    doc.add_paragraph("Python, SQL")
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
 
 
 @pytest.fixture
@@ -129,9 +130,9 @@ def test_process_resume_import_success_with_semantic_parser(db_session: Session)
     imp = create_resume_import(
         db_session,
         user=user,
-        content=RESUME_TEXT.encode("utf-8"),
-        original_filename="curriculo.txt",
-        declared_content_type="text/plain",
+        content=_make_valid_docx(),
+        original_filename="curriculo.docx",
+        declared_content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         storage=storage,
     )
 
@@ -160,9 +161,9 @@ def test_process_resume_import_fallback_when_semantic_fails(db_session: Session)
     imp = create_resume_import(
         db_session,
         user=user,
-        content=RESUME_TEXT.encode("utf-8"),
-        original_filename="curriculo.txt",
-        declared_content_type="text/plain",
+        content=_make_valid_docx(),
+        original_filename="curriculo.docx",
+        declared_content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         storage=storage,
     )
 

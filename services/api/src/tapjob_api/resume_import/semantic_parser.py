@@ -30,8 +30,6 @@ from tapjob_api.ports.resume_parser import (
     ResumeDocument,
     ResumeParserCapability,
 )
-from tapjob_api.resume_import.errors import TextNotExtractableError
-from tapjob_api.resume_import.extraction import extract_docx_text, extract_pdf_text
 from tapjob_api.resume_import.file_validation import PDF_MEDIA_TYPE
 from tapjob_api.resume_import.limits import MAX_CANDIDATES_PER_IMPORT, MAX_SOURCE_EXCERPT_CHARS
 from tapjob_api.resume_import.semantic_schema import (
@@ -86,6 +84,9 @@ class SemanticResumeParser:
         return await self._ai_gateway.health(ctx)
 
     async def parse(self, document: ResumeDocument, ctx: CallContext) -> ParsedResume:
+        from tapjob_api.resume_import.errors import TextNotExtractableError
+        from tapjob_api.resume_import.service import extract_docx_text, extract_pdf_text
+
         # Extract full raw text
         if document.media_type == PDF_MEDIA_TYPE:
             text = extract_pdf_text(document.content)

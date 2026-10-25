@@ -525,8 +525,8 @@ class DeterministicResumeParser:
         return AdapterHealth(status=AdapterHealthStatus.HEALTHY, checked_at=datetime.now(UTC))
 
     async def parse(self, document: ResumeDocument, ctx: CallContext) -> ParsedResume:
-        from tapjob_api.resume_import.extraction import extract_docx_text, extract_pdf_text
         from tapjob_api.resume_import.file_validation import PDF_MEDIA_TYPE
+        from tapjob_api.resume_import.service import extract_docx_text, extract_pdf_text
 
         if document.media_type == PDF_MEDIA_TYPE:
             text = extract_pdf_text(document.content)
