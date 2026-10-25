@@ -30,6 +30,7 @@ from tapjob_api.identity.models import User
 from tapjob_api.ports._common import CallContext, PortError, PortErrorCode
 from tapjob_api.ports.resume_parser import ExtractedFact, ResumeDocument, ResumeParser
 from tapjob_api.resume_import.candidates import (
+    _FACT_VALUE_MODEL_BY_KIND,
     CandidateKind,
     ValidatedCandidate,
     validate_candidate,
@@ -553,9 +554,12 @@ def process_resume_import(
             # (`FinalizeResumeImportCommand.decisions`'s own `min_length=1`), so reaching that
             # state would be a permanently stuck import.
             raise NoReviewableCandidatesError
+        candidate_provenance: dict[str, Any] = {}
         for candidate in validated:
+            cand_id = uuid.uuid4()
             session.add(
                 ResumeImportCandidate(
+                    id=cand_id,
                     resume_import_id=claimed.id,
                     user_id=claimed.user_id,
                     candidate_kind=candidate.kind,
@@ -564,6 +568,18 @@ def process_resume_import(
                     source_excerpt=candidate.source_excerpt,
                 )
             )
+            candidate_provenance[str(cand_id)] = {
+                "source_page": candidate.source_page,
+                "source_excerpt": candidate.source_excerpt,
+            }
+
+        review_meta: dict[str, Any] = {}
+        if parsed.ambiguities:
+            review_meta["ambiguities"] = list(parsed.ambiguities)
+            review_meta["ambiguity_count"] = len(parsed.ambiguities)
+        if candidate_provenance:
+            review_meta["candidate_provenance"] = candidate_provenance
+
         succeeded = _owner_transition(
             session,
             import_id=claimed.id,
@@ -571,12 +587,7 @@ def process_resume_import(
             values={
                 "status": ImportStatus.READY_FOR_REVIEW,
                 "parser_identity": active_parser_identity,
-                "review_metadata": {
-                    "ambiguities": list(parsed.ambiguities),
-                    "ambiguity_count": len(parsed.ambiguities),
-                }
-                if parsed.ambiguities
-                else None,
+                "review_metadata": review_meta if review_meta else None,
                 "processing_lease_expires_at": None,
                 "processing_lease_token": None,
             },
@@ -660,80 +671,86 @@ def process_resume_import(
 # -- finalization -------------------------------------------------------------------------------
 
 
+def _norm_str(val: Any) -> str:
+    return str(val or "").strip().lower()
+
+
+def _norm_date(val: Any) -> tuple[int | None, int | None]:
+    if isinstance(val, dict):
+        y = val.get("year")
+        m = val.get("month")
+        try:
+            return (int(y) if y is not None else None, int(m) if m is not None else None)
+        except (ValueError, TypeError):
+            return (None, None)
+    return (None, None)
+
+
+def get_fact_semantic_identity(fact_type: str, value: dict[str, Any]) -> tuple[Any, ...]:
+    """Extracts the semantic identity tuple for a fact value, identifying the logical entity."""
+    val = value if isinstance(value, dict) else {}
+    if fact_type == FactType.SKILL.value:
+        return (fact_type, _norm_str(val.get("name")))
+    if fact_type == FactType.LANGUAGE.value:
+        return (fact_type, _norm_str(val.get("language")))
+    if fact_type == FactType.EXPERIENCE.value:
+        return (
+            fact_type,
+            _norm_str(val.get("employer")),
+            _norm_str(val.get("title")),
+            _norm_date(val.get("start")),
+        )
+    if fact_type == FactType.EDUCATION.value:
+        return (
+            fact_type,
+            _norm_str(val.get("institution")),
+            _norm_str(val.get("degree")),
+            _norm_str(val.get("fieldOfStudy") or val.get("field_of_study")),
+        )
+    if fact_type == FactType.CERTIFICATION.value:
+        return (
+            fact_type,
+            _norm_str(val.get("name")),
+            _norm_str(val.get("issuer")),
+        )
+    if fact_type == FactType.PROJECT.value:
+        return (fact_type, _norm_str(val.get("name")))
+    if fact_type == FactType.PUBLICATION.value:
+        return (fact_type, _norm_str(val.get("title")))
+    if fact_type == FactType.LINK.value:
+        return (fact_type, _norm_str(val.get("url")))
+    if fact_type == FactType.WORK_AUTHORIZATION.value:
+        return (fact_type, _norm_str(val.get("country")))
+    if fact_type == FactType.PREFERENCE.value:
+        return (fact_type, _norm_str(val.get("category")))
+    return (fact_type, repr(sorted(val.items())))
+
+
+def are_facts_canonically_equal(fact_type: str, v1: dict[str, Any], v2: dict[str, Any]) -> bool:
+    """Exact canonical equality comparison between two fact values of the same type."""
+    if get_fact_semantic_identity(fact_type, v1) != get_fact_semantic_identity(fact_type, v2):
+        return False
+    model_cls = _FACT_VALUE_MODEL_BY_KIND.get(fact_type)
+    if model_cls is not None:
+        try:
+            m1 = model_cls.model_validate(dict(v1)).model_dump(mode="json", by_alias=True)
+            m2 = model_cls.model_validate(dict(v2)).model_dump(mode="json", by_alias=True)
+            return m1 == m2
+        except Exception:  # noqa: S110
+            pass
+    return v1 == v2
+
+
 def _is_duplicate_fact(
     candidate_kind: str,
     candidate_val: dict[str, Any],
     existing_fact: ProfileFact,
 ) -> bool:
-    """Checks if a candidate fact has an identical semantic value to an existing active fact."""
+    """Checks if a candidate fact has an identical canonical value to an existing active fact."""
+    if existing_fact.fact_type.value != candidate_kind:
+        return False
     ex_val = existing_fact.value_json if isinstance(existing_fact.value_json, dict) else {}
-    if candidate_kind == FactType.SKILL.value:
-        cand_name = str(candidate_val.get("name") or "").strip().lower()
-        ex_name = str(ex_val.get("name") or "").strip().lower()
-        return cand_name == ex_name and bool(cand_name)
-
-    if candidate_kind == FactType.LANGUAGE.value:
-        cand_lang = str(candidate_val.get("language") or "").strip().lower()
-        ex_lang = str(ex_val.get("language") or "").strip().lower()
-        return cand_lang == ex_lang and bool(cand_lang)
-
-    if candidate_kind == FactType.EDUCATION.value:
-        cand_inst = str(candidate_val.get("institution") or "").strip().lower()
-        ex_inst = str(ex_val.get("institution") or "").strip().lower()
-        cand_deg = str(candidate_val.get("degree") or "").strip().lower()
-        ex_deg = str(ex_val.get("degree") or "").strip().lower()
-        cand_field = (
-            str(candidate_val.get("fieldOfStudy") or candidate_val.get("field_of_study") or "")
-            .strip()
-            .lower()
-        )
-        ex_field = (
-            str(ex_val.get("fieldOfStudy") or ex_val.get("field_of_study") or "").strip().lower()
-        )
-        return (
-            cand_inst == ex_inst
-            and cand_deg == ex_deg
-            and cand_field == ex_field
-            and bool(cand_inst)
-        )
-
-    if candidate_kind == FactType.EXPERIENCE.value:
-        cand_emp = str(candidate_val.get("employer") or "").strip().lower()
-        ex_emp = str(ex_val.get("employer") or "").strip().lower()
-        cand_title = str(candidate_val.get("title") or "").strip().lower()
-        ex_title = str(ex_val.get("title") or "").strip().lower()
-        cand_start = candidate_val.get("start")
-        ex_start = ex_val.get("start")
-        return (
-            cand_emp == ex_emp
-            and cand_title == ex_title
-            and cand_start == ex_start
-            and bool(cand_emp)
-        )
-
-    if candidate_kind == FactType.CERTIFICATION.value:
-        cand_cert = str(candidate_val.get("name") or "").strip().lower()
-        ex_cert = str(ex_val.get("name") or "").strip().lower()
-        cand_iss = str(candidate_val.get("issuer") or "").strip().lower()
-        ex_iss = str(ex_val.get("issuer") or "").strip().lower()
-        return cand_cert == ex_cert and cand_iss == ex_iss and bool(cand_cert)
-
-    if candidate_kind == FactType.PROJECT.value:
-        cand_p = str(candidate_val.get("name") or "").strip().lower()
-        ex_p = str(ex_val.get("name") or "").strip().lower()
-        return cand_p == ex_p and bool(cand_p)
-
-    if candidate_kind == FactType.PUBLICATION.value:
-        cand_pub = str(candidate_val.get("title") or "").strip().lower()
-        ex_pub = str(ex_val.get("title") or "").strip().lower()
-        return cand_pub == ex_pub and bool(cand_pub)
-
-    if candidate_kind == FactType.LINK.value:
-        cand_url = str(candidate_val.get("url") or "").strip().lower()
-        ex_url = str(ex_val.get("url") or "").strip().lower()
-        return cand_url == ex_url and bool(cand_url)
-
-    return False
+    return are_facts_canonically_equal(candidate_kind, candidate_val, ex_val)
 
 
 def _revalidate_edited_value(
@@ -918,7 +935,8 @@ def finalize_resume_import(
             )
         )
     )
-    superseded_count = 0
+    stale_facts_by_identity: dict[tuple[Any, ...], ProfileFact] = {}
+    stale_facts: list[ProfileFact] = []
     if prior_same_checksum_import_ids:
         prior_id_strs = [str(pid) for pid in prior_same_checksum_import_ids]
         stale_facts = list(
@@ -933,45 +951,42 @@ def finalize_resume_import(
             )
         )
         for sf in stale_facts:
-            sf.status = FactStatus.SUPERSEDED
-            sf.inactive_from_profile_version = profile.profile_version
-        superseded_count = len(stale_facts)
+            ident = get_fact_semantic_identity(
+                sf.fact_type.value,
+                sf.value_json if isinstance(sf.value_json, dict) else {},
+            )
+            stale_facts_by_identity[ident] = sf
+
+    superseded_count = 0
+    matched_stale_ids: set[uuid.UUID] = set()
+    stale_ids_set = {sf.id for sf in stale_facts}
 
     # 2. Retrieve remaining active profile facts for deduplication
-    active_profile_facts = list(
-        session.scalars(
-            select(ProfileFact).where(
-                ProfileFact.user_id == user.id,
-                ProfileFact.career_profile_id == profile.id,
-                ProfileFact.status == FactStatus.ACTIVE,
-            )
-        )
+    # (excluding stale facts being reconciled)
+    active_facts_stmt = select(ProfileFact).where(
+        ProfileFact.user_id == user.id,
+        ProfileFact.career_profile_id == profile.id,
+        ProfileFact.status == FactStatus.ACTIVE,
     )
+    if stale_ids_set:
+        active_facts_stmt = active_facts_stmt.where(ProfileFact.id.not_in(stale_ids_set))
+    active_profile_facts = list(session.scalars(active_facts_stmt))
 
     current = datetime.now(UTC)
     fact_ids: list[str] = []
     new_facts_count = 0
     for candidate, value_json in accepted_fact_candidates:
         c_kind = candidate.candidate_kind
-        matched_existing: ProfileFact | None = None
-        for ef in active_profile_facts:
-            if ef.fact_type.value == c_kind and _is_duplicate_fact(c_kind, value_json, ef):
-                matched_existing = ef
-                break
+        cand_identity = get_fact_semantic_identity(c_kind, value_json)
+        matching_stale = stale_facts_by_identity.get(cand_identity)
 
-        if matched_existing is not None:
-            fact_ids.append(str(matched_existing.id))
-            logger.info(
-                "resume_import.fact_deduplicated_existing",
-                extra={
-                    "user_id": str(user.id),
-                    "import_id": str(locked.id),
-                    "candidate_id": str(candidate.id),
-                    "existing_fact_id": str(matched_existing.id),
-                    "fact_type": c_kind,
-                },
-            )
-        else:
+        if matching_stale is not None:
+            # Re-import same checksum replacement: old becomes SUPERSEDED, new inherits lineage_id
+            matching_stale.status = FactStatus.SUPERSEDED
+            matching_stale.inactive_from_profile_version = profile.profile_version
+            matched_stale_ids.add(matching_stale.id)
+            superseded_count += 1
+
             fact_id = uuid.uuid4()
             new_fact = ProfileFact(
                 id=fact_id,
@@ -986,13 +1001,66 @@ def finalize_resume_import(
                 user_confirmed=True,
                 confirmed_at=current,
                 status=FactStatus.ACTIVE,
-                lineage_id=fact_id,
+                lineage_id=matching_stale.lineage_id,
+                supersedes_fact_id=matching_stale.id,
                 active_from_profile_version=profile.profile_version,
             )
             session.add(new_fact)
             active_profile_facts.append(new_fact)
             fact_ids.append(str(fact_id))
             new_facts_count += 1
+        else:
+            # Check cross-document deduplication (exact canonical equality)
+            matched_existing: ProfileFact | None = None
+            for ef in active_profile_facts:
+                if ef.fact_type.value == c_kind and _is_duplicate_fact(c_kind, value_json, ef):
+                    matched_existing = ef
+                    break
+
+            if matched_existing is not None:
+                fact_ids.append(str(matched_existing.id))
+                logger.info(
+                    "resume_import.fact_deduplicated_existing",
+                    extra={
+                        "user_id": str(user.id),
+                        "import_id": str(locked.id),
+                        "candidate_id": str(candidate.id),
+                        "existing_fact_id": str(matched_existing.id),
+                        "fact_type": c_kind,
+                    },
+                )
+            else:
+                fact_id = uuid.uuid4()
+                new_fact = ProfileFact(
+                    id=fact_id,
+                    user_id=user.id,
+                    career_profile_id=profile.id,
+                    fact_type=FactType(candidate.candidate_kind),
+                    value_json=value_json,
+                    source_kind=FactSourceKind.RESUME_IMPORT,
+                    source_ref=str(locked.id),
+                    evidence_ref=f"resume_import:{locked.id}:candidate:{candidate.id}",
+                    confidence=candidate.confidence,
+                    user_confirmed=True,
+                    confirmed_at=current,
+                    status=FactStatus.ACTIVE,
+                    lineage_id=fact_id,
+                    active_from_profile_version=profile.profile_version,
+                )
+                session.add(new_fact)
+                active_profile_facts.append(new_fact)
+                fact_ids.append(str(fact_id))
+                new_facts_count += 1
+
+    # Unmatched stale facts from prior same checksum import become RETRACTED
+    # (removed in new version)
+    retracted_count = 0
+    for sf in stale_facts:
+        if sf.id not in matched_stale_ids:
+            sf.status = FactStatus.RETRACTED
+            sf.inactive_from_profile_version = profile.profile_version
+            retracted_count += 1
+
     session.flush()
 
     logger.info(
@@ -1000,9 +1068,10 @@ def finalize_resume_import(
         extra={
             "import_id": str(locked.id),
             "user_id": str(user.id),
-            "checksum_sha256": locked.checksum_sha256,
+            "checksum_prefix": (locked.checksum_sha256 or "")[:12],
             "profile_version": profile.profile_version,
             "superseded_count": superseded_count,
+            "retracted_count": retracted_count,
             "accepted_count": len(accepted_fact_candidates),
             "new_facts_count": new_facts_count,
             "total_facts_in_snapshot": len(fact_ids),

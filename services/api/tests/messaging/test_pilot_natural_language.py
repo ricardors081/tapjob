@@ -418,3 +418,25 @@ def test_fact_confirm_all_vs_privacy_inquiry_with_context() -> None:
     res_exp = interpret_conversational_message(exp_text, context=None)
     assert res_exp.intent == ConversationalIntent.TEXT_EXPERIENCE
     assert res_exp.confidence == IntentConfidence.HIGH
+
+
+def test_reimport_whatsapp_accepts_natural_sim() -> None:
+    """Verifies that natural affirmative replies ("sim", "pode atualizar", "atualiza", "confirmo")
+
+    are recognized as FACT_CONFIRM_ALL when there is an active pending review context,
+    and are NOT treated as confirmation when there is no pending review.
+    """
+    ctx_pending = ConversationContext(has_pending_fact_review=True, pending_facts_count=3)
+    ctx_none = ConversationContext(has_pending_fact_review=False)
+
+    for affirmative in ("sim", "sim.", "sim!", "pode atualizar", "atualiza", "confirmo"):
+        res_with_ctx = interpret_conversational_message(affirmative, context=ctx_pending)
+        assert res_with_ctx.intent == ConversationalIntent.FACT_CONFIRM_ALL, (
+            f"Failed for {affirmative} with context"
+        )
+        assert res_with_ctx.confidence == IntentConfidence.HIGH
+
+    # Without pending review context, bare "sim" must NOT be FACT_CONFIRM_ALL
+    for ctx in (None, ctx_none):
+        res_no_ctx = interpret_conversational_message("sim", context=ctx)
+        assert res_no_ctx.intent != ConversationalIntent.FACT_CONFIRM_ALL

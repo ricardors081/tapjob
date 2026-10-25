@@ -167,16 +167,16 @@ def test_pdf_layout_safeguards_skills_vs_languages_and_name_headline() -> None:
         # 1. Candidate name must NOT be a headline fact
         assert "headline" not in fact_types
 
-        # 2. "Gestão de Stakeholders" must be rescued and classified as SKILL, not language
+        # 2. Unknown languages must NOT be silently reclassified as skills via static dictionaries
         skill_names = [f.value["name"] for f in facts if f.fact_type == "skill"]
         assert "Python" in skill_names
-        assert "Gestão de Stakeholders" in skill_names
+        assert "Gestão de Stakeholders" not in skill_names
 
-        # 3. Languages must ONLY contain real spoken languages
+        # 3. Languages extracted by semantic model and grounded in document are preserved
         languages = [f.value["language"] for f in facts if f.fact_type == "language"]
         assert "Português" in languages
         assert "Inglês" in languages
-        assert "Gestão de Stakeholders" not in languages
+        assert "Gestão de Stakeholders" in languages
 
     asyncio.run(scenario())
 
@@ -224,7 +224,7 @@ def test_headline_role_preserved_when_not_name() -> None:
     )
     gateway = MockAiGateway(extraction)
     parser = SemanticResumeParser(gateway)
-    facts = parser._map_extraction_to_facts(
+    facts, _ = parser._map_extraction_to_facts(
         extraction, original_text="Ricardo Rodrigues da Silva\nSenior Engineering Manager"
     )
     headline_facts = [f for f in facts if f.fact_type == "headline"]

@@ -301,3 +301,122 @@ def test_create_resume_parser_bootstrap() -> None:
     )
     with pytest.raises(ValueError, match="Unsupported AI provider"):
         create_resume_parser(settings_unknown)
+
+
+def test_real_pdf_two_column_creates_untrusted_file() -> None:
+    from fixtures.synthetic_resumes import get_layout_pdf_bytes
+
+    async def scenario() -> None:
+        extraction = SemanticResumeExtraction(
+            candidate_name="Beatriz Costa",
+            professional_headline=SemanticHeadline(
+                headline="Gerente de Produto", source_excerpt="Gerente de Produto", source_page=1
+            ),
+            experiences=[
+                SemanticExperience(
+                    employer="Empresa Alpha",
+                    title="Product Manager",
+                    current=True,
+                    start_year=2021,
+                    source_excerpt="Empresa Alpha",
+                    source_page=1,
+                )
+            ],
+            education=[
+                SemanticEducation(
+                    institution="Fundacao Getulio Vargas",
+                    degree="Bacharelado",
+                    field_of_study="Administracao",
+                    start_year=2017,
+                    end_year=2021,
+                    source_excerpt="Fundacao Getulio Vargas",
+                    source_page=1,
+                )
+            ],
+            skills=[SemanticSkill(name="Scrum", source_excerpt="Scrum", source_page=1)],
+            languages=[
+                SemanticLanguage(
+                    language="Portugues",
+                    proficiency="Nativo",
+                    source_excerpt="Portugues",
+                    source_page=1,
+                )
+            ],
+        )
+        gateway = FakeAiGateway(extraction)
+        parser = SemanticResumeParser(gateway)
+        pdf_bytes = get_layout_pdf_bytes("B")
+        doc = ResumeDocument(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            filename="layout_b.pdf",
+        )
+        await parser.parse(doc, _ctx())
+        assert gateway.last_request is not None
+        assert len(gateway.last_request.untrusted_files) == 1
+        uf = gateway.last_request.untrusted_files[0]
+        assert uf.media_type == "application/pdf"
+        assert uf.filename == "layout_b.pdf"
+        assert uf.content == pdf_bytes
+
+    asyncio.run(scenario())
+
+
+def test_grounding_rejects_fabricated_middle() -> None:
+    from tapjob_api.resume_import.semantic_parser import _is_excerpt_grounded
+
+    doc_text = "Profissional experiente em Python Go e Kubernetes na empresa Tech."
+
+    # 1. Authentic excerpt: continuous substring matches cleanly
+    assert _is_excerpt_grounded("Python Go", doc_text) is True
+    assert _is_excerpt_grounded("Go e Kubernetes", doc_text) is True
+
+    # 2. Fabricated middle: prefix and suffix exist in text, but middle is hallucinated
+    fabricated = "Python Ruby Kubernetes"
+    assert _is_excerpt_grounded(fabricated, doc_text) is False
+
+    # 3. Fabricated single word
+    assert _is_excerpt_grounded("Rust", doc_text) is False
+
+
+def test_unknown_language_not_reclassified_by_dictionary() -> None:
+    async def scenario() -> None:
+        raw_text = (
+            "João Silva\n"
+            "Desenvolvedor\n"
+            "Idiomas: Klingon (Fluente), Esperanto (Avançado)\n"
+            "Competências: Python"
+        )
+        extraction = SemanticResumeExtraction(
+            candidate_name="João Silva",
+            professional_headline=SemanticHeadline(
+                headline="Desenvolvedor", source_excerpt="Desenvolvedor"
+            ),
+            skills=[SemanticSkill(name="Python", source_excerpt="Python")],
+            languages=[
+                SemanticLanguage(
+                    language="Klingon", proficiency="Fluente", source_excerpt="Klingon"
+                ),
+                SemanticLanguage(
+                    language="Esperanto", proficiency="Avançado", source_excerpt="Esperanto"
+                ),
+            ],
+        )
+        gateway = FakeAiGateway(extraction)
+        parser = SemanticResumeParser(gateway)
+        doc = ResumeDocument(
+            content=raw_text.encode("utf-8"),
+            media_type="text/plain",
+            filename="cv.txt",
+        )
+        parsed = await parser.parse(doc, _ctx())
+        language_facts = [f for f in parsed.facts if f.fact_type == "language"]
+        languages_extracted = [f.value.get("language") for f in language_facts]
+        assert "Klingon" in languages_extracted
+        assert "Esperanto" in languages_extracted
+        skill_facts = [f for f in parsed.facts if f.fact_type == "skill"]
+        skill_names = [f.value.get("name") for f in skill_facts]
+        assert "Klingon" not in skill_names
+        assert "Esperanto" not in skill_names
+
+    asyncio.run(scenario())

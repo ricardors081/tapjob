@@ -406,3 +406,607 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
         _resume, resume_version = master
         assert resume_version.version == 3
         assert resume_version.profile_version == 4
+
+
+def test_cross_document_language_proficiency_change_not_deduped() -> None:
+    session_factory = _setup_sqlite_db()
+
+    with session_factory() as session:
+        user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE, locale="pt-BR", timezone="UTC")
+        session.add(user)
+        session.commit()
+        user_id = user.id
+
+    # 1. Finalize import 1 with English (Intermediate)
+    with session_factory() as session:
+        u = session.get(User, user_id)
+        assert u is not None
+        imp1 = ResumeImport(
+            id=uuid.uuid4(),
+            user_id=u.id,
+            status=ImportStatus.READY_FOR_REVIEW,
+            original_filename="cv_v1.pdf",
+            media_type="application/pdf",
+            byte_size=1000,
+            checksum_sha256="checksum_v1",
+            storage_key="k1",
+        )
+        session.add(imp1)
+        cand1 = ResumeImportCandidate(
+            id=uuid.uuid4(),
+            resume_import_id=imp1.id,
+            user_id=u.id,
+            candidate_kind="language",
+            value_json={"kind": "language", "language": "English", "proficiency": "intermediate"},
+            confidence=1.0,
+            review_state=CandidateReviewState.PENDING,
+        )
+        session.add(cand1)
+        session.commit()
+
+        resume_import_service.finalize_resume_import(
+            session,
+            user=u,
+            import_id=imp1.id,
+            command=FinalizeResumeImportCommand(
+                expected_profile_version=0,
+                decisions=[
+                    CandidateReviewDecision(
+                        candidate_id=cand1.id, decision=ReviewDecisionKind.ACCEPT
+                    )
+                ],
+            ),
+        )
+        session.commit()
+
+    # 2. Finalize import 2 (different checksum) with English (Advanced)
+    with session_factory() as session:
+        u = session.get(User, user_id)
+        assert u is not None
+        imp2 = ResumeImport(
+            id=uuid.uuid4(),
+            user_id=u.id,
+            status=ImportStatus.READY_FOR_REVIEW,
+            original_filename="cv_v2.pdf",
+            media_type="application/pdf",
+            byte_size=1100,
+            checksum_sha256="checksum_v2",
+            storage_key="k2",
+        )
+        session.add(imp2)
+        cand2 = ResumeImportCandidate(
+            id=uuid.uuid4(),
+            resume_import_id=imp2.id,
+            user_id=u.id,
+            candidate_kind="language",
+            value_json={"kind": "language", "language": "English", "proficiency": "advanced"},
+            confidence=1.0,
+            review_state=CandidateReviewState.PENDING,
+        )
+        session.add(cand2)
+        session.commit()
+
+        res2 = resume_import_service.finalize_resume_import(
+            session,
+            user=u,
+            import_id=imp2.id,
+            command=FinalizeResumeImportCommand(
+                expected_profile_version=1,
+                decisions=[
+                    CandidateReviewDecision(
+                        candidate_id=cand2.id, decision=ReviewDecisionKind.ACCEPT
+                    )
+                ],
+            ),
+        )
+        session.commit()
+        assert res2.resume_version.profile_version == 2
+
+    # Verification: Both language facts exist; candidate 2 was NOT deduped into candidate 1
+    with session_factory() as session:
+        active_langs = list(
+            session.scalars(
+                select(ProfileFact).where(
+                    ProfileFact.user_id == user_id,
+                    ProfileFact.fact_type == FactType.LANGUAGE,
+                    ProfileFact.status == FactStatus.ACTIVE,
+                )
+            )
+        )
+        proficiencies = [f.value_json.get("proficiency") for f in active_langs]
+        assert len(active_langs) == 2
+        assert "intermediate" in proficiencies
+        assert "advanced" in proficiencies
+
+
+def test_cross_document_current_role_end_change_not_deduped() -> None:
+    session_factory = _setup_sqlite_db()
+
+    with session_factory() as session:
+        user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE, locale="pt-BR", timezone="UTC")
+        session.add(user)
+        session.commit()
+        user_id = user.id
+
+    # 1. Finalize import 1 with Current Role (end=None)
+    with session_factory() as session:
+        u = session.get(User, user_id)
+        assert u is not None
+        imp1 = ResumeImport(
+            id=uuid.uuid4(),
+            user_id=u.id,
+            status=ImportStatus.READY_FOR_REVIEW,
+            original_filename="cv_v1.pdf",
+            media_type="application/pdf",
+            byte_size=1000,
+            checksum_sha256="checksum_v1",
+            storage_key="k1",
+        )
+        session.add(imp1)
+        cand1 = ResumeImportCandidate(
+            id=uuid.uuid4(),
+            resume_import_id=imp1.id,
+            user_id=u.id,
+            candidate_kind="experience",
+            value_json={
+                "kind": "experience",
+                "employer": "Inpasa Brasil",
+                "title": "Backend Lead",
+                "start": {"year": 2021, "month": 1},
+                "end": None,
+            },
+            confidence=1.0,
+            review_state=CandidateReviewState.PENDING,
+        )
+        session.add(cand1)
+        session.commit()
+
+        resume_import_service.finalize_resume_import(
+            session,
+            user=u,
+            import_id=imp1.id,
+            command=FinalizeResumeImportCommand(
+                expected_profile_version=0,
+                decisions=[
+                    CandidateReviewDecision(
+                        candidate_id=cand1.id, decision=ReviewDecisionKind.ACCEPT
+                    )
+                ],
+            ),
+        )
+        session.commit()
+
+    # 2. Finalize import 2 (different checksum) with Ended Role (end=2024-12)
+    with session_factory() as session:
+        u = session.get(User, user_id)
+        assert u is not None
+        imp2 = ResumeImport(
+            id=uuid.uuid4(),
+            user_id=u.id,
+            status=ImportStatus.READY_FOR_REVIEW,
+            original_filename="cv_v2.pdf",
+            media_type="application/pdf",
+            byte_size=1100,
+            checksum_sha256="checksum_v2",
+            storage_key="k2",
+        )
+        session.add(imp2)
+        cand2 = ResumeImportCandidate(
+            id=uuid.uuid4(),
+            resume_import_id=imp2.id,
+            user_id=u.id,
+            candidate_kind="experience",
+            value_json={
+                "kind": "experience",
+                "employer": "Inpasa Brasil",
+                "title": "Backend Lead",
+                "start": {"year": 2021, "month": 1},
+                "end": {"year": 2024, "month": 12},
+            },
+            confidence=1.0,
+            review_state=CandidateReviewState.PENDING,
+        )
+        session.add(cand2)
+        session.commit()
+
+        resume_import_service.finalize_resume_import(
+            session,
+            user=u,
+            import_id=imp2.id,
+            command=FinalizeResumeImportCommand(
+                expected_profile_version=1,
+                decisions=[
+                    CandidateReviewDecision(
+                        candidate_id=cand2.id, decision=ReviewDecisionKind.ACCEPT
+                    )
+                ],
+            ),
+        )
+        session.commit()
+
+    # Verification: Both experience facts exist; candidate 2 was NOT deduped into candidate 1
+    with session_factory() as session:
+        active_exps = list(
+            session.scalars(
+                select(ProfileFact).where(
+                    ProfileFact.user_id == user_id,
+                    ProfileFact.fact_type == FactType.EXPERIENCE,
+                    ProfileFact.status == FactStatus.ACTIVE,
+                )
+            )
+        )
+        assert len(active_exps) == 2
+        ends = [f.value_json.get("end") for f in active_exps]
+        assert None in ends
+        assert {"year": 2024, "month": 12} in ends
+
+
+def test_same_checksum_replacement_preserves_lineage() -> None:
+    session_factory = _setup_sqlite_db()
+    same_checksum = "shared_checksum_abc123"
+
+    with session_factory() as session:
+        user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE, locale="pt-BR", timezone="UTC")
+        session.add(user)
+        session.commit()
+        user_id = user.id
+
+    # 1. First import with Python skill
+    with session_factory() as session:
+        u = session.get(User, user_id)
+        assert u is not None
+        imp1 = ResumeImport(
+            id=uuid.uuid4(),
+            user_id=u.id,
+            status=ImportStatus.READY_FOR_REVIEW,
+            original_filename="cv.pdf",
+            media_type="application/pdf",
+            byte_size=1000,
+            checksum_sha256=same_checksum,
+            storage_key="k1",
+        )
+        session.add(imp1)
+        cand1 = ResumeImportCandidate(
+            id=uuid.uuid4(),
+            resume_import_id=imp1.id,
+            user_id=u.id,
+            candidate_kind="skill",
+            value_json={"kind": "skill", "name": "Python"},
+            confidence=1.0,
+            review_state=CandidateReviewState.PENDING,
+        )
+        session.add(cand1)
+        session.commit()
+
+        resume_import_service.finalize_resume_import(
+            session,
+            user=u,
+            import_id=imp1.id,
+            command=FinalizeResumeImportCommand(
+                expected_profile_version=0,
+                decisions=[
+                    CandidateReviewDecision(
+                        candidate_id=cand1.id, decision=ReviewDecisionKind.ACCEPT
+                    )
+                ],
+            ),
+        )
+        session.commit()
+
+    with session_factory() as session:
+        initial_fact = session.scalar(
+            select(ProfileFact).where(
+                ProfileFact.user_id == user_id, ProfileFact.status == FactStatus.ACTIVE
+            )
+        )
+        assert initial_fact is not None
+        initial_fact_id = initial_fact.id
+        initial_lineage_id = initial_fact.lineage_id
+        assert initial_fact.lineage_id == initial_fact.id
+
+    # 2. Second import of the EXACT SAME file (same checksum)
+    with session_factory() as session:
+        u = session.get(User, user_id)
+        assert u is not None
+        imp2 = ResumeImport(
+            id=uuid.uuid4(),
+            user_id=u.id,
+            status=ImportStatus.READY_FOR_REVIEW,
+            original_filename="cv.pdf",
+            media_type="application/pdf",
+            byte_size=1000,
+            checksum_sha256=same_checksum,
+            storage_key="k2",
+        )
+        session.add(imp2)
+        cand2 = ResumeImportCandidate(
+            id=uuid.uuid4(),
+            resume_import_id=imp2.id,
+            user_id=u.id,
+            candidate_kind="skill",
+            value_json={"kind": "skill", "name": "Python"},
+            confidence=1.0,
+            review_state=CandidateReviewState.PENDING,
+        )
+        session.add(cand2)
+        session.commit()
+
+        resume_import_service.finalize_resume_import(
+            session,
+            user=u,
+            import_id=imp2.id,
+            command=FinalizeResumeImportCommand(
+                expected_profile_version=1,
+                decisions=[
+                    CandidateReviewDecision(
+                        candidate_id=cand2.id, decision=ReviewDecisionKind.ACCEPT
+                    )
+                ],
+            ),
+        )
+        session.commit()
+
+    # Verification: Old fact is SUPERSEDED, new fact inherits lineage_id and sets supersedes_fact_id
+    with session_factory() as session:
+        old_f = session.get(ProfileFact, initial_fact_id)
+        assert old_f is not None
+        assert old_f.status == FactStatus.SUPERSEDED
+        assert old_f.inactive_from_profile_version == 2
+
+        new_f = session.scalar(
+            select(ProfileFact).where(
+                ProfileFact.user_id == user_id, ProfileFact.status == FactStatus.ACTIVE
+            )
+        )
+        assert new_f is not None
+        assert new_f.id != initial_fact_id
+        assert new_f.lineage_id == initial_lineage_id  # LINEAGE IS PRESERVED!
+        assert new_f.supersedes_fact_id == initial_fact_id  # CHAINED TO PREDECESSOR!
+        assert new_f.active_from_profile_version == 2
+
+
+def test_same_checksum_removed_fact_becomes_retracted() -> None:
+    session_factory = _setup_sqlite_db()
+    same_checksum = "shared_checksum_xyz789"
+
+    with session_factory() as session:
+        user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE, locale="pt-BR", timezone="UTC")
+        session.add(user)
+        session.commit()
+        user_id = user.id
+
+    # 1. First import with Python and Go skills
+    with session_factory() as session:
+        u = session.get(User, user_id)
+        assert u is not None
+        imp1 = ResumeImport(
+            id=uuid.uuid4(),
+            user_id=u.id,
+            status=ImportStatus.READY_FOR_REVIEW,
+            original_filename="cv.pdf",
+            media_type="application/pdf",
+            byte_size=1000,
+            checksum_sha256=same_checksum,
+            storage_key="k1",
+        )
+        session.add(imp1)
+        c_python = ResumeImportCandidate(
+            id=uuid.uuid4(),
+            resume_import_id=imp1.id,
+            user_id=u.id,
+            candidate_kind="skill",
+            value_json={"kind": "skill", "name": "Python"},
+            confidence=1.0,
+            review_state=CandidateReviewState.PENDING,
+        )
+        c_go = ResumeImportCandidate(
+            id=uuid.uuid4(),
+            resume_import_id=imp1.id,
+            user_id=u.id,
+            candidate_kind="skill",
+            value_json={"kind": "skill", "name": "Go"},
+            confidence=1.0,
+            review_state=CandidateReviewState.PENDING,
+        )
+        session.add_all([c_python, c_go])
+        session.commit()
+
+        resume_import_service.finalize_resume_import(
+            session,
+            user=u,
+            import_id=imp1.id,
+            command=FinalizeResumeImportCommand(
+                expected_profile_version=0,
+                decisions=[
+                    CandidateReviewDecision(
+                        candidate_id=c_python.id, decision=ReviewDecisionKind.ACCEPT
+                    ),
+                    CandidateReviewDecision(
+                        candidate_id=c_go.id, decision=ReviewDecisionKind.ACCEPT
+                    ),
+                ],
+            ),
+        )
+        session.commit()
+
+    with session_factory() as session:
+        facts_v1 = list(
+            session.scalars(
+                select(ProfileFact).where(
+                    ProfileFact.user_id == user_id, ProfileFact.status == FactStatus.ACTIVE
+                )
+            )
+        )
+        assert len(facts_v1) == 2
+        go_fact_id = next(f.id for f in facts_v1 if f.value_json.get("name") == "Go")
+
+    # 2. Second import of the same file, but this time only Python is accepted
+    # (Go is removed/omitted)
+    with session_factory() as session:
+        u = session.get(User, user_id)
+        assert u is not None
+        imp2 = ResumeImport(
+            id=uuid.uuid4(),
+            user_id=u.id,
+            status=ImportStatus.READY_FOR_REVIEW,
+            original_filename="cv.pdf",
+            media_type="application/pdf",
+            byte_size=1000,
+            checksum_sha256=same_checksum,
+            storage_key="k2",
+        )
+        session.add(imp2)
+        c2_python = ResumeImportCandidate(
+            id=uuid.uuid4(),
+            resume_import_id=imp2.id,
+            user_id=u.id,
+            candidate_kind="skill",
+            value_json={"kind": "skill", "name": "Python"},
+            confidence=1.0,
+            review_state=CandidateReviewState.PENDING,
+        )
+        session.add(c2_python)
+        session.commit()
+
+        resume_import_service.finalize_resume_import(
+            session,
+            user=u,
+            import_id=imp2.id,
+            command=FinalizeResumeImportCommand(
+                expected_profile_version=1,
+                decisions=[
+                    CandidateReviewDecision(
+                        candidate_id=c2_python.id, decision=ReviewDecisionKind.ACCEPT
+                    )
+                ],
+            ),
+        )
+        session.commit()
+
+    # Verification: Go fact without successor became RETRACTED (not SUPERSEDED without successor)
+    with session_factory() as session:
+        go_fact = session.get(ProfileFact, go_fact_id)
+        assert go_fact is not None
+        assert go_fact.status == FactStatus.RETRACTED
+        assert go_fact.inactive_from_profile_version == 2
+        assert go_fact.supersedes_fact_id is None
+
+
+def test_manual_fact_survives_reimport() -> None:
+    session_factory = _setup_sqlite_db()
+    same_checksum = "same_checksum_manual_test"
+
+    with session_factory() as session:
+        user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE, locale="pt-BR", timezone="UTC")
+        session.add(user)
+        session.commit()
+        user_id = user.id
+
+    # 1. User adds manual fact (USER_DIRECT)
+    with session_factory() as session:
+        u = session.get(User, user_id)
+        assert u is not None
+        profile = career_profile_service.bump_profile_version(session, user=u, expected_version=0)
+        manual_id = uuid.uuid4()
+        manual_fact = ProfileFact(
+            id=manual_id,
+            user_id=u.id,
+            career_profile_id=profile.id,
+            fact_type=FactType.SKILL,
+            value_json={"kind": "skill", "name": "Leadership"},
+            source_kind=FactSourceKind.USER_DIRECT,
+            source_ref="manual_entry",
+            user_confirmed=True,
+            status=FactStatus.ACTIVE,
+            lineage_id=manual_id,
+            active_from_profile_version=1,
+        )
+        session.add(manual_fact)
+        session.commit()
+
+    # 2. User imports resume first time
+    with session_factory() as session:
+        u = session.get(User, user_id)
+        assert u is not None
+        imp1 = ResumeImport(
+            id=uuid.uuid4(),
+            user_id=u.id,
+            status=ImportStatus.READY_FOR_REVIEW,
+            original_filename="cv.pdf",
+            media_type="application/pdf",
+            byte_size=1000,
+            checksum_sha256=same_checksum,
+            storage_key="k1",
+        )
+        session.add(imp1)
+        c1 = ResumeImportCandidate(
+            id=uuid.uuid4(),
+            resume_import_id=imp1.id,
+            user_id=u.id,
+            candidate_kind="skill",
+            value_json={"kind": "skill", "name": "Python"},
+            confidence=1.0,
+            review_state=CandidateReviewState.PENDING,
+        )
+        session.add(c1)
+        session.commit()
+
+        resume_import_service.finalize_resume_import(
+            session,
+            user=u,
+            import_id=imp1.id,
+            command=FinalizeResumeImportCommand(
+                expected_profile_version=1,
+                decisions=[
+                    CandidateReviewDecision(candidate_id=c1.id, decision=ReviewDecisionKind.ACCEPT)
+                ],
+            ),
+        )
+        session.commit()
+
+    # 3. User re-imports same resume second time
+    with session_factory() as session:
+        u = session.get(User, user_id)
+        assert u is not None
+        imp2 = ResumeImport(
+            id=uuid.uuid4(),
+            user_id=u.id,
+            status=ImportStatus.READY_FOR_REVIEW,
+            original_filename="cv.pdf",
+            media_type="application/pdf",
+            byte_size=1000,
+            checksum_sha256=same_checksum,
+            storage_key="k2",
+        )
+        session.add(imp2)
+        c2 = ResumeImportCandidate(
+            id=uuid.uuid4(),
+            resume_import_id=imp2.id,
+            user_id=u.id,
+            candidate_kind="skill",
+            value_json={"kind": "skill", "name": "Python"},
+            confidence=1.0,
+            review_state=CandidateReviewState.PENDING,
+        )
+        session.add(c2)
+        session.commit()
+
+        resume_import_service.finalize_resume_import(
+            session,
+            user=u,
+            import_id=imp2.id,
+            command=FinalizeResumeImportCommand(
+                expected_profile_version=2,
+                decisions=[
+                    CandidateReviewDecision(candidate_id=c2.id, decision=ReviewDecisionKind.ACCEPT)
+                ],
+            ),
+        )
+        session.commit()
+
+    # Verification: Manual fact remains strictly ACTIVE throughout
+    with session_factory() as session:
+        manual_check = session.get(ProfileFact, manual_id)
+        assert manual_check is not None
+        assert manual_check.status == FactStatus.ACTIVE
+        assert manual_check.inactive_from_profile_version is None

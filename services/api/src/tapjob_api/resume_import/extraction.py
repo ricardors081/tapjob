@@ -60,31 +60,22 @@ def _page_content_stream_size(page: "pypdf.PageObject") -> int:
     return len(contents.get_data())
 
 
-def extract_pdf_text(content: bytes) -> str:
+def extract_pdf_pages_text(content: bytes) -> list[str]:
     try:
         reader = pypdf.PdfReader(io.BytesIO(content))
     except PdfReadError as error:
         raise MalformedDocumentError("could not parse PDF structure") from error
 
     if reader.is_encrypted:
-        # pypdf can sometimes open an encrypted PDF with an empty owner password and still read
-        # pages; TapJob never attempts ANY password, including a blank one, on a document the user
-        # did not explicitly mark as unprotected -- treat any encrypted PDF as locked.
         raise EncryptedDocumentError("password-protected PDF")
 
     page_count = len(reader.pages)
     if page_count > MAX_PDF_PAGES:
         raise DocumentTooLargeError(f"PDF exceeds {MAX_PDF_PAGES} pages")
 
-    chunks: list[str] = []
+    pages: list[str] = []
     total_chars = 0
     for page in reader.pages:
-        # Checked BEFORE this page's own (potentially expensive -- pypdf's own documented
-        # per-content-stream memory warning) `extract_text()` call, not after: once the overall
-        # character budget is already exhausted by an earlier page, every later page must be
-        # skipped WITHOUT ever running its own extraction, never merely have its (already fully
-        # computed) output discarded (docs/adr/0011-...md "PDF memory defense" / "resource bound
-        # placement").
         if total_chars >= MAX_EXTRACTED_TEXT_CHARS:
             break
         try:
@@ -92,32 +83,27 @@ def extract_pdf_text(content: bytes) -> str:
         except Exception as error:
             raise MalformedDocumentError("could not inspect a PDF page's content stream") from error
         if stream_size > MAX_PDF_PAGE_CONTENT_STREAM_BYTES:
-            # The minimum bar this finding requires: a stream above the bound must NEVER reach
-            # `extract_text()` at all, regardless of how expensive measuring it already was.
             raise DocumentTooLargeError(
                 f"a PDF page's content stream exceeds {MAX_PDF_PAGE_CONTENT_STREAM_BYTES} bytes"
             )
         try:
             page_text = page.extract_text() or ""
         except Exception as error:
-            # pypdf's own extraction can raise several internal exception types for a pathological
-            # content stream; all of them become the same normalized failure
-            # (docs/ENGINEERING_STANDARDS.md §13-14), never a raw traceback.
             raise MalformedDocumentError("could not extract text from a PDF page") from error
-        # Bounds a single pathological page's own contribution before it is ever appended --
-        # `extract_text()` itself already ran for THIS page (pypdf offers no finer-grained,
-        # bounded-output extraction API), but this keeps one abusive page's output from
-        # dominating the shared budget every subsequent page is checked against above.
         bounded_page_text = page_text[:MAX_PDF_PAGE_TEXT_CHARS]
         remaining = MAX_EXTRACTED_TEXT_CHARS - total_chars
         chunk = bounded_page_text[:remaining]
-        chunks.append(chunk)
+        pages.append(chunk)
         total_chars += len(chunk)
 
-    text = "\n".join(chunks)
-    if len(text.strip()) < _MIN_MEANINGFUL_TEXT_CHARS:
+    full_text = "\n".join(pages)
+    if len(full_text.strip()) < _MIN_MEANINGFUL_TEXT_CHARS:
         raise TextNotExtractableError("no meaningful text layer -- OCR required")
-    return text
+    return pages
+
+
+def extract_pdf_text(content: bytes) -> str:
+    return "\n".join(extract_pdf_pages_text(content))
 
 
 def extract_docx_text(content: bytes) -> str:

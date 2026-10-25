@@ -249,13 +249,9 @@ def reconcile_reserved_resume_import(
         if has_prior_same_checksum:
             response_text = (
                 f"Recebemos novamente seu currículo ({doc_filename})!\n"
-                f"Identificamos {facts_count} competências e experiências atualizadas.\n"
-                "Ao confirmar, vou atualizar as informações que vieram desse mesmo arquivo, "
-                "mantendo o que você adicionou manualmente. Deseja continuar? 😊\n\n"
-                "Para confirmar e salvar essas informações no seu perfil, envie:\n"
-                "• 'confirmar todos': aceitar todas as sugestões\n"
-                "• 'rejeitar fato <número>': descartar um item específico\n"
-                "• 'editar fato <número>: <novo valor>': corrigir um item"
+                f"Identificamos {facts_count} competências e experiências atualizadas.\n\n"
+                "Reanalisei este currículo e encontrei informações atualizadas. "
+                "Deseja atualizar seu perfil com elas? 😊"
             )
         else:
             response_text = (
@@ -1475,6 +1471,43 @@ def dispatch_inbound_message(
 
     action_type, extracted_idx, extracted_val = extract_single_action_details(normalize_text(text))
 
+    natural_confirm_terms = (
+        "sim",
+        "sim.",
+        "sim!",
+        "sim por favor",
+        "sim, por favor",
+        "pode atualizar",
+        "atualiza",
+        "confirmo",
+    )
+    is_potentially_natural_confirm = (
+        lower_text.strip() in natural_confirm_terms
+        or any(
+            p in lower_text for p in ("pode atualizar", "atualiza o perfil", "atualizar meu perfil")
+        )
+    )
+
+    has_pending_review = False
+    if is_potentially_natural_confirm and user is not None:
+        try:
+            exec_res = session.execute(
+                select(func.count(ResumeImport.id)).where(
+                    ResumeImport.user_id == user.id,
+                    ResumeImport.status == ImportStatus.READY_FOR_REVIEW,
+                )
+            )
+            count_val = (
+                exec_res.scalar_one_or_none()
+                if hasattr(exec_res, "scalar_one_or_none")
+                else (exec_res.scalar() if hasattr(exec_res, "scalar") else None)
+            )
+            has_pending_review = bool(count_val and count_val > 0)
+        except Exception:
+            has_pending_review = False
+
+    is_natural_confirm = is_potentially_natural_confirm and has_pending_review
+
     is_confirm_all = (
         not has_privacy_or_deletion_terms
         and (
@@ -1489,6 +1522,7 @@ def dispatch_inbound_message(
                 )
             )
             or lower_text.strip() in ("confirmar", "confirmar.")
+            or is_natural_confirm
         )
         and not any(
             k in lower_text for k in ("rejeitar", "ignorar", "descartar", "editar", "corrigir")

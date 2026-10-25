@@ -59,26 +59,45 @@ def _normalize_text_for_search(text: str) -> str:
     return _NORMALIZE_WS.sub(" ", normalized).strip().lower()
 
 
-def _is_excerpt_grounded(excerpt: str | None, full_text: str) -> bool:
+def _is_excerpt_grounded(
+    excerpt: str | None,
+    full_text: str,
+    *,
+    pages_text: list[str] | None = None,
+    source_page: int | None = None,
+) -> bool:
+    """Verifies that the excerpt is genuinely grounded in the document text.
+
+    Fail-closed: requires a continuous normalized substring.
+    Never accepts disjoint prefix/suffix matches with fabricated middle content.
+    """
     if not excerpt or not excerpt.strip():
         return False
     clean_excerpt = _normalize_text_for_search(excerpt)
     if not clean_excerpt:
         return False
-    clean_full = _normalize_text_for_search(full_text)
+
+    # Short excerpt boundary check
     if len(clean_excerpt) <= 3:
         pattern = rf"(?:\b|\A){re.escape(clean_excerpt)}(?:\b|\Z)"
-        return bool(re.search(pattern, clean_full))
-    if clean_excerpt in clean_full:
-        return True
-    # Multi-line word-wrap tolerance: if excerpt has >= 4 words, check prefix and suffix
-    words = clean_excerpt.split()
-    if len(words) >= 4:
-        prefix = " ".join(words[:3])
-        suffix = " ".join(words[-3:])
-        if prefix in clean_full and suffix in clean_full:
+        if (
+            pages_text
+            and source_page is not None
+            and 1 <= source_page <= len(pages_text)
+            and re.search(pattern, _normalize_text_for_search(pages_text[source_page - 1]))
+        ):
             return True
-    return False
+        return bool(re.search(pattern, _normalize_text_for_search(full_text)))
+
+    # Continuous normalized excerpt check on specific page when provided
+    if pages_text and source_page is not None and 1 <= source_page <= len(pages_text):
+        clean_page = _normalize_text_for_search(pages_text[source_page - 1])
+        if clean_excerpt in clean_page:
+            return True
+
+    # Continuous normalized excerpt check across full document
+    clean_full = _normalize_text_for_search(full_text)
+    return clean_excerpt in clean_full
 
 
 class SemanticResumeParser:
@@ -108,11 +127,14 @@ class SemanticResumeParser:
 
     async def parse(self, document: ResumeDocument, ctx: CallContext) -> ParsedResume:
         from tapjob_api.resume_import.errors import TextNotExtractableError
-        from tapjob_api.resume_import.service import extract_docx_text, extract_pdf_text
+        from tapjob_api.resume_import.service import extract_docx_text
 
-        # Extract full raw text
+        pages_text: list[str] | None = None
         if document.media_type == PDF_MEDIA_TYPE:
-            text = extract_pdf_text(document.content)
+            from tapjob_api.resume_import.extraction import extract_pdf_pages_text
+
+            pages_text = extract_pdf_pages_text(document.content)
+            text = "\n".join(pages_text)
         elif document.media_type.startswith("text/") or document.media_type == "text/plain":
             text = document.content.decode("utf-8", errors="replace")
         else:
@@ -148,13 +170,22 @@ class SemanticResumeParser:
         ai_result = await self._ai_gateway.generate(request, ctx)
         extraction: SemanticResumeExtraction = ai_result.output
 
-        facts = self._map_extraction_to_facts(extraction, original_text=text)
-        ambiguities = tuple(a.model_dump(mode="json") for a in extraction.ambiguities)
-        return ParsedResume(facts=tuple(facts), ambiguities=ambiguities)
+        facts, structural_ambiguities = self._map_extraction_to_facts(
+            extraction, original_text=text, pages_text=pages_text
+        )
+        all_ambiguities: list[dict[str, Any]] = [
+            a.model_dump(mode="json") for a in extraction.ambiguities
+        ]
+        all_ambiguities.extend(structural_ambiguities)
+        return ParsedResume(facts=tuple(facts), ambiguities=tuple(all_ambiguities))
 
     def _map_extraction_to_facts(
-        self, extraction: SemanticResumeExtraction, *, original_text: str
-    ) -> list[ExtractedFact]:
+        self,
+        extraction: SemanticResumeExtraction,
+        *,
+        original_text: str,
+        pages_text: list[str] | None = None,
+    ) -> tuple[list[ExtractedFact], list[dict[str, Any]]]:
         facts: list[ExtractedFact] = []
         candidate_name = extraction.candidate_name.strip() if extraction.candidate_name else None
         dropped_ungrounded_count = 0
@@ -223,7 +254,10 @@ class SemanticResumeParser:
 
             if not is_name_confusion:
                 excerpt = extraction.professional_headline.source_excerpt
-                if not _is_excerpt_grounded(excerpt, original_text):
+                source_pg = extraction.professional_headline.source_page
+                if not _is_excerpt_grounded(
+                    excerpt, original_text, pages_text=pages_text, source_page=source_pg
+                ):
                     dropped_ungrounded_count += 1
                 else:
                     facts.append(
@@ -232,7 +266,7 @@ class SemanticResumeParser:
                             value={"kind": "headline", "text": headline_text},
                             confidence=extraction.professional_headline.confidence,
                             source_excerpt=excerpt[:MAX_SOURCE_EXCERPT_CHARS] if excerpt else None,
-                            source_page=extraction.professional_headline.source_page,
+                            source_page=source_pg,
                         )
                     )
 
@@ -240,7 +274,10 @@ class SemanticResumeParser:
         if extraction.professional_summary and extraction.professional_summary.summary:
             summary_text = extraction.professional_summary.summary.strip()
             excerpt = extraction.professional_summary.source_excerpt
-            if not _is_excerpt_grounded(excerpt, original_text):
+            source_pg = extraction.professional_summary.source_page
+            if not _is_excerpt_grounded(
+                excerpt, original_text, pages_text=pages_text, source_page=source_pg
+            ):
                 dropped_ungrounded_count += 1
             else:
                 facts.append(
@@ -249,7 +286,7 @@ class SemanticResumeParser:
                         value={"kind": "summary", "text": summary_text},
                         confidence=extraction.professional_summary.confidence,
                         source_excerpt=excerpt[:MAX_SOURCE_EXCERPT_CHARS] if excerpt else None,
-                        source_page=extraction.professional_summary.source_page,
+                        source_page=source_pg,
                     )
                 )
 
@@ -258,7 +295,9 @@ class SemanticResumeParser:
             if not exp.employer or not exp.title:
                 continue
             excerpt = exp.source_excerpt
-            if not _is_excerpt_grounded(excerpt, original_text):
+            if not _is_excerpt_grounded(
+                excerpt, original_text, pages_text=pages_text, source_page=exp.source_page
+            ):
                 dropped_ungrounded_count += 1
                 continue
 
@@ -304,7 +343,9 @@ class SemanticResumeParser:
             if not edu.institution:
                 continue
             excerpt = edu.source_excerpt
-            if not _is_excerpt_grounded(excerpt, original_text):
+            if not _is_excerpt_grounded(
+                excerpt, original_text, pages_text=pages_text, source_page=edu.source_page
+            ):
                 dropped_ungrounded_count += 1
                 continue
 
@@ -355,7 +396,9 @@ class SemanticResumeParser:
             if key in seen_skills:
                 continue
             excerpt = sk.source_excerpt
-            if not _is_excerpt_grounded(excerpt, original_text):
+            if not _is_excerpt_grounded(
+                excerpt, original_text, pages_text=pages_text, source_page=sk.source_page
+            ):
                 dropped_ungrounded_count += 1
                 continue
             seen_skills.add(key)
@@ -371,7 +414,12 @@ class SemanticResumeParser:
 
         # Also pull technologies from experiences and projects if not already added
         for exp in extraction.experiences:
-            if not _is_excerpt_grounded(exp.source_excerpt, original_text):
+            if not _is_excerpt_grounded(
+                exp.source_excerpt,
+                original_text,
+                pages_text=pages_text,
+                source_page=exp.source_page,
+            ):
                 continue
             for tech in exp.technologies:
                 if not tech or not tech.strip():
@@ -380,7 +428,12 @@ class SemanticResumeParser:
                 key = normalized_tech.lower()
                 if key in seen_skills:
                     continue
-                if not _is_excerpt_grounded(normalized_tech, original_text):
+                if not _is_excerpt_grounded(
+                    normalized_tech,
+                    original_text,
+                    pages_text=pages_text,
+                    source_page=exp.source_page,
+                ):
                     dropped_ungrounded_count += 1
                     continue
                 seen_skills.add(key)
@@ -401,7 +454,9 @@ class SemanticResumeParser:
             if not cert.name or not cert.name.strip():
                 continue
             excerpt = cert.source_excerpt
-            if not _is_excerpt_grounded(excerpt, original_text):
+            if not _is_excerpt_grounded(
+                excerpt, original_text, pages_text=pages_text, source_page=cert.source_page
+            ):
                 dropped_ungrounded_count += 1
                 continue
             val_cert: dict[str, Any] = {
@@ -427,100 +482,16 @@ class SemanticResumeParser:
                 )
             )
 
-        # 7. Languages (with technical/management competence safeguard)
-        known_languages = {
-            "português",
-            "portugues",
-            "portuguese",
-            "inglês",
-            "ingles",
-            "english",
-            "espanhol",
-            "spanish",
-            "español",
-            "francês",
-            "frances",
-            "french",
-            "alemão",
-            "alemao",
-            "german",
-            "italiano",
-            "italian",
-            "mandarim",
-            "mandarin",
-            "chinês",
-            "chines",
-            "chinese",
-            "japonês",
-            "japones",
-            "japanese",
-            "russo",
-            "russian",
-            "árabe",
-            "arabe",
-            "arabic",
-            "coreano",
-            "korean",
-            "libras",
-        }
+        # 7. Languages (provider-neutral, dictionary-free semantic classification)
         for lang in extraction.languages:
             if not lang.language or not lang.language.strip():
                 continue
             lang_name = lang.language.strip()
-            lang_lower = lang_name.lower()
             excerpt = lang.source_excerpt
-            if not _is_excerpt_grounded(excerpt, original_text):
-                dropped_ungrounded_count += 1
-                continue
-
-            # Competency vs language guard: Reclassify if it's a technical/managerial competency
-            skill_terms = (
-                "stakeholder",
-                "gestão",
-                "gestao",
-                "management",
-                "python",
-                "sql",
-                "scrum",
-                "agile",
-                "dados",
-                "data",
-                "cloud",
-                "aws",
-                "azure",
-                "docker",
-                "leadership",
-                "liderança",
-                "lideranca",
-                "comunicação",
-                "comunicacao",
-                "kpi",
-                "okr",
-                "analytics",
-                "bi",
-                "finanças",
-                "financas",
-                "contabilidade",
-                "vendas",
-                "marketing",
-                "negociação",
-                "negociacao",
-            )
-            if lang_lower not in known_languages and (
-                any(term in lang_lower for term in skill_terms) or len(lang_lower.split()) >= 3
+            if not _is_excerpt_grounded(
+                excerpt, original_text, pages_text=pages_text, source_page=lang.source_page
             ):
-                norm_key = lang_lower
-                if norm_key not in seen_skills:
-                    seen_skills.add(norm_key)
-                    facts.append(
-                        ExtractedFact(
-                            fact_type="skill",
-                            value={"kind": "skill", "name": lang_name},
-                            confidence=lang.confidence,
-                            source_excerpt=excerpt[:MAX_SOURCE_EXCERPT_CHARS] if excerpt else None,
-                            source_page=lang.source_page,
-                        )
-                    )
+                dropped_ungrounded_count += 1
                 continue
 
             val_lang: dict[str, Any] = {
@@ -544,7 +515,9 @@ class SemanticResumeParser:
             if not proj.name or not proj.name.strip():
                 continue
             excerpt = proj.source_excerpt
-            if not _is_excerpt_grounded(excerpt, original_text):
+            if not _is_excerpt_grounded(
+                excerpt, original_text, pages_text=pages_text, source_page=proj.source_page
+            ):
                 dropped_ungrounded_count += 1
                 continue
             val_proj: dict[str, Any] = {
@@ -574,7 +547,9 @@ class SemanticResumeParser:
             if not pub.title or not pub.title.strip():
                 continue
             excerpt = pub.source_excerpt
-            if not _is_excerpt_grounded(excerpt, original_text):
+            if not _is_excerpt_grounded(
+                excerpt, original_text, pages_text=pages_text, source_page=pub.source_page
+            ):
                 dropped_ungrounded_count += 1
                 continue
             val_pub: dict[str, Any] = {
@@ -604,7 +579,9 @@ class SemanticResumeParser:
             if not link.url or not link.url.strip():
                 continue
             excerpt = link.source_excerpt
-            if not _is_excerpt_grounded(excerpt, original_text):
+            if not _is_excerpt_grounded(
+                excerpt, original_text, pages_text=pages_text, source_page=link.source_page
+            ):
                 dropped_ungrounded_count += 1
                 continue
             val_link: dict[str, Any] = {
@@ -623,10 +600,36 @@ class SemanticResumeParser:
                 )
             )
 
+        # Structural category conflict detection:
+        # Detect if same term was claimed in multiple conflicting categories (skill/language)
+        skill_terms = {
+            str(f.value.get("name") or "").strip().lower()
+            for f in facts
+            if f.fact_type == "skill" and f.value.get("name")
+        }
+        language_terms = {
+            str(f.value.get("language") or "").strip().lower()
+            for f in facts
+            if f.fact_type == "language" and f.value.get("language")
+        }
+        conflicts = (skill_terms & language_terms) - {""}
+        structural_ambiguities: list[dict[str, Any]] = []
+        for term in sorted(conflicts):
+            structural_ambiguities.append(
+                {
+                    "kind": "structural_conflict",
+                    "term": term,
+                    "description": (
+                        f"Term '{term}' claimed in conflicting categories "
+                        "(skill and language). Requires human review."
+                    ),
+                }
+            )
+
         if dropped_ungrounded_count > 0:
             logger.info(
                 "Dropped %d ungrounded candidates during resume extraction",
                 dropped_ungrounded_count,
             )
 
-        return facts[:MAX_CANDIDATES_PER_IMPORT]
+        return facts[:MAX_CANDIDATES_PER_IMPORT], structural_ambiguities

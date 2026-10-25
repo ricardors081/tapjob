@@ -744,6 +744,9 @@ def interpret_conversational_message(
         "adicionar",
         "concordo",
         "aprovo",
+        "pode atualizar",
+        "atualiza",
+        "atualizar",
     )
     is_contextual_conf = has_pending_review and any(t in clean for t in contextual_conf_terms)
 
