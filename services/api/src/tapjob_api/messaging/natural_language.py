@@ -126,6 +126,7 @@ class ConversationalIntent(StrEnum):
     JOB_TEXT_INTAKE = "JOB_TEXT_INTAKE"
     JOB_URL_INTAKE = "JOB_URL_INTAKE"
     CLARIFICATION_NEEDED = "CLARIFICATION_NEEDED"
+    CONFLICT_RESOLUTION = "CONFLICT_RESOLUTION"
     UNKNOWN = "UNKNOWN"
 
 
@@ -144,6 +145,7 @@ class ConversationContext:
     latest_application_status: str | None = None
     last_assistant_prompt: str | None = None
     last_routed_intent: ConversationalIntent | None = None
+    active_conflict: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -556,6 +558,121 @@ def is_explicit_privacy_inquiry(clean: str, raw_len: int = 0) -> bool:
     )
 
 
+def _classify_conflict_choice(clean_text: str, active_conflict: dict[str, Any]) -> str | None:
+    """Classifies a user's natural language response resolving a cross-document conflict.
+
+    Returns:
+    - 'proposed': User chose the incoming/resume/updated value.
+    - 'existing': User chose to keep the current/profile/existing value.
+    - None: Message does not resolve the conflict.
+    """
+    norm = normalize_text(clean_text).lower().strip()
+    fact_type = str(active_conflict.get("fact_type") or "").lower()
+    ex_val = active_conflict.get("existing_value")
+    pr_val = active_conflict.get("proposed_value")
+
+    proposed_cues = (
+        "o do curriculo",
+        "do curriculo",
+        "no curriculo",
+        "curriculo",
+        "o novo",
+        "a nova",
+        "novo",
+        "nova",
+        "novo curriculo",
+        "atualizado",
+        "atualizada",
+        "o mais recente",
+        "mais recente",
+        "segundo",
+        "segunda",
+    )
+    existing_cues = (
+        "o que ja estava",
+        "o que ja tava",
+        "ja estava",
+        "ja tava",
+        "mantem o atual",
+        "mantem atual",
+        "manter o atual",
+        "manter atual",
+        "mantem",
+        "manter",
+        "o do perfil",
+        "do perfil",
+        "no perfil",
+        "perfil",
+        "o antigo",
+        "a antiga",
+        "antigo",
+        "antiga",
+        "primeiro",
+        "primeira",
+    )
+
+    if fact_type == "language":
+        if isinstance(pr_val, dict):
+            pr_prof = normalize_text(str(pr_val.get("proficiency", ""))).lower()
+        else:
+            pr_prof = normalize_text(str(pr_val or "")).lower()
+
+        if isinstance(ex_val, dict):
+            ex_prof = normalize_text(str(ex_val.get("proficiency", ""))).lower()
+        else:
+            ex_prof = normalize_text(str(ex_val or "")).lower()
+
+        prof_map = {
+            "advanced": ("avancado", "avancada", "advanced", "fluente"),
+            "avancado": ("avancado", "avancada", "advanced", "fluente"),
+            "intermediate": ("intermediario", "intermediaria", "intermediate"),
+            "intermediario": ("intermediario", "intermediaria", "intermediate"),
+            "basic": ("basico", "basica", "basic"),
+            "basico": ("basico", "basica", "basic"),
+            "fluent": ("fluente", "fluent"),
+            "fluente": ("fluente", "fluent"),
+            "native": ("nativo", "nativa", "native"),
+            "nativo": ("nativo", "nativa", "native"),
+        }
+        pr_tokens = prof_map.get(pr_prof, (pr_prof,))
+        ex_tokens = prof_map.get(ex_prof, (ex_prof,))
+
+        if any(tok in norm for tok in pr_tokens if tok):
+            return "proposed"
+        if any(tok in norm for tok in ex_tokens if tok):
+            return "existing"
+
+    elif fact_type == "experience":
+        pr_dict = pr_val if isinstance(pr_val, dict) else {}
+        ex_dict = ex_val if isinstance(ex_val, dict) else {}
+
+        pr_end = pr_dict.get("end_date") or pr_dict.get("end")
+        ex_end = ex_dict.get("end_date") or ex_dict.get("end")
+        pr_curr = pr_dict.get("current")
+        ex_curr = ex_dict.get("current")
+
+        if pr_curr is True and any(
+            w in norm for w in ("atual", "trabalho la", "ainda trabalho", "estou la", "presente")
+        ):
+            return "proposed"
+        if ex_curr is True and any(
+            w in norm for w in ("atual", "trabalho la", "ainda trabalho", "estou la", "presente")
+        ):
+            return "existing"
+
+        if pr_end and str(pr_end)[:4] in norm:
+            return "proposed"
+        if ex_end and str(ex_end)[:4] in norm:
+            return "existing"
+
+    if any(cue in norm for cue in proposed_cues):
+        return "proposed"
+    if any(cue in norm for cue in existing_cues):
+        return "existing"
+
+    return None
+
+
 def interpret_conversational_message(
     text: str,
     context: ConversationContext | None = None,
@@ -635,6 +752,21 @@ def interpret_conversational_message(
             confidence=IntentConfidence.HIGH,
             context_used="lgpd_privacy_gate",
         )
+
+    # 2.5 Cross-Document Conflict Resolution (when active conflict question is pending)
+    if context is not None and context.active_conflict:
+        c_choice = _classify_conflict_choice(clean, context.active_conflict)
+        if c_choice is not None:
+            return SemanticInterpretation(
+                intent=ConversationalIntent.CONFLICT_RESOLUTION,
+                confidence=IntentConfidence.HIGH,
+                extracted_entities={
+                    "resolution_choice": c_choice,
+                    "active_conflict": context.active_conflict,
+                    "target_import_id": context.pending_import_id,
+                },
+                context_used="context:active_conflict_resolution",
+            )
 
     # 3. Context-Aware URL Classification (Finding 3)
     urls = extract_urls(text)
@@ -785,9 +917,14 @@ def interpret_conversational_message(
             if is_resume_prompt
             else ("context:pending_fact_review" if has_pending_review else "confirm_all_pattern")
         )
+        extracted: dict[str, Any] = {}
+        if context is not None and context.pending_import_id:
+            extracted["target_import_id"] = str(context.pending_import_id)
+
         return SemanticInterpretation(
             intent=ConversationalIntent.FACT_CONFIRM_ALL,
             confidence=IntentConfidence.HIGH,
+            extracted_entities=extracted,
             context_used=ctx_tag,
         )
 

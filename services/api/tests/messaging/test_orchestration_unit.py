@@ -11,6 +11,7 @@ Validates:
 
 from __future__ import annotations
 
+import contextlib
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -26,7 +27,11 @@ from tapjob_api.messaging.career_agent_tools import (
     tool_register_application,
     tool_schedule_follow_up,
 )
-from tapjob_api.messaging.orchestration import dispatch_inbound_message, resolve_user_target_job
+from tapjob_api.messaging.orchestration import (
+    dispatch_inbound_message,
+    format_cross_document_conflict_question,
+    resolve_user_target_job,
+)
 from tapjob_api.messaging.resume_tailoring import TailoredResumeDraft
 from tapjob_api.ports._common import PortError, PortErrorCode
 from tapjob_api.ports.messaging_channel import (
@@ -1163,6 +1168,7 @@ def test_sanitized_real_fixture_media_pipeline_integration() -> None:
         recipient_external_id: Any,
         message_text: Any,
         idempotency_key: Any,
+        **kwargs: Any,
     ) -> MagicMock:
         mock_msg = MagicMock()
         mock_msg.idempotency_key = idempotency_key
@@ -1264,6 +1270,7 @@ def test_dispatch_unrelated_sim_does_not_finalize_stale_resume_review() -> None:
         recipient_external_id: Any,
         message_text: Any,
         idempotency_key: Any,
+        **kwargs: Any,
     ) -> MagicMock:
         mock_msg = MagicMock()
         mock_msg.idempotency_key = idempotency_key
@@ -1392,6 +1399,7 @@ def test_dispatch_sim_targets_current_resume_review() -> None:
         recipient_external_id: Any,
         message_text: Any,
         idempotency_key: Any,
+        **kwargs: Any,
     ) -> MagicMock:
         mock_msg = MagicMock()
         mock_msg.idempotency_key = idempotency_key
@@ -1474,3 +1482,216 @@ def test_dispatch_sim_targets_current_resume_review() -> None:
     resp_text = queued_messages[0].message_text
     assert "Informações confirmadas com sucesso!" in resp_text
     assert "Versão 1" in resp_text
+
+
+def test_conflict_question_copy_does_not_claim_update_before_commit() -> None:
+    """Verifies that format_cross_document_conflict_question never claims updates happened."""
+    conflict = {
+        "candidate_id": str(uuid.uuid4()),
+        "existing_fact_id": str(uuid.uuid4()),
+        "fact_type": "language",
+        "existing_value": {"language": "English", "proficiency": "intermediate"},
+        "proposed_value": {"language": "English", "proficiency": "advanced"},
+    }
+    msg = format_cross_document_conflict_question([conflict])
+    assert "Atualizei as informações que estavam claras." not in msg
+    assert "Antes de atualizar, preciso confirmar com você." in msg
+    assert (
+        "No seu perfil consta Inglês intermediário, mas este currículo indica Inglês avançado."
+        in msg
+    )
+
+
+def test_dispatch_contextual_sim_finalizes_prompt_linked_import_with_two_pending_reviews() -> None:
+    """Proves Blocker 1: When two imports are READY_FOR_REVIEW, contextual 'sim' finalizes
+    ONLY the exact import linked to the last assistant prompt; the second remains READY_FOR_REVIEW.
+    """
+    session = MagicMock(spec=Session)
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    link = MagicMock(id=uuid.uuid4())
+
+    import_a_id = uuid.uuid4()
+    import_b_id = uuid.uuid4()
+
+    cand_a = ResumeImportCandidate(
+        id=uuid.uuid4(),
+        resume_import_id=import_a_id,
+        user_id=user.id,
+        candidate_kind="skill",
+        value_json={"kind": "skill", "name": "Python"},
+        confidence=1.0,
+        review_state=CandidateReviewState.PENDING,
+        created_at=datetime(2026, 1, 1, 10, 0, tzinfo=UTC),
+    )
+    import_a = ResumeImport(
+        id=import_a_id,
+        user_id=user.id,
+        status=ImportStatus.READY_FOR_REVIEW,
+        original_filename="cv_a.pdf",
+        media_type="application/pdf",
+        byte_size=1000,
+        checksum_sha256="chk_a",
+        storage_key="k_a",
+        candidates=[cand_a],
+        created_at=datetime(2026, 1, 1, 10, 0, tzinfo=UTC),
+    )
+
+    cand_b = ResumeImportCandidate(
+        id=uuid.uuid4(),
+        resume_import_id=import_b_id,
+        user_id=user.id,
+        candidate_kind="skill",
+        value_json={"kind": "skill", "name": "Rust"},
+        confidence=1.0,
+        review_state=CandidateReviewState.PENDING,
+        created_at=datetime(2026, 1, 2, 10, 0, tzinfo=UTC),
+    )
+    import_b = ResumeImport(
+        id=import_b_id,
+        user_id=user.id,
+        status=ImportStatus.READY_FOR_REVIEW,
+        original_filename="cv_b.pdf",
+        media_type="application/pdf",
+        byte_size=2000,
+        checksum_sha256="chk_b",
+        storage_key="k_b",
+        candidates=[cand_b],
+        created_at=datetime(2026, 1, 2, 10, 0, tzinfo=UTC),
+    )
+
+    # Last assistant prompt explicitly belongs to Import A
+    outbox_entry = MagicMock()
+    outbox_entry.message_content = {
+        "text": (
+            "📄 Recebemos seu currículo (cv_a.pdf) com sucesso!\n\n"
+            "Identifiquei 1 informação profissional.\n\n"
+            "Deseja adicionar essas informações ao seu perfil? 😊"
+        ),
+        "resume_import_id": str(import_a_id),
+    }
+    outbox_entry.idempotency_key = "doc_msg_import_a"
+
+    inbound = InboundMessage(
+        sender=ChannelIdentity(channel="whatsapp", external_id="5511999999999"),
+        provider_message_id="msg_sim_for_a",
+        received_at=datetime.now(UTC),
+        text="sim",
+    )
+
+    queued_messages: list[Any] = []
+
+    def fake_queue_response_message(
+        sess: Any,
+        *,
+        channel_identity_link_id: Any,
+        recipient_external_id: Any,
+        message_text: Any,
+        idempotency_key: Any,
+        **kwargs: Any,
+    ) -> MagicMock:
+        mock_msg = MagicMock()
+        mock_msg.idempotency_key = idempotency_key
+        mock_msg.message_text = message_text
+        queued_messages.append(mock_msg)
+        return mock_msg
+
+    fake_res = MagicMock()
+    fake_res.resume_version.profile_version = 1
+
+    finalized_import_ids: list[uuid.UUID] = []
+
+    def mock_finalize_func(
+        sess: Any,
+        *,
+        user: Any,
+        resume_import_id: uuid.UUID,
+        decisions: Any,
+        expected_profile_version: Any,
+    ) -> MagicMock:
+        finalized_import_ids.append(resume_import_id)
+        if resume_import_id == import_a_id:
+            import_a.status = ImportStatus.FINALIZED
+        elif resume_import_id == import_b_id:
+            import_b.status = ImportStatus.FINALIZED
+        return fake_res
+
+    with (
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_by_channel_identity",
+            return_value=user,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_link_by_channel_identity",
+            return_value=link,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resolve_user_target_job",
+            return_value=None,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.confirm_candidates_and_finalize",
+            side_effect=mock_finalize_func,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.queue_response_message",
+            fake_queue_response_message,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.get_inbound_effect",
+            return_value=None,
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.reserve_inbound_effect",
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.complete_inbound_effect",
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.resume_import_service.detect_cross_document_conflicts",
+            return_value=[],
+        ),
+        patch(
+            "tapjob_api.messaging.orchestration.get_truth_snapshot",
+            return_value=MagicMock(profile_version=1),
+        ),
+    ):
+
+        def fake_session_execute(stmt: Any, *args: Any, **kwargs: Any) -> MagicMock:
+            res = MagicMock()
+            stmt_str = str(stmt).lower()
+            params_str = ""
+            with contextlib.suppress(Exception):
+                params_str = str(stmt.compile().params).lower()
+            combined = f"{stmt_str} {params_str}"
+
+            if "outbound_message_queue" in stmt_str:
+                res.scalar_one_or_none.return_value = outbox_entry
+            elif "resume_imports" in stmt_str:
+                if str(import_a_id) in combined:
+                    res.scalar_one_or_none.return_value = import_a
+                elif str(import_b_id) in combined:
+                    res.scalar_one_or_none.return_value = import_b
+                else:
+                    # Query all pending imports
+                    res.scalars.return_value.all.return_value = [import_b, import_a]
+                    res.scalar_one_or_none.return_value = import_b
+            else:
+                res.scalar_one_or_none.return_value = None
+            return res
+
+        session.execute = fake_session_execute
+
+        dispatch_inbound_message(
+            session,
+            redis_client=None,
+            inbound=inbound,
+            provider_id=uuid.uuid4(),
+            envelope_id=404,
+        )
+
+    # Invariant 1: Exactly one import was finalized, and it is Import A
+    assert finalized_import_ids == [import_a_id]
+    assert import_a.status == ImportStatus.FINALIZED
+
+    # Invariant 2: Import B remained strictly READY_FOR_REVIEW
+    assert import_b.status == ImportStatus.READY_FOR_REVIEW

@@ -887,8 +887,14 @@ def detect_cross_document_conflicts(
         active_facts_stmt = active_facts_stmt.where(ProfileFact.id.not_in(stale_ids_set))
     active_profile_facts = list(session.scalars(active_facts_stmt))
 
+    resolved_conflicts: dict[str, Any] = {}
+    if resume_import.review_metadata and isinstance(resume_import.review_metadata, dict):
+        resolved_conflicts = resume_import.review_metadata.get("resolved_conflicts") or {}
+
     conflicts: list[dict[str, Any]] = []
     for candidate, value_json in candidates:
+        if str(candidate.id) in resolved_conflicts:
+            continue
         c_kind = candidate.candidate_kind
         cand_identity = get_fact_semantic_identity(c_kind, value_json)
         matching_stale = stale_facts_by_identity.get(cand_identity)
@@ -1086,6 +1092,10 @@ def finalize_resume_import(
         active_facts_stmt = active_facts_stmt.where(ProfileFact.id.not_in(stale_ids_set))
     active_profile_facts = list(session.scalars(active_facts_stmt))
 
+    resolved_conflicts: dict[str, Any] = {}
+    if locked.review_metadata and isinstance(locked.review_metadata, dict):
+        resolved_conflicts = locked.review_metadata.get("resolved_conflicts") or {}
+
     current = datetime.now(UTC)
     fact_ids: list[str] = []
     new_facts_count = 0
@@ -1123,6 +1133,36 @@ def finalize_resume_import(
             active_profile_facts.append(new_fact)
             fact_ids.append(str(fact_id))
             new_facts_count += 1
+        elif str(candidate.id) in resolved_conflicts:
+            # Resolved cross-document conflict: supersede existing fact and preserve lineage
+            res_fact_id_str = resolved_conflicts[str(candidate.id)]
+            ex_fact = session.get(ProfileFact, uuid.UUID(str(res_fact_id_str)))
+            if ex_fact is not None:
+                ex_fact.status = FactStatus.SUPERSEDED
+                ex_fact.inactive_from_profile_version = profile.profile_version
+                superseded_count += 1
+                fact_id = uuid.uuid4()
+                new_fact = ProfileFact(
+                    id=fact_id,
+                    user_id=user.id,
+                    career_profile_id=profile.id,
+                    fact_type=FactType(candidate.candidate_kind),
+                    value_json=value_json,
+                    source_kind=FactSourceKind.RESUME_IMPORT,
+                    source_ref=str(locked.id),
+                    evidence_ref=f"resume_import:{locked.id}:candidate:{candidate.id}",
+                    confidence=candidate.confidence,
+                    user_confirmed=True,
+                    confirmed_at=current,
+                    status=FactStatus.ACTIVE,
+                    lineage_id=ex_fact.lineage_id,
+                    supersedes_fact_id=ex_fact.id,
+                    active_from_profile_version=profile.profile_version,
+                )
+                session.add(new_fact)
+                active_profile_facts.append(new_fact)
+                fact_ids.append(str(fact_id))
+                new_facts_count += 1
         else:
             # Cross-document: Exact canonical equality -> DEDUPE
             # Different semantic identity -> ADD
@@ -1207,6 +1247,12 @@ def finalize_resume_import(
         source_import_id=str(locked.id),
     )
 
+    clean_meta = dict(locked.review_metadata or {})
+    clean_meta.pop("cross_document_conflicts", None)
+    clean_meta.pop("conflict_count", None)
+    clean_meta.pop("active_conflict", None)
+    clean_meta.pop("resolved_conflicts", None)
+
     session.execute(
         update(ResumeImport)
         .where(ResumeImport.id == locked.id, ResumeImport.status == ImportStatus.READY_FOR_REVIEW)
@@ -1215,6 +1261,7 @@ def finalize_resume_import(
             finalized_resume_id=resume.id,
             finalized_resume_version_id=resume_version.id,
             failure_code=None,
+            review_metadata=clean_meta,
         )
     )
     session.flush()

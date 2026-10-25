@@ -15,6 +15,7 @@ Coordinates conversational flows for candidate interactions:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import logging
 import re
@@ -172,65 +173,71 @@ def format_resume_failure_response(failure_code: str | ImportFailureCode | None)
     )
 
 
+def format_single_conflict_detail(c: dict[str, Any]) -> str:
+    """Formats the specific comparative question for one cross-document conflict."""
+    fact_type = c.get("fact_type")
+    ex_val = c.get("existing_value") or {}
+    pr_val = c.get("proposed_value") or {}
+    if fact_type == "language":
+        lang = ex_val.get("language") or pr_val.get("language") or "Idioma"
+        if lang.lower() == "english":
+            lang = "Inglês"
+        elif lang.lower() == "spanish":
+            lang = "Espanhol"
+        ex_prof = ex_val.get("proficiency") or ""
+        pr_prof = pr_val.get("proficiency") or ""
+        prof_map = {
+            "intermediate": "intermediário",
+            "advanced": "avançado",
+            "basic": "básico",
+            "fluent": "fluente",
+            "native": "nativo",
+            "intermediario": "intermediário",
+            "avancado": "avançado",
+            "basico": "básico",
+        }
+        ex_prof_pt = prof_map.get(ex_prof.lower(), ex_prof)
+        pr_prof_pt = prof_map.get(pr_prof.lower(), pr_prof)
+        ex_str = f"{lang} {ex_prof_pt}".strip()
+        pr_str = f"{lang} {pr_prof_pt}".strip()
+        return (
+            f"No seu perfil consta {ex_str}, mas este currículo indica {pr_str}. "
+            "Qual informação está correta?"
+        )
+    elif fact_type == "experience":
+        title = ex_val.get("title") or pr_val.get("title") or "Cargo"
+        employer = ex_val.get("employer") or pr_val.get("employer") or "Empresa"
+        ex_end = ex_val.get("end")
+        pr_end = pr_val.get("end")
+        ex_status = "atual" if not ex_end else f"até {ex_end.get('year', '')}"
+        pr_status = "atual" if not pr_end else f"até {pr_end.get('year', '')}"
+        return (
+            f"No seu perfil consta {title} na {employer} ({ex_status}), mas este "
+            f"currículo indica {title} na {employer} ({pr_status}). "
+            "Qual informação está correta?"
+        )
+    return (
+        f"No seu perfil consta {ex_val}, mas este currículo indica {pr_val}. "
+        "Qual informação está correta?"
+    )
+
+
 def format_cross_document_conflict_question(conflicts: list[dict[str, Any]]) -> str:
     """Formats a user-facing WhatsApp message asking the user to resolve cross-document
     conflicts.
     """
     count = len(conflicts)
-    info_word = "1 informação diferente" if count == 1 else f"{count} informações diferentes"
-    header = (
-        f"Atualizei as informações que estavam claras. "
-        f"Encontrei {info_word} do que já consta no seu perfil e preciso confirmar com você.\n\n"
-    )
-    details: list[str] = []
-    for c in conflicts:
-        fact_type = c.get("fact_type")
-        ex_val = c.get("existing_value") or {}
-        pr_val = c.get("proposed_value") or {}
-        if fact_type == "language":
-            lang = ex_val.get("language") or pr_val.get("language") or "Idioma"
-            if lang.lower() == "english":
-                lang = "Inglês"
-            elif lang.lower() == "spanish":
-                lang = "Espanhol"
-            ex_prof = ex_val.get("proficiency") or ""
-            pr_prof = pr_val.get("proficiency") or ""
-            prof_map = {
-                "intermediate": "intermediário",
-                "advanced": "avançado",
-                "basic": "básico",
-                "fluent": "fluente",
-                "native": "nativo",
-                "intermediario": "intermediário",
-                "avancado": "avançado",
-                "basico": "básico",
-            }
-            ex_prof_pt = prof_map.get(ex_prof.lower(), ex_prof)
-            pr_prof_pt = prof_map.get(pr_prof.lower(), pr_prof)
-            ex_str = f"{lang} {ex_prof_pt}".strip()
-            pr_str = f"{lang} {pr_prof_pt}".strip()
-            details.append(
-                f"No seu perfil consta {ex_str}, mas este currículo indica {pr_str}. "
-                "Qual informação está correta?"
-            )
-        elif fact_type == "experience":
-            title = ex_val.get("title") or pr_val.get("title") or "Cargo"
-            employer = ex_val.get("employer") or pr_val.get("employer") or "Empresa"
-            ex_end = ex_val.get("end")
-            pr_end = pr_val.get("end")
-            ex_status = "atual" if not ex_end else f"até {ex_end.get('year', '')}"
-            pr_status = "atual" if not pr_end else f"até {pr_end.get('year', '')}"
-            details.append(
-                f"No seu perfil consta {title} na {employer} ({ex_status}), mas este "
-                f"currículo indica {title} na {employer} ({pr_status}). "
-                "Qual informação está correta?"
-            )
-        else:
-            details.append(
-                f"No seu perfil consta {ex_val}, mas este currículo indica {pr_val}. "
-                "Qual informação está correta?"
-            )
-    return header + "\n\n".join(details)
+    if count <= 1:
+        header = (
+            "Encontrei uma informação neste currículo diferente do que já consta no seu perfil. "
+            "Antes de atualizar, preciso confirmar com você.\n\n"
+        )
+    else:
+        header = (
+            f"Encontrei {count} informações neste currículo diferentes do que "
+            "já constam no seu perfil. Antes de atualizar, preciso confirmar com você.\n\n"
+        )
+    return header + format_single_conflict_detail(conflicts[0])
 
 
 def reconcile_reserved_resume_import(
@@ -589,24 +596,116 @@ def resolve_user_conversation_context(
     except Exception:
         logger.debug("Failed resolving user profile status for context")
 
+    last_prompt = None
+    last_routed_intent = None
+    active_conflict: dict[str, Any] | None = None
+    prompt_linked_import_id: str | None = None
+    if link_id is not None:
+        try:
+            latest_outbox = session.execute(
+                select(OutboundMessageQueue)
+                .where(OutboundMessageQueue.channel_identity_link_id == str(link_id))
+                .order_by(OutboundMessageQueue.created_at.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if latest_outbox:
+                msg_content = (
+                    latest_outbox.message_content
+                    if isinstance(getattr(latest_outbox, "message_content", None), dict)
+                    else {}
+                )
+                last_prompt = str(msg_content.get("text", ""))
+                active_conflict = msg_content.get("active_conflict")
+                outbox_import_id = (
+                    msg_content.get("resume_import_id")
+                    or msg_content.get("target_import_id")
+                    or msg_content.get("import_id")
+                )
+                if outbox_import_id:
+                    prompt_linked_import_id = str(outbox_import_id)
+
+                idem_key = getattr(latest_outbox, "idempotency_key", "") or ""
+                if idem_key.startswith("rem_clarify_"):
+                    last_routed_intent = ConversationalIntent.REMINDER_FOLLOWUP
+                elif idem_key.startswith("kit_") or idem_key.startswith("tailor_"):
+                    last_routed_intent = ConversationalIntent.APPLICATION_REQUEST
+                elif idem_key.startswith("match_"):
+                    last_routed_intent = ConversationalIntent.MATCH_EXPLANATION
+                elif idem_key.startswith("rec_"):
+                    last_routed_intent = ConversationalIntent.JOB_RECOMMENDATIONS
+                elif idem_key.startswith("help_"):
+                    last_routed_intent = ConversationalIntent.HELP_MENU
+        except Exception:
+            logger.debug("Failed resolving latest outbox for context")
+
     has_pending_fact_review = False
     pending_facts_count = 0
     pending_import_id = None
     try:
-        pending_import = session.execute(
-            select(ResumeImport)
-            .where(
-                ResumeImport.user_id == user.id,
-                ResumeImport.status == ImportStatus.READY_FOR_REVIEW,
+        matched_import: ResumeImport | None = None
+        if prompt_linked_import_id:
+            try:
+                matched_uuid = uuid.UUID(str(prompt_linked_import_id))
+                matched_import = session.execute(
+                    select(ResumeImport).where(
+                        ResumeImport.id == matched_uuid,
+                        ResumeImport.user_id == user.id,
+                        ResumeImport.status == ImportStatus.READY_FOR_REVIEW,
+                    )
+                ).scalar_one_or_none()
+            except Exception:
+                matched_import = None
+
+        if matched_import is None:
+            exec_res = session.execute(
+                select(ResumeImport)
+                .where(
+                    ResumeImport.user_id == user.id,
+                    ResumeImport.status == ImportStatus.READY_FOR_REVIEW,
+                )
+                .order_by(ResumeImport.created_at.desc())
             )
-            .order_by(ResumeImport.created_at.desc())
-            .limit(1)
-        ).scalar_one_or_none()
-        if pending_import is not None and isinstance(pending_import, ResumeImport):
+            pending_imports: list[ResumeImport] = []
+            try:
+                scalars_res = exec_res.scalars()
+                if hasattr(scalars_res, "all"):
+                    all_res = scalars_res.all()
+                    if isinstance(all_res, list):
+                        pending_imports = [p for p in all_res if isinstance(p, ResumeImport)]
+            except Exception:
+                pending_imports = []
+            if not pending_imports:
+                with contextlib.suppress(Exception):
+                    single_p = exec_res.scalar_one_or_none()
+                    if single_p and isinstance(single_p, ResumeImport):
+                        pending_imports = [single_p]
+
+            if last_prompt:
+                for pi in pending_imports:
+                    if pi.original_filename and pi.original_filename in last_prompt:
+                        matched_import = pi
+                        break
+                    if str(pi.id) in last_prompt:
+                        matched_import = pi
+                        break
+            if matched_import is None and pending_imports:
+                matched_import = pending_imports[0]
+
+        if matched_import is not None:
             has_pending_fact_review = True
-            pending_import_id = str(pending_import.id)
-            cands = getattr(pending_import, "candidates", None)
+            pending_import_id = str(matched_import.id)
+            cands = getattr(matched_import, "candidates", None)
             pending_facts_count = len(cands) if cands and hasattr(cands, "__len__") else 0
+            if (
+                not active_conflict
+                and matched_import.review_metadata
+                and isinstance(matched_import.review_metadata, dict)
+            ):
+                active_conflict = matched_import.review_metadata.get("active_conflict")
+                if not active_conflict:
+                    confls = matched_import.review_metadata.get("cross_document_conflicts")
+                    if confls and isinstance(confls, list) and len(confls) > 0:
+                        active_conflict = confls[0]
     except Exception:
         logger.debug("Failed resolving pending resume import for context")
 
@@ -641,33 +740,6 @@ def resolve_user_conversation_context(
     except Exception:
         logger.debug("Failed resolving latest application for context")
 
-    last_prompt = None
-    last_routed_intent = None
-    if link_id is not None:
-        try:
-            latest_outbox = session.execute(
-                select(OutboundMessageQueue)
-                .where(OutboundMessageQueue.channel_identity_link_id == str(link_id))
-                .order_by(OutboundMessageQueue.created_at.desc())
-                .limit(1)
-            ).scalar_one_or_none()
-            if latest_outbox:
-                if isinstance(getattr(latest_outbox, "message_content", None), dict):
-                    last_prompt = str(latest_outbox.message_content.get("text", ""))
-                idem_key = getattr(latest_outbox, "idempotency_key", "") or ""
-                if idem_key.startswith("rem_clarify_"):
-                    last_routed_intent = ConversationalIntent.REMINDER_FOLLOWUP
-                elif idem_key.startswith("kit_") or idem_key.startswith("tailor_"):
-                    last_routed_intent = ConversationalIntent.APPLICATION_REQUEST
-                elif idem_key.startswith("match_"):
-                    last_routed_intent = ConversationalIntent.MATCH_EXPLANATION
-                elif idem_key.startswith("rec_"):
-                    last_routed_intent = ConversationalIntent.JOB_RECOMMENDATIONS
-                elif idem_key.startswith("help_"):
-                    last_routed_intent = ConversationalIntent.HELP_MENU
-        except Exception:
-            logger.debug("Failed resolving latest outbox for context")
-
     return ConversationContext(
         has_active_profile=has_active_profile,
         profile_version=profile_version,
@@ -680,6 +752,7 @@ def resolve_user_conversation_context(
         latest_application_status=latest_app_status,
         last_assistant_prompt=last_prompt,
         last_routed_intent=last_routed_intent,
+        active_conflict=active_conflict,
     )
 
 
@@ -1096,12 +1169,16 @@ def dispatch_inbound_message(
                             f"Identifiquei {facts_count} informações profissionais.\n\n"
                             "Deseja adicionar essas informações ao seu perfil? 😊"
                         )
+                    extra_c = None
+                    if outcome != "failed" and existing_import_effect.resource_id:
+                        extra_c = {"resume_import_id": str(existing_import_effect.resource_id)}
                     msg = queue_response_message(
                         session,
                         channel_identity_link_id=link_id,
                         recipient_external_id=external_id,
                         message_text=response_text,
                         idempotency_key=f"doc_{inbound.provider_message_id}",
+                        extra_content=extra_c,
                     )
                     queued_keys.append(msg.idempotency_key)
                     return queued_keys
@@ -1388,12 +1465,21 @@ def dispatch_inbound_message(
                         "Resume import remains in non-terminal state after intake"
                     )
 
+            extra_c = None
+            if (
+                import_res is not None
+                and import_res.get("status") == ImportStatus.READY_FOR_REVIEW.value
+                and "resume_import_id" in import_res
+            ):
+                extra_c = {"resume_import_id": str(import_res["resume_import_id"])}
+
             msg = queue_response_message(
                 session,
                 channel_identity_link_id=link_id,
                 recipient_external_id=external_id,
                 message_text=response_text,
                 idempotency_key=f"doc_{inbound.provider_message_id}",
+                extra_content=extra_c,
             )
             queued_keys.append(msg.idempotency_key)
             return queued_keys
@@ -1411,7 +1497,14 @@ def dispatch_inbound_message(
         conv_ctx: ConversationContext | None = None
         if user is not None:
             conv_ctx = resolve_user_conversation_context(session, user=user, link_id=link_id)
-        interpretation = interpret_conversational_message(text, context=conv_ctx)
+        if conv_ctx is not None and (
+            conv_ctx.has_active_profile
+            or conv_ctx.has_pending_fact_review
+            or conv_ctx.has_target_job
+            or conv_ctx.last_assistant_prompt
+            or conv_ctx.active_conflict
+        ):
+            interpretation = interpret_conversational_message(text, context=conv_ctx)
 
     intent = interpretation.intent
 
@@ -1537,6 +1630,221 @@ def dispatch_inbound_message(
         queued_keys.append(msg.idempotency_key)
         return queued_keys
 
+    # 3.5 Cross-document conflict resolution routing
+    if intent == ConversationalIntent.CONFLICT_RESOLUTION:
+        choice = interpretation.extracted_entities.get("resolution_choice")
+        active_conflict = interpretation.extracted_entities.get("active_conflict") or {}
+        target_import_id_str = interpretation.extracted_entities.get("target_import_id")
+
+        target_import = None
+        if target_import_id_str:
+            try:
+                target_uuid = uuid.UUID(str(target_import_id_str))
+                target_import = session.execute(
+                    select(ResumeImport).where(
+                        ResumeImport.id == target_uuid,
+                        ResumeImport.user_id == user.id,
+                        ResumeImport.status == ImportStatus.READY_FOR_REVIEW,
+                    )
+                ).scalar_one_or_none()
+            except Exception:
+                target_import = None
+        if target_import is None and "import_id" in active_conflict:
+            try:
+                target_uuid = uuid.UUID(str(active_conflict["import_id"]))
+                target_import = session.execute(
+                    select(ResumeImport).where(
+                        ResumeImport.id == target_uuid,
+                        ResumeImport.user_id == user.id,
+                        ResumeImport.status == ImportStatus.READY_FOR_REVIEW,
+                    )
+                ).scalar_one_or_none()
+            except Exception:
+                target_import = None
+        if target_import is None:
+            target_import = session.execute(
+                select(ResumeImport)
+                .where(
+                    ResumeImport.user_id == user.id,
+                    ResumeImport.status == ImportStatus.READY_FOR_REVIEW,
+                )
+                .order_by(ResumeImport.created_at.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+
+        if target_import is None or not target_import.candidates:
+            response_text = (
+                "Não encontrei um currículo com pendências ativas no momento.\n"
+                "Para começar ou atualizar seu perfil, basta me enviar seu "
+                "currículo atualizado em PDF! 😊"
+            )
+            msg = queue_response_message(
+                session,
+                channel_identity_link_id=link_id,
+                recipient_external_id=external_id,
+                message_text=response_text,
+                idempotency_key=f"conflict_res_{inbound.provider_message_id}",
+            )
+            queued_keys.append(msg.idempotency_key)
+            return queued_keys
+
+        meta = dict(target_import.review_metadata or {})
+        cand_id_str = active_conflict.get("candidate_id")
+        ex_fact_id_str = active_conflict.get("existing_fact_id")
+        if not cand_id_str and meta.get("cross_document_conflicts"):
+            first_conf = meta["cross_document_conflicts"][0]
+            cand_id_str = first_conf.get("candidate_id")
+            ex_fact_id_str = first_conf.get("existing_fact_id")
+
+        existing_drafts = list(
+            session.scalars(
+                select(CandidateReviewDraft).where(
+                    CandidateReviewDraft.resume_import_id == target_import.id
+                )
+            ).all()
+        )
+        drafts_by_cand_id = {d.candidate_id: d for d in existing_drafts}
+        ordered_candidates = sorted(
+            list(target_import.candidates), key=lambda c: (c.created_at, str(c.id))
+        )
+
+        cand_uuid = uuid.UUID(str(cand_id_str)) if cand_id_str else None
+
+        if cand_uuid:
+            if choice == "proposed":
+                draft = drafts_by_cand_id.get(cand_uuid)
+                if draft is None:
+                    draft = CandidateReviewDraft(
+                        resume_import_id=target_import.id,
+                        candidate_id=cand_uuid,
+                        user_id=user.id,
+                        decision=ReviewDecisionKind.ACCEPT.value,
+                    )
+                    session.add(draft)
+                    drafts_by_cand_id[cand_uuid] = draft
+                else:
+                    draft.decision = ReviewDecisionKind.ACCEPT.value
+                    draft.edited_value = None
+
+                resolved = dict(meta.get("resolved_conflicts") or {})
+                if ex_fact_id_str:
+                    resolved[str(cand_uuid)] = str(ex_fact_id_str)
+                meta["resolved_conflicts"] = resolved
+            else:
+                draft = drafts_by_cand_id.get(cand_uuid)
+                if draft is None:
+                    draft = CandidateReviewDraft(
+                        resume_import_id=target_import.id,
+                        candidate_id=cand_uuid,
+                        user_id=user.id,
+                        decision=ReviewDecisionKind.REJECT.value,
+                    )
+                    session.add(draft)
+                    drafts_by_cand_id[cand_uuid] = draft
+                else:
+                    draft.decision = ReviewDecisionKind.REJECT.value
+                    draft.edited_value = None
+
+        remaining = [
+            c
+            for c in meta.get("cross_document_conflicts", [])
+            if str(c.get("candidate_id")) != str(cand_uuid)
+        ]
+        meta["cross_document_conflicts"] = remaining
+        meta["conflict_count"] = len(remaining)
+
+        if remaining:
+            meta["active_conflict"] = remaining[0]
+            target_import.review_metadata = meta
+            session.commit()
+            response_text = format_cross_document_conflict_question(remaining)
+            msg = queue_response_message(
+                session,
+                channel_identity_link_id=link_id,
+                recipient_external_id=external_id,
+                message_text=response_text,
+                idempotency_key=f"conflict_res_{inbound.provider_message_id}",
+                extra_content={
+                    "resume_import_id": str(target_import.id),
+                    "active_conflict": remaining[0],
+                },
+            )
+            queued_keys.append(msg.idempotency_key)
+            return queued_keys
+
+        meta.pop("active_conflict", None)
+        target_import.review_metadata = meta
+        session.flush()
+
+        for cf in ordered_candidates:
+            if cf.id not in drafts_by_cand_id:
+                draft = CandidateReviewDraft(
+                    resume_import_id=target_import.id,
+                    candidate_id=cf.id,
+                    user_id=user.id,
+                    decision=ReviewDecisionKind.ACCEPT.value,
+                )
+                session.add(draft)
+                drafts_by_cand_id[cf.id] = draft
+        session.flush()
+
+        decisions = assemble_candidate_review_decisions(ordered_candidates, drafts_by_cand_id)
+
+        if envelope_id is not None:
+            reserve_inbound_effect(
+                session,
+                envelope_id=envelope_id,
+                inbound_message_id=inbound.provider_message_id,
+                effect_kind=InboundEffectKind.FINALIZE_REVIEW.value,
+                resource_id=str(target_import.id),
+            )
+            session.commit()
+
+        current_truth = get_truth_snapshot(session, user=user)
+        finalize_res = confirm_candidates_and_finalize(
+            session,
+            user=user,
+            resume_import_id=target_import.id,
+            decisions=decisions,
+            expected_profile_version=current_truth.profile_version,
+        )
+        session.commit()
+
+        v_num = finalize_res.resume_version.profile_version
+        all_rejected = all(d.decision == ReviewDecisionKind.REJECT for d in decisions)
+        if envelope_id is not None:
+            complete_inbound_effect(
+                session,
+                envelope_id=envelope_id,
+                effect_kind=InboundEffectKind.FINALIZE_REVIEW.value,
+                expected_resource_id=str(target_import.id),
+                effect_payload={"profile_version": v_num, "all_rejected": all_rejected},
+            )
+            session.commit()
+
+        if choice == "proposed":
+            response_text = (
+                f"Perfeito! Atualizei essa informação com o valor do currículo.\n"
+                f"Seu perfil profissional foi atualizado (Versão {v_num}).\n"
+                "Agora você pode me enviar vagas (link ou texto) para analisarmos! 😊"
+            )
+        else:
+            response_text = (
+                f"Entendido! Mantive a informação que já constava no seu perfil.\n"
+                f"Seu perfil profissional foi atualizado (Versão {v_num}).\n"
+                "Agora você pode me enviar vagas (link ou texto) para analisarmos! 😊"
+            )
+
+        msg = queue_response_message(
+            session,
+            channel_identity_link_id=link_id,
+            recipient_external_id=external_id,
+            message_text=response_text,
+            idempotency_key=f"conflict_res_{inbound.provider_message_id}",
+        )
+        queued_keys.append(msg.idempotency_key)
+        return queued_keys
+
     # 4. Fact confirmation / edit / reject routing (Finding 8)
     # Finding 1 defense: privacy/deletion words must NEVER enter fact confirmation
     has_privacy_or_deletion_terms = any(
@@ -1555,23 +1863,23 @@ def dispatch_inbound_message(
 
     action_type, extracted_idx, extracted_val = extract_single_action_details(normalize_text(text))
 
-    is_natural_confirm = intent == ConversationalIntent.FACT_CONFIRM_ALL
+    is_explicit_confirm_command = any(
+        k in lower_text
+        for k in (
+            "confirmar fatos",
+            "confirmar todos",
+            "aceitar todos",
+            "confirmar fato",
+        )
+    ) or lower_text.strip() in ("confirmar", "confirmar.")
+
+    is_natural_confirm = (
+        intent == ConversationalIntent.FACT_CONFIRM_ALL and not is_explicit_confirm_command
+    )
 
     is_confirm_all = (
         not has_privacy_or_deletion_terms
-        and (
-            is_natural_confirm
-            or any(
-                k in lower_text
-                for k in (
-                    "confirmar fatos",
-                    "confirmar todos",
-                    "aceitar todos",
-                    "confirmar fato",
-                )
-            )
-            or lower_text.strip() in ("confirmar", "confirmar.")
-        )
+        and (intent == ConversationalIntent.FACT_CONFIRM_ALL or is_explicit_confirm_command)
         and not any(
             k in lower_text for k in ("rejeitar", "ignorar", "descartar", "editar", "corrigir")
         )
@@ -1599,6 +1907,7 @@ def dispatch_inbound_message(
     )
 
     if is_confirm_all or is_reject_all or is_single_reject or is_single_accept or is_single_edit:
+        outbox_extra: dict[str, Any] | None = None
         existing_finalize_effect = None
         if envelope_id is not None:
             # Check if finalization was already completed or reserved (Finding 1)
@@ -1747,7 +2056,7 @@ def dispatch_inbound_message(
                     ).scalar_one_or_none()
                 except Exception:
                     latest_import = None
-            if latest_import is None:
+            if latest_import is None and not is_natural_confirm:
                 latest_import = session.execute(
                     select(ResumeImport)
                     .where(
@@ -1774,6 +2083,7 @@ def dispatch_inbound_message(
 
             should_finalize = False
             response_text = ""
+            outbox_extra = None
 
             if is_confirm_all:
                 for cf in ordered_candidates:
@@ -1970,9 +2280,14 @@ def dispatch_inbound_message(
                         meta = dict(latest_import.review_metadata or {})
                         meta["cross_document_conflicts"] = conflicts
                         meta["conflict_count"] = len(conflicts)
+                        meta["active_conflict"] = conflicts[0]
                         latest_import.review_metadata = meta
                         session.commit()
                         response_text = format_cross_document_conflict_question(conflicts)
+                        outbox_extra = {
+                            "resume_import_id": str(latest_import.id),
+                            "active_conflict": conflicts[0],
+                        }
                     else:
                         if envelope_id is not None and existing_finalize_effect is None:
                             # Durably reserve finalization intent BEFORE canonical
@@ -2032,6 +2347,11 @@ def dispatch_inbound_message(
                 except CrossDocumentConflictError as conflict_err:
                     session.commit()
                     response_text = format_cross_document_conflict_question(conflict_err.conflicts)
+                    if latest_import is not None and conflict_err.conflicts:
+                        outbox_extra = {
+                            "resume_import_id": str(latest_import.id),
+                            "active_conflict": conflict_err.conflicts[0],
+                        }
                 except (IncompleteCandidateReviewError, InvalidCandidateReviewDraftError) as err:
                     logger.warning(
                         "orchestration.review_finalize_refused", extra={"error": str(err)}
@@ -2060,6 +2380,7 @@ def dispatch_inbound_message(
             recipient_external_id=external_id,
             message_text=response_text,
             idempotency_key=f"fact_conf_{inbound.provider_message_id}",
+            extra_content=outbox_extra,
         )
         queued_keys.append(msg.idempotency_key)
         return queued_keys

@@ -287,13 +287,16 @@ def queue_response_message(
     recipient_external_id: str,
     message_text: str,
     idempotency_key: str | None = None,
+    extra_content: dict[str, Any] | None = None,
 ) -> OutboundMessageQueue:
     """Queues an outbound response message into the durable outbox."""
     key = idempotency_key or f"resp_{uuid.uuid4()}"
-    content = {
+    content: dict[str, Any] = {
         "text": message_text,
         "recipient_external_id": recipient_external_id,
     }
+    if extra_content:
+        content.update(extra_content)
     link_id_str = str(channel_identity_link_id) if channel_identity_link_id else None
     return queue_outbound_message(
         session,
