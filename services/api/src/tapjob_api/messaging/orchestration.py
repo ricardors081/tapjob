@@ -1528,9 +1528,7 @@ def dispatch_inbound_message(
                 if hasattr(exec_res, "scalar_one_or_none")
                 else (exec_res.scalar() if hasattr(exec_res, "scalar") else None)
             )
-            has_active_review_context = bool(
-                isinstance(count_val, (int, float)) and count_val > 0
-            )
+            has_active_review_context = bool(isinstance(count_val, (int, float)) and count_val > 0)
         except Exception:
             has_active_review_context = False
 
