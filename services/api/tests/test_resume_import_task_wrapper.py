@@ -167,7 +167,7 @@ def test_task_wrapper_retries_a_transient_failure_with_the_tasks_own_default_bud
     monkeypatch.setattr(tasks, "_session_factory", lambda: _NullSession())
     monkeypatch.setattr(tasks, "_storage", object())
 
-    def _raise_transient(session: Any, *, import_id: Any, storage: Any) -> None:
+    def _raise_transient(session: Any, *, import_id: Any, storage: Any, **kwargs: Any) -> None:
         raise TransientProcessingError("boom")
 
     monkeypatch.setattr(service, "process_resume_import", _raise_transient)
@@ -193,7 +193,7 @@ def test_task_wrapper_retries_an_active_lease_with_a_countdown_past_expiry_and_a
 
     retry_at = datetime.now(UTC) + timedelta(seconds=250)
 
-    def _raise_lease_active(session: Any, *, import_id: Any, storage: Any) -> None:
+    def _raise_lease_active(session: Any, *, import_id: Any, storage: Any, **kwargs: Any) -> None:
         raise ImportLeaseActiveError(retry_at=retry_at)
 
     monkeypatch.setattr(service, "process_resume_import", _raise_lease_active)

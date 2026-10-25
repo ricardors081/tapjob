@@ -402,7 +402,13 @@ def test_eval_runner_returns_not_run_when_key_missing() -> None:
     """Blocker 4: Eval runner returns NOT_RUN_MISSING_SECRET when OPENAI_API_KEY is not set."""
     import asyncio
     import os
+    import sys
+    from pathlib import Path
     from unittest.mock import patch
+
+    repo_root = Path(__file__).resolve().parents[3]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
 
     from tools.evals.run_resume_semantic_evals import main as eval_main
 
