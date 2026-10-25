@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from fixtures.synthetic_resumes import build_pdf_bytes
 
 from tapjob_api.ports._common import AdapterHealth, AdapterHealthStatus, CallContext
 from tapjob_api.ports.ai_gateway import (
@@ -418,5 +419,165 @@ def test_unknown_language_not_reclassified_by_dictionary() -> None:
         skill_names = [f.value.get("name") for f in skill_facts]
         assert "Klingon" not in skill_names
         assert "Esperanto" not in skill_names
+
+    asyncio.run(scenario())
+
+
+def test_grounding_wrong_source_page_fails_closed() -> None:
+    async def scenario() -> None:
+        # Page 1 has Python, Page 2 has English Advanced
+        page1 = [
+            (50, 750, 12, "Carlos Silva"),
+            (50, 730, 10, "Senior Python Developer with extensive backend experience"),
+        ]
+        page2 = [
+            (50, 750, 12, "Idiomas e Habilidades"),
+            (50, 730, 10, "English Advanced and Portuguese Native"),
+        ]
+        pdf_bytes = build_pdf_bytes([page1, page2])
+
+        # Model claims English Advanced is on page 1 (wrong page!) -> DROPPED
+        extraction_wrong_page = SemanticResumeExtraction(
+            languages=[
+                SemanticLanguage(
+                    language="English",
+                    proficiency="Advanced",
+                    source_excerpt="English Advanced",
+                    source_page=1,
+                )
+            ]
+        )
+        gateway = FakeAiGateway(extraction_wrong_page)
+        parser = SemanticResumeParser(gateway)
+        doc = ResumeDocument(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            filename="multipage.pdf",
+        )
+        parsed = await parser.parse(doc, _ctx())
+        assert len(parsed.facts) == 0
+
+        # Model claims source_page=99 (out of range) -> DROPPED
+        extraction_out_of_range = SemanticResumeExtraction(
+            languages=[
+                SemanticLanguage(
+                    language="English",
+                    proficiency="Advanced",
+                    source_excerpt="English Advanced",
+                    source_page=99,
+                )
+            ]
+        )
+        gateway._extraction = extraction_out_of_range
+        parsed_oor = await parser.parse(doc, _ctx())
+        assert len(parsed_oor.facts) == 0
+
+        # Correct page (source_page=2) -> ACCEPTED
+        extraction_correct_page = SemanticResumeExtraction(
+            languages=[
+                SemanticLanguage(
+                    language="English",
+                    proficiency="Advanced",
+                    source_excerpt="English Advanced",
+                    source_page=2,
+                )
+            ]
+        )
+        gateway._extraction = extraction_correct_page
+        parsed_ok = await parser.parse(doc, _ctx())
+        assert len(parsed_ok.facts) == 1
+        assert parsed_ok.facts[0].value.get("language") == "English"
+        assert parsed_ok.facts[0].source_page == 2
+
+    asyncio.run(scenario())
+
+
+def test_structural_conflict_not_promoted_to_candidates() -> None:
+    async def scenario() -> None:
+        raw_text = "Conhecimentos: Docker (Avançado) e Inglês."
+        # Provider returns Docker as both a skill and a language
+        extraction = SemanticResumeExtraction(
+            skills=[SemanticSkill(name="Docker", source_excerpt="Docker (Avançado)")],
+            languages=[
+                SemanticLanguage(
+                    language="Docker", proficiency="Avançado", source_excerpt="Docker (Avançado)"
+                )
+            ],
+        )
+        gateway = FakeAiGateway(extraction)
+        parser = SemanticResumeParser(gateway)
+        doc = ResumeDocument(
+            content=raw_text.encode("utf-8"),
+            media_type="text/plain",
+            filename="cv.txt",
+        )
+        parsed = await parser.parse(doc, _ctx())
+
+        # 1. Ambiguity created with human review question
+        assert len(parsed.ambiguities) == 1
+        amb = parsed.ambiguities[0]
+        options = amb["options"]
+        assert isinstance(options, list)
+        assert "competência" in options
+        assert "idioma" in options
+
+        # 2. Conflicting candidates MUST NOT be in parsed facts
+        assert len(parsed.facts) == 0
+
+    asyncio.run(scenario())
+
+
+def test_headline_with_uncommon_profession_without_role_dictionary() -> None:
+    async def scenario() -> None:
+        raw_text = (
+            "Maria Oliveira\n"
+            "Arquiteta de Soluções Bioinformáticas\n"
+            "Resumo profissional com vasta experiência."
+        )
+        # An uncommon / novel profession not in any traditional role keyword list
+        extraction = SemanticResumeExtraction(
+            candidate_name="Maria Oliveira",
+            professional_headline=SemanticHeadline(
+                headline="Arquiteta de Soluções Bioinformáticas",
+                source_excerpt="Arquiteta de Soluções Bioinformáticas",
+            ),
+        )
+        gateway = FakeAiGateway(extraction)
+        parser = SemanticResumeParser(gateway)
+        doc = ResumeDocument(
+            content=raw_text.encode("utf-8"),
+            media_type="text/plain",
+            filename="cv.txt",
+        )
+        parsed = await parser.parse(doc, _ctx())
+        headline_facts = [f for f in parsed.facts if f.fact_type == "headline"]
+        assert len(headline_facts) == 1
+        assert headline_facts[0].value["text"] == "Arquiteta de Soluções Bioinformáticas"
+
+        # Case 2: Candidate name is absent, headline still accepted based on semantic model
+        extraction_no_name = SemanticResumeExtraction(
+            candidate_name=None,
+            professional_headline=SemanticHeadline(
+                headline="Arquiteta de Soluções Bioinformáticas",
+                source_excerpt="Arquiteta de Soluções Bioinformáticas",
+            ),
+        )
+        gateway._extraction = extraction_no_name
+        parsed_no_name = await parser.parse(doc, _ctx())
+        headline_facts_no_name = [f for f in parsed_no_name.facts if f.fact_type == "headline"]
+        assert len(headline_facts_no_name) == 1
+        assert headline_facts_no_name[0].value["text"] == "Arquiteta de Soluções Bioinformáticas"
+
+        # Case 3: Headline is candidate's name -> dropped
+        extraction_name_as_headline = SemanticResumeExtraction(
+            candidate_name="Maria Oliveira",
+            professional_headline=SemanticHeadline(
+                headline="Maria Oliveira",
+                source_excerpt="Maria Oliveira",
+            ),
+        )
+        gateway._extraction = extraction_name_as_headline
+        parsed_dropped = await parser.parse(doc, _ctx())
+        assert not any(f.fact_type == "headline" for f in parsed_dropped.facts)
 
     asyncio.run(scenario())

@@ -501,8 +501,10 @@ def test_cross_document_language_proficiency_change_not_deduped() -> None:
         )
         session.commit()
         assert res2.resume_version.profile_version == 2
+        imp2_id = imp2.id
 
-    # Verification: Both language facts exist; candidate 2 was NOT deduped into candidate 1
+    # Verification: Conflict is created for review, existing fact is preserved,
+    # ACTIVE English count remains 1 until human resolution
     with session_factory() as session:
         active_langs = list(
             session.scalars(
@@ -513,13 +515,19 @@ def test_cross_document_language_proficiency_change_not_deduped() -> None:
                 )
             )
         )
-        proficiencies = [f.value_json.get("proficiency") for f in active_langs]
-        assert len(active_langs) == 2
-        assert "intermediate" in proficiencies
-        assert "advanced" in proficiencies
+        assert len(active_langs) == 1
+        assert active_langs[0].value_json.get("proficiency") == "intermediate"
+
+        imp2_db = session.get(ResumeImport, imp2_id)
+        assert imp2_db is not None
+        assert imp2_db.review_metadata is not None
+        conflicts = imp2_db.review_metadata.get("cross_document_conflicts", [])
+        assert len(conflicts) == 1
+        assert list(conflicts[0]["semantic_identity"]) == ["language", "english"]
+        assert conflicts[0]["proposed_value"]["proficiency"] == "advanced"
 
 
-def test_cross_document_current_role_end_change_not_deduped() -> None:
+def test_cross_document_current_role_end_change_creates_conflict() -> None:
     session_factory = _setup_sqlite_db()
 
     with session_factory() as session:
@@ -623,8 +631,10 @@ def test_cross_document_current_role_end_change_not_deduped() -> None:
             ),
         )
         session.commit()
+        imp2_id = imp2.id
 
-    # Verification: Both experience facts exist; candidate 2 was NOT deduped into candidate 1
+    # Verification: Conflict is created for review, existing fact is preserved,
+    # ACTIVE logical experience count remains 1 until human resolution
     with session_factory() as session:
         active_exps = list(
             session.scalars(
@@ -635,10 +645,98 @@ def test_cross_document_current_role_end_change_not_deduped() -> None:
                 )
             )
         )
-        assert len(active_exps) == 2
-        ends = [f.value_json.get("end") for f in active_exps]
-        assert None in ends
-        assert {"year": 2024, "month": 12} in ends
+        assert len(active_exps) == 1
+        assert active_exps[0].value_json.get("end") is None
+
+        imp2_db = session.get(ResumeImport, imp2_id)
+        assert imp2_db is not None
+        assert imp2_db.review_metadata is not None
+        conflicts = imp2_db.review_metadata.get("cross_document_conflicts", [])
+        assert len(conflicts) == 1
+        assert list(conflicts[0]["semantic_identity"][:3]) == [
+            "experience",
+            "inpasa brasil",
+            "backend lead",
+        ]
+
+
+def test_confirm_all_cannot_accept_structural_conflict() -> None:
+    session_factory = _setup_sqlite_db()
+
+    with session_factory() as session:
+        user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE, locale="pt-BR", timezone="UTC")
+        session.add(user)
+        session.commit()
+        user_id = user.id
+
+    with session_factory() as session:
+        u = session.get(User, user_id)
+        assert u is not None
+        imp = ResumeImport(
+            id=uuid.uuid4(),
+            user_id=u.id,
+            status=ImportStatus.READY_FOR_REVIEW,
+            original_filename="cv.pdf",
+            media_type="application/pdf",
+            byte_size=1000,
+            checksum_sha256="checksum_conflict",
+            storage_key="k1",
+            review_metadata={
+                "ambiguities": [
+                    {
+                        "field": "category_conflict",
+                        "term": "docker",
+                        "kind": "structural_conflict",
+                        "options": ["competência", "idioma"],
+                    }
+                ]
+            },
+        )
+        session.add(imp)
+        cand_python = ResumeImportCandidate(
+            id=uuid.uuid4(),
+            resume_import_id=imp.id,
+            user_id=u.id,
+            candidate_kind="skill",
+            value_json={"kind": "skill", "name": "Python"},
+            confidence=1.0,
+            review_state=CandidateReviewState.PENDING,
+        )
+        session.add(cand_python)
+        session.commit()
+
+        # Finalize accepting all candidates
+        resume_import_service.finalize_resume_import(
+            session,
+            user=u,
+            import_id=imp.id,
+            command=FinalizeResumeImportCommand(
+                expected_profile_version=0,
+                decisions=[
+                    CandidateReviewDecision(
+                        candidate_id=cand_python.id, decision=ReviewDecisionKind.ACCEPT
+                    )
+                ],
+            ),
+        )
+        session.commit()
+
+    with session_factory() as session:
+        active_facts = list(
+            session.scalars(
+                select(ProfileFact).where(
+                    ProfileFact.user_id == user_id,
+                    ProfileFact.status == FactStatus.ACTIVE,
+                )
+            )
+        )
+        # Python is active, but conflicting "Docker" is NOT present
+        fact_names = [
+            f.value_json.get("name") for f in active_facts if f.fact_type == FactType.SKILL
+        ]
+        assert "Python" in fact_names
+        assert "Docker" not in fact_names
+        assert len(active_facts) == 1
 
 
 def test_same_checksum_replacement_preserves_lineage() -> None:

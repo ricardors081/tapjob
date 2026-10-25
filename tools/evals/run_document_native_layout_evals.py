@@ -151,6 +151,8 @@ async def main() -> int:
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not api_key:
         _emit("REAL_PROVIDER_DOCUMENT_NATIVE_EVAL=NOT_RUN_MISSING_SECRET")
+        _emit("ALL_LAYOUT_FIXTURES_PASS=NOT_RUN")
+        _emit("FAILED_FIXTURES=NOT_RUN")
         _emit("REASON=OPENAI_API_KEY environment variable is not configured.")
         return 0
 
@@ -179,12 +181,17 @@ async def main() -> int:
             _emit(f"[ERROR] {name:35} Failed with exception: {exc.__class__.__name__}")
             results.append({"variant": name, "score": 0.0, "passed_count": 0, "total_checks": 5})
 
+    failed_fixtures = [r["variant"] for r in results if r.get("score", 0.0) < ACCURACY_THRESHOLD]
+    all_pass = len(failed_fixtures) == 0 and len(results) == len(LAYOUT_FIXTURES)
     total_score = sum(r["score"] for r in results) / len(results) if results else 0.0
     overall_pct = int(total_score * 100)
-    _emit("--------------------------------------------------------------------------------")
-    _emit(f"Overall Accuracy: {overall_pct}% (Threshold: {int(ACCURACY_THRESHOLD * 100)}%)")
 
-    if total_score >= ACCURACY_THRESHOLD:
+    _emit("--------------------------------------------------------------------------------")
+    _emit(f"ALL_LAYOUT_FIXTURES_PASS={'YES' if all_pass else 'NO'}")
+    _emit(f"FAILED_FIXTURES={','.join(failed_fixtures) if failed_fixtures else 'NONE'}")
+    _emit(f"Average Accuracy: {overall_pct}% (Threshold: {int(ACCURACY_THRESHOLD * 100)}%)")
+
+    if all_pass:
         _emit("REAL_PROVIDER_DOCUMENT_NATIVE_EVAL=PASS")
         return 0
     else:

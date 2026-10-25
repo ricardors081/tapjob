@@ -255,12 +255,9 @@ def reconcile_reserved_resume_import(
             )
         else:
             response_text = (
-                f"Recebemos seu currículo ({doc_filename}) com sucesso!\n"
-                f"Identificamos {facts_count} competências e experiências preliminares.\n"
-                "Para confirmar e salvar essas informações no seu perfil, envie:\n"
-                "• 'confirmar todos': aceitar todas as sugestões\n"
-                "• 'rejeitar fato <número>': descartar um item específico\n"
-                "• 'editar fato <número>: <novo valor>': corrigir um item"
+                f"📄 Recebemos seu currículo ({doc_filename}) com sucesso!\n\n"
+                f"Identifiquei {facts_count} informações profissionais.\n\n"
+                "Deseja adicionar essas informações ao seu perfil? 😊"
             )
         return True, response_text
 
@@ -1030,11 +1027,9 @@ def dispatch_inbound_message(
                             or "documento"
                         )
                         response_text = (
-                            f"📄 *Recebemos seu currículo ({filename}) com sucesso!*\n\n"
-                            f"Identificamos *{facts_count}* itens profissionais preliminares.\n\n"
-                            "Deseja confirmar e adicionar essas informações ao seu perfil? 😊\n\n"
-                            "_(Você também pode me pedir para ajustar ou descartar "
-                            "algum item específico.)_"
+                            f"📄 Recebemos seu currículo ({filename}) com sucesso!\n\n"
+                            f"Identifiquei {facts_count} informações profissionais.\n\n"
+                            "Deseja adicionar essas informações ao seu perfil? 😊"
                         )
                     msg = queue_response_message(
                         session,
@@ -1269,13 +1264,37 @@ def dispatch_inbound_message(
                         )
                         session.commit()
                     doc_filename = doc_att.filename or "documento"
-                    response_text = (
-                        f"📄 *Recebemos seu currículo ({doc_filename}) com sucesso!*\n\n"
-                        f"Identificamos *{facts_count}* itens profissionais preliminares.\n\n"
-                        "Deseja confirmar e adicionar essas informações ao seu perfil? 😊\n\n"
-                        "_(Você também pode me pedir para ajustar "
-                        "ou descartar algum item específico.)_"
+                    imp_obj = (
+                        session.get(ResumeImport, uuid.UUID(str(import_res["resume_import_id"])))
+                        if import_res.get("resume_import_id")
+                        else None
                     )
+                    has_prior_same_checksum = False
+                    if imp_obj:
+                        cnt = session.scalar(
+                            select(func.count(ResumeImport.id)).where(
+                                ResumeImport.user_id == user.id,
+                                ResumeImport.checksum_sha256 == imp_obj.checksum_sha256,
+                                ResumeImport.id != imp_obj.id,
+                                ResumeImport.status == ImportStatus.FINALIZED,
+                            )
+                        )
+                        has_prior_same_checksum = bool(isinstance(cnt, (int, float)) and cnt > 0)
+
+                    if has_prior_same_checksum:
+                        response_text = (
+                            f"Recebemos novamente seu currículo ({doc_filename})!\n"
+                            f"Identificamos {facts_count} competências e "
+                            "experiências atualizadas.\n\n"
+                            "Reanalisei este currículo e encontrei informações atualizadas. "
+                            "Deseja atualizar seu perfil com elas? 😊"
+                        )
+                    else:
+                        response_text = (
+                            f"📄 Recebemos seu currículo ({doc_filename}) com sucesso!\n\n"
+                            f"Identifiquei {facts_count} informações profissionais.\n\n"
+                            "Deseja adicionar essas informações ao seu perfil? 😊"
+                        )
                 elif import_status == ImportStatus.FAILED.value:
                     failure_code_str = import_res.get("failure_code")
                     if envelope_id is not None:
@@ -1477,15 +1496,25 @@ def dispatch_inbound_message(
         "sim!",
         "sim por favor",
         "sim, por favor",
+        "pode adicionar",
+        "pode salvar",
         "pode atualizar",
         "atualiza",
+        "atualizar",
         "confirmo",
     )
     is_potentially_natural_confirm = lower_text.strip() in natural_confirm_terms or any(
-        p in lower_text for p in ("pode atualizar", "atualiza o perfil", "atualizar meu perfil")
+        p in lower_text
+        for p in (
+            "pode adicionar",
+            "pode salvar",
+            "pode atualizar",
+            "atualiza o perfil",
+            "atualizar meu perfil",
+        )
     )
 
-    has_pending_review = False
+    has_active_review_context = False
     if is_potentially_natural_confirm and user is not None:
         try:
             exec_res = session.execute(
@@ -1499,11 +1528,13 @@ def dispatch_inbound_message(
                 if hasattr(exec_res, "scalar_one_or_none")
                 else (exec_res.scalar() if hasattr(exec_res, "scalar") else None)
             )
-            has_pending_review = bool(count_val and count_val > 0)
+            has_active_review_context = bool(
+                isinstance(count_val, (int, float)) and count_val > 0
+            )
         except Exception:
-            has_pending_review = False
+            has_active_review_context = False
 
-    is_natural_confirm = is_potentially_natural_confirm and has_pending_review
+    is_natural_confirm = is_potentially_natural_confirm and has_active_review_context
 
     is_confirm_all = (
         not has_privacy_or_deletion_terms

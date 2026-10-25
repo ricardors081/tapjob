@@ -1209,4 +1209,4 @@ def test_sanitized_real_fixture_media_pipeline_integration() -> None:
     outbox_text = queued_messages[0].message_text
     assert "Recebemos seu currículo" in outbox_text
     assert "curriculo - teste.pdf" in outbox_text
-    assert "*3*" in outbox_text
+    assert "3 informações profissionais" in outbox_text

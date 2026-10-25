@@ -15,7 +15,7 @@ class SemanticHeadline(BaseModel):
     headline: str
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     source_excerpt: str | None = None
-    source_page: int | None = None
+    source_page: int | None = Field(default=None, ge=1)
 
 
 class SemanticSummary(BaseModel):
@@ -24,7 +24,7 @@ class SemanticSummary(BaseModel):
     summary: str
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     source_excerpt: str | None = None
-    source_page: int | None = None
+    source_page: int | None = Field(default=None, ge=1)
 
 
 class SemanticExperience(BaseModel):
@@ -43,7 +43,7 @@ class SemanticExperience(BaseModel):
     technologies: list[str] = Field(default_factory=list)
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     source_excerpt: str | None = None
-    source_page: int | None = None
+    source_page: int | None = Field(default=None, ge=1)
 
     @property
     def is_current(self) -> bool:
@@ -62,7 +62,7 @@ class SemanticEducation(BaseModel):
     description: str | None = None
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     source_excerpt: str | None = None
-    source_page: int | None = None
+    source_page: int | None = Field(default=None, ge=1)
 
 
 class SemanticSkill(BaseModel):
@@ -72,7 +72,7 @@ class SemanticSkill(BaseModel):
     category: str | None = None
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     source_excerpt: str | None = None
-    source_page: int | None = None
+    source_page: int | None = Field(default=None, ge=1)
 
 
 class SemanticCertification(BaseModel):
@@ -84,7 +84,7 @@ class SemanticCertification(BaseModel):
     issue_month: int | None = None
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     source_excerpt: str | None = None
-    source_page: int | None = None
+    source_page: int | None = Field(default=None, ge=1)
 
 
 class SemanticLanguage(BaseModel):
@@ -94,7 +94,7 @@ class SemanticLanguage(BaseModel):
     proficiency: str | None = None
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     source_excerpt: str | None = None
-    source_page: int | None = None
+    source_page: int | None = Field(default=None, ge=1)
 
 
 class SemanticProject(BaseModel):
@@ -107,7 +107,7 @@ class SemanticProject(BaseModel):
     technologies: list[str] = Field(default_factory=list)
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     source_excerpt: str | None = None
-    source_page: int | None = None
+    source_page: int | None = Field(default=None, ge=1)
 
 
 class SemanticPublication(BaseModel):
@@ -120,7 +120,7 @@ class SemanticPublication(BaseModel):
     description: str | None = None
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     source_excerpt: str | None = None
-    source_page: int | None = None
+    source_page: int | None = Field(default=None, ge=1)
 
 
 class SemanticLink(BaseModel):
@@ -130,7 +130,7 @@ class SemanticLink(BaseModel):
     label: str | None = None
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     source_excerpt: str | None = None
-    source_page: int | None = None
+    source_page: int | None = Field(default=None, ge=1)
 
 
 class SemanticAmbiguity(BaseModel):
@@ -140,7 +140,7 @@ class SemanticAmbiguity(BaseModel):
     question: str
     options: list[str] = Field(default_factory=list)
     source_excerpt: str | None = None
-    source_page: int | None = None
+    source_page: int | None = Field(default=None, ge=1)
 
 
 class SemanticUnclassifiedEvidence(BaseModel):
@@ -149,7 +149,7 @@ class SemanticUnclassifiedEvidence(BaseModel):
     evidence: str
     note: str | None = None
     source_excerpt: str | None = None
-    source_page: int | None = None
+    source_page: int | None = Field(default=None, ge=1)
 
 
 class SemanticResumeExtraction(BaseModel):

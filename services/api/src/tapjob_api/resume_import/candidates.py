@@ -129,6 +129,8 @@ class ValidatedCandidate:
         self.value_json = value_json
         self.confidence = confidence
         self.source_excerpt = (source_excerpt or "")[:MAX_SOURCE_EXCERPT_CHARS] or None
+        if source_page is not None and source_page < 1:
+            raise ValueError("source_page must be >= 1")
         self.source_page = source_page
 
 

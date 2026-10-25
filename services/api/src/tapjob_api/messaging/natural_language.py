@@ -675,6 +675,30 @@ def interpret_conversational_message(
 
     # 6. Fact Confirmation (All)
     has_pending_review = context is not None and context.has_pending_fact_review
+    is_unrelated_prompt = False
+    is_resume_prompt = False
+    if context is not None and context.last_assistant_prompt:
+        p_lower = context.last_assistant_prompt.lower()
+        is_resume_prompt = any(
+            cue in p_lower
+            for cue in (
+                "deseja adicionar essas informações",
+                "deseja adicionar essas informacoes",
+                "deseja atualizar seu perfil",
+                "informações profissionais",
+                "informacoes profissionais",
+                "recebemos seu currículo",
+                "recebemos seu curriculo",
+                "recebemos novamente seu currículo",
+                "recebemos novamente seu curriculo",
+                "confirmar e salvar",
+                "confirmar todos",
+                "fato",
+                "revis",
+            )
+        )
+        if not is_resume_prompt:
+            is_unrelated_prompt = True
 
     # Unconditional confirmation terms (unambiguous commands with or without active review context)
     unambiguous_conf_terms = (
@@ -701,7 +725,7 @@ def interpret_conversational_message(
         "aceito",
     )
 
-    # Contextual confirmation phrases (require active pending fact review)
+    # Contextual confirmation phrases (require active pending fact review and no unrelated prompt)
     contextual_conf_terms = (
         "sim",
         "pode",
@@ -748,10 +772,18 @@ def interpret_conversational_message(
         "atualiza",
         "atualizar",
     )
-    is_contextual_conf = has_pending_review and any(t in clean for t in contextual_conf_terms)
+    is_contextual_conf = (
+        has_pending_review
+        and not is_unrelated_prompt
+        and any(t in clean for t in contextual_conf_terms)
+    )
 
     if is_unambiguous or is_contextual_conf:
-        ctx_tag = "context:pending_fact_review" if has_pending_review else "confirm_all_pattern"
+        ctx_tag = (
+            "context:last_prompt_resume_review"
+            if is_resume_prompt
+            else ("context:pending_fact_review" if has_pending_review else "confirm_all_pattern")
+        )
         return SemanticInterpretation(
             intent=ConversationalIntent.FACT_CONFIRM_ALL,
             confidence=IntentConfidence.HIGH,
@@ -1008,6 +1040,12 @@ def interpret_conversational_message(
         "beleza",
         "combinado",
         "vamos la",
+        "pode adicionar",
+        "pode salvar",
+        "pode atualizar",
+        "atualiza",
+        "atualizar",
+        "confirmo",
         "essa parece boa",
         "gostei dessa",
         "curti essa",
@@ -1021,12 +1059,40 @@ def interpret_conversational_message(
     if is_affirmative_or_casual:
         # Check context for resolution
         if context is not None:
+            is_unrelated_prompt = False
+            is_resume_prompt = False
+            if context.last_assistant_prompt:
+                p_lower = context.last_assistant_prompt.lower()
+                is_resume_prompt = any(
+                    cue in p_lower
+                    for cue in (
+                        "deseja adicionar essas informações",
+                        "deseja adicionar essas informacoes",
+                        "deseja atualizar seu perfil",
+                        "informações profissionais",
+                        "informacoes profissionais",
+                        "recebemos seu currículo",
+                        "recebemos seu curriculo",
+                        "recebemos novamente seu currículo",
+                        "recebemos novamente seu curriculo",
+                        "confirmar e salvar",
+                        "confirmar todos",
+                    )
+                )
+                if not is_resume_prompt:
+                    is_unrelated_prompt = True
+
             # Context Case A: Pending Fact Review waiting for confirmation
-            if context.has_pending_fact_review:
+            # Only resolves to FACT_CONFIRM_ALL if active prompt matches or no conflict exists
+            if not is_unrelated_prompt and context.has_pending_fact_review:
                 return SemanticInterpretation(
                     intent=ConversationalIntent.FACT_CONFIRM_ALL,
                     confidence=IntentConfidence.HIGH,
-                    context_used="context:pending_fact_review",
+                    context_used=(
+                        "context:last_prompt_resume_review"
+                        if is_resume_prompt
+                        else "context:pending_fact_review"
+                    ),
                 )
 
             # Context Case B: Active Target Job present

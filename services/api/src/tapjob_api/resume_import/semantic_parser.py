@@ -68,8 +68,18 @@ def _is_excerpt_grounded(
 ) -> bool:
     """Verifies that the excerpt is genuinely grounded in the document text.
 
-    Fail-closed: requires a continuous normalized substring.
-    Never accepts disjoint prefix/suffix matches with fabricated middle content.
+    Fail-closed policy:
+    - If source_page is provided:
+        * source_page must be >= 1;
+        * if pages_text is provided, source_page must be in range:
+          1 <= source_page <= len(pages_text);
+        * validate ONLY against that specific page text;
+        * if excerpt does not exist on that page: returns False immediately;
+        * never searches other pages or falls back to full document.
+    - If source_page is None:
+        * validates against the full document text.
+    - Requires continuous normalized substring match.
+    - Short excerpts (<= 3 chars) enforce word-boundary matching.
     """
     if not excerpt or not excerpt.strip():
         return False
@@ -77,26 +87,31 @@ def _is_excerpt_grounded(
     if not clean_excerpt:
         return False
 
-    # Short excerpt boundary check
-    if len(clean_excerpt) <= 3:
-        pattern = rf"(?:\b|\A){re.escape(clean_excerpt)}(?:\b|\Z)"
-        if (
-            pages_text
-            and source_page is not None
-            and 1 <= source_page <= len(pages_text)
-            and re.search(pattern, _normalize_text_for_search(pages_text[source_page - 1]))
-        ):
-            return True
-        return bool(re.search(pattern, _normalize_text_for_search(full_text)))
+    is_short = len(clean_excerpt) <= 3
+    pattern = rf"(?:\b|\A){re.escape(clean_excerpt)}(?:\b|\Z)" if is_short else None
 
-    # Continuous normalized excerpt check on specific page when provided
-    if pages_text and source_page is not None and 1 <= source_page <= len(pages_text):
-        clean_page = _normalize_text_for_search(pages_text[source_page - 1])
-        if clean_excerpt in clean_page:
-            return True
+    # When source_page is explicitly specified, enforce strict page-scoped validation
+    if source_page is not None:
+        if source_page < 1:
+            return False
+        if pages_text is not None:
+            if not (1 <= source_page <= len(pages_text)):
+                return False
+            target_text = pages_text[source_page - 1]
+        else:
+            if source_page != 1:
+                return False
+            target_text = full_text
 
-    # Continuous normalized excerpt check across full document
+        clean_target = _normalize_text_for_search(target_text)
+        if pattern:
+            return bool(re.search(pattern, clean_target))
+        return clean_excerpt in clean_target
+
+    # When source_page is None, validate against full document
     clean_full = _normalize_text_for_search(full_text)
+    if pattern:
+        return bool(re.search(pattern, clean_full))
     return clean_excerpt in clean_full
 
 
@@ -190,67 +205,22 @@ class SemanticResumeParser:
         candidate_name = extraction.candidate_name.strip() if extraction.candidate_name else None
         dropped_ungrounded_count = 0
 
-        # 1. Headline (ensure distinction from candidate name)
+        # 1. Headline (ensure distinction from candidate name, trust model
+        # without role dictionaries)
         if extraction.professional_headline and extraction.professional_headline.headline:
             headline_text = extraction.professional_headline.headline.strip()
-            # If headline is identical to candidate name or trivial person's name,
-            # reject as headline
             is_name_confusion = False
-            role_kws = (
-                "engineer",
-                "analyst",
-                "developer",
-                "manager",
-                "lead",
-                "specialist",
-                "pmo",
-                "data",
-                "ai",
-                "director",
-                "consultant",
-                "coordenador",
-                "gerente",
-                "analista",
-                "desenvolvedor",
-                "arquiteto",
-                "líder",
-                "lider",
-                "especialista",
-                "consultor",
-                "cientista",
-                "head",
-                "officer",
-                "tech",
-                "software",
-                "product",
-                "scrum",
-                "agile",
-            )
-            has_role_kw = any(kw in headline_text.lower() for kw in role_kws)
+
             if candidate_name:
-                cand_lower = candidate_name.lower()
-                head_lower = headline_text.lower()
-                if (
-                    head_lower == cand_lower
-                    or head_lower in cand_lower
-                    or (cand_lower in head_lower and not has_role_kw)
-                    or (
-                        len(headline_text.split()) <= 3
-                        and any(
-                            part.lower() in cand_lower
-                            for part in headline_text.split()
-                            if len(part) > 2
-                        )
-                        and not has_role_kw
-                    )
-                ):
-                    is_name_confusion = True
-            elif not has_role_kw and len(headline_text.split()) <= 4:
-                # If no candidate_name but headline looks like a person's name
-                # (2-3 capitalized words with no role keywords)
-                words = headline_text.split()
-                if 2 <= len(words) <= 3 and all(w[0].isupper() for w in words if w.isalpha()):
-                    is_name_confusion = True
+                norm_cand = _normalize_text_for_search(candidate_name)
+                norm_head = _normalize_text_for_search(headline_text)
+                if norm_cand and norm_head:
+                    cand_tokens = set(norm_cand.split())
+                    head_tokens = set(norm_head.split())
+                    if norm_head == norm_cand or (
+                        head_tokens and head_tokens.issubset(cand_tokens)
+                    ):
+                        is_name_confusion = True
 
             if not is_name_confusion:
                 excerpt = extraction.professional_headline.source_excerpt
@@ -617,14 +587,36 @@ class SemanticResumeParser:
         for term in sorted(conflicts):
             structural_ambiguities.append(
                 {
-                    "kind": "structural_conflict",
+                    "field": "category_conflict",
                     "term": term,
+                    "kind": "structural_conflict",
+                    "question": (
+                        f"Encontrei uma informação ambígua sobre '{term}'. "
+                        "Você quis dizer uma competência ou um idioma?"
+                    ),
+                    "options": ["competência", "idioma"],
                     "description": (
                         f"Term '{term}' claimed in conflicting categories "
                         "(skill and language). Requires human review."
                     ),
                 }
             )
+
+        if conflicts:
+            facts = [
+                f
+                for f in facts
+                if not (
+                    (
+                        f.fact_type == "skill"
+                        and str(f.value.get("name") or "").strip().lower() in conflicts
+                    )
+                    or (
+                        f.fact_type == "language"
+                        and str(f.value.get("language") or "").strip().lower() in conflicts
+                    )
+                )
+            ]
 
         if dropped_ungrounded_count > 0:
             logger.info(
