@@ -76,33 +76,33 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
     session_factory = _setup_sqlite_db()
 
     with session_factory() as session:
-        user = User(
+        initial_user = User(
             id=uuid.uuid4(),
             status=UserStatus.ACTIVE,
             locale="pt-BR",
             timezone="America/Cuiaba",
         )
-        session.add(user)
+        session.add(initial_user)
         session.commit()
-        user_id = user.id
+        user_id = initial_user.id
 
     pdf_bytes = b"%PDF-1.4 Mock resume content for Ricardo Silva with unique payload"
     checksum = hashlib.sha256(pdf_bytes).hexdigest()
 
     # --- IMPORT 1 ---
     with session_factory() as session:
-        user = session.get(User, user_id)
-        assert user is not None
+        user1 = session.get(User, user_id)
+        assert user1 is not None
 
         imp1 = ResumeImport(
             id=uuid.uuid4(),
-            user_id=user.id,
+            user_id=user1.id,
             status=ImportStatus.READY_FOR_REVIEW,
             original_filename="curriculo_ricardo.pdf",
             media_type="application/pdf",
             byte_size=len(pdf_bytes),
             checksum_sha256=checksum,
-            storage_key=f"resumes/{user.id}/imp1.pdf",
+            storage_key=f"resumes/{user1.id}/imp1.pdf",
             parser_identity="test-parser",
         )
         session.add(imp1)
@@ -114,7 +114,7 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
         cand1 = ResumeImportCandidate(
             id=uuid.uuid4(),
             resume_import_id=imp1.id,
-            user_id=user.id,
+            user_id=user1.id,
             candidate_kind="skill",
             value_json={"kind": "skill", "name": "Python"},
             confidence=1.0,
@@ -123,7 +123,7 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
         cand2 = ResumeImportCandidate(
             id=uuid.uuid4(),
             resume_import_id=imp1.id,
-            user_id=user.id,
+            user_id=user1.id,
             candidate_kind="skill",
             value_json={"kind": "skill", "name": "Gestão de Stakeholders"},
             confidence=1.0,
@@ -132,7 +132,7 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
         cand3 = ResumeImportCandidate(
             id=uuid.uuid4(),
             resume_import_id=imp1.id,
-            user_id=user.id,
+            user_id=user1.id,
             candidate_kind="language",
             value_json={"kind": "language", "language": "Português", "proficiency": "Nativo"},
             confidence=1.0,
@@ -149,7 +149,7 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
         ]
         res1 = resume_import_service.finalize_resume_import(
             session,
-            user=user,
+            user=user1,
             import_id=imp1.id,
             command=FinalizeResumeImportCommand(expected_profile_version=0, decisions=decisions1),
         )
@@ -158,15 +158,16 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
 
     # Verify state after Import 1
     with session_factory() as session:
-        user = session.get(User, user_id)
-        assert user is not None
-        profile = career_profile_service.get_career_profile(session, user=user)
-        assert profile.profile_version == 1
+        user_check1 = session.get(User, user_id)
+        assert user_check1 is not None
+        profile1 = career_profile_service.get_career_profile(session, user=user_check1)
+        assert profile1 is not None
+        assert profile1.profile_version == 1
 
         active_facts = list(
             session.scalars(
                 select(ProfileFact).where(
-                    ProfileFact.user_id == user.id,
+                    ProfileFact.user_id == user_check1.id,
                     ProfileFact.status == FactStatus.ACTIVE,
                 )
             )
@@ -176,7 +177,7 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
         # Add a MANUAL fact (source_kind=user_direct)
         manual_fact = career_profile_service.add_profile_fact(
             session,
-            user=user,
+            user=user_check1,
             expected_version=1,
             fact_type=FactType.SKILL,
             value=SkillFactValue(name="Liderança Estratégica"),
@@ -184,13 +185,14 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
         session.commit()
         assert manual_fact.source_kind == FactSourceKind.USER_DIRECT
 
-        profile = career_profile_service.get_career_profile(session, user=user)
-        assert profile.profile_version == 2
+        profile1_v2 = career_profile_service.get_career_profile(session, user=user_check1)
+        assert profile1_v2 is not None
+        assert profile1_v2.profile_version == 2
 
         active_facts_v2 = list(
             session.scalars(
                 select(ProfileFact).where(
-                    ProfileFact.user_id == user.id,
+                    ProfileFact.user_id == user_check1.id,
                     ProfileFact.status == FactStatus.ACTIVE,
                 )
             )
@@ -199,18 +201,18 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
 
     # --- IMPORT 2 (Same PDF, same checksum) ---
     with session_factory() as session:
-        user = session.get(User, user_id)
-        assert user is not None
+        user2 = session.get(User, user_id)
+        assert user2 is not None
 
         imp2 = ResumeImport(
             id=uuid.uuid4(),
-            user_id=user.id,
+            user_id=user2.id,
             status=ImportStatus.READY_FOR_REVIEW,
             original_filename="curriculo_ricardo.pdf",
             media_type="application/pdf",
             byte_size=len(pdf_bytes),
             checksum_sha256=checksum,
-            storage_key=f"resumes/{user.id}/imp2.pdf",
+            storage_key=f"resumes/{user2.id}/imp2.pdf",
             parser_identity="test-parser",
         )
         session.add(imp2)
@@ -221,7 +223,7 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
         cand4 = ResumeImportCandidate(
             id=uuid.uuid4(),
             resume_import_id=imp2.id,
-            user_id=user.id,
+            user_id=user2.id,
             candidate_kind="skill",
             value_json={"kind": "skill", "name": "Python"},
             confidence=1.0,
@@ -230,7 +232,7 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
         cand5 = ResumeImportCandidate(
             id=uuid.uuid4(),
             resume_import_id=imp2.id,
-            user_id=user.id,
+            user_id=user2.id,
             candidate_kind="skill",
             value_json={"kind": "skill", "name": "Gestão de Stakeholders"},
             confidence=1.0,
@@ -239,7 +241,7 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
         cand6 = ResumeImportCandidate(
             id=uuid.uuid4(),
             resume_import_id=imp2.id,
-            user_id=user.id,
+            user_id=user2.id,
             candidate_kind="language",
             value_json={"kind": "language", "language": "Português", "proficiency": "Nativo"},
             confidence=1.0,
@@ -255,7 +257,7 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
         ]
         res2 = resume_import_service.finalize_resume_import(
             session,
-            user=user,
+            user=user2,
             import_id=imp2.id,
             command=FinalizeResumeImportCommand(expected_profile_version=2, decisions=decisions2),
         )
@@ -264,16 +266,17 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
 
     # Verify state after Import 2:
     with session_factory() as session:
-        user = session.get(User, user_id)
-        assert user is not None
-        profile = career_profile_service.get_career_profile(session, user=user)
-        assert profile.profile_version == 3
+        user_check2 = session.get(User, user_id)
+        assert user_check2 is not None
+        profile2 = career_profile_service.get_career_profile(session, user=user_check2)
+        assert profile2 is not None
+        assert profile2.profile_version == 3
 
         # Older facts from imp1 must be SUPERSEDED with inactive_from_profile_version == 3
         superseded_imp1 = list(
             session.scalars(
                 select(ProfileFact).where(
-                    ProfileFact.user_id == user.id,
+                    ProfileFact.user_id == user_check2.id,
                     ProfileFact.source_ref == str(imp1_id),
                 )
             )
@@ -286,7 +289,7 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
         # Manual fact must remain ACTIVE
         manual = session.scalar(
             select(ProfileFact).where(
-                ProfileFact.user_id == user.id,
+                ProfileFact.user_id == user_check2.id,
                 ProfileFact.source_kind == FactSourceKind.USER_DIRECT,
             )
         )
@@ -298,7 +301,7 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
         active_facts_v3 = list(
             session.scalars(
                 select(ProfileFact).where(
-                    ProfileFact.user_id == user.id,
+                    ProfileFact.user_id == user_check2.id,
                     ProfileFact.status == FactStatus.ACTIVE,
                 )
             )
@@ -307,18 +310,18 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
 
     # --- IMPORT 3 (Same PDF, third time) ---
     with session_factory() as session:
-        user = session.get(User, user_id)
-        assert user is not None
+        user3 = session.get(User, user_id)
+        assert user3 is not None
 
         imp3 = ResumeImport(
             id=uuid.uuid4(),
-            user_id=user.id,
+            user_id=user3.id,
             status=ImportStatus.READY_FOR_REVIEW,
             original_filename="curriculo_ricardo.pdf",
             media_type="application/pdf",
             byte_size=len(pdf_bytes),
             checksum_sha256=checksum,
-            storage_key=f"resumes/{user.id}/imp3.pdf",
+            storage_key=f"resumes/{user3.id}/imp3.pdf",
             parser_identity="test-parser",
         )
         session.add(imp3)
@@ -327,7 +330,7 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
         cand7 = ResumeImportCandidate(
             id=uuid.uuid4(),
             resume_import_id=imp3.id,
-            user_id=user.id,
+            user_id=user3.id,
             candidate_kind="skill",
             value_json={"kind": "skill", "name": "Python"},
             confidence=1.0,
@@ -336,7 +339,7 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
         cand8 = ResumeImportCandidate(
             id=uuid.uuid4(),
             resume_import_id=imp3.id,
-            user_id=user.id,
+            user_id=user3.id,
             candidate_kind="skill",
             value_json={"kind": "skill", "name": "Gestão de Stakeholders"},
             confidence=1.0,
@@ -345,7 +348,7 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
         cand9 = ResumeImportCandidate(
             id=uuid.uuid4(),
             resume_import_id=imp3.id,
-            user_id=user.id,
+            user_id=user3.id,
             candidate_kind="language",
             value_json={"kind": "language", "language": "Português", "proficiency": "Nativo"},
             confidence=1.0,
@@ -361,7 +364,7 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
         ]
         res3 = resume_import_service.finalize_resume_import(
             session,
-            user=user,
+            user=user3,
             import_id=imp3.id,
             command=FinalizeResumeImportCommand(expected_profile_version=3, decisions=decisions3),
         )
@@ -370,16 +373,17 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
 
     # Final Verification after 3x imports
     with session_factory() as session:
-        user = session.get(User, user_id)
-        assert user is not None
-        profile = career_profile_service.get_career_profile(session, user=user)
-        assert profile.profile_version == 4
+        user_check3 = session.get(User, user_id)
+        assert user_check3 is not None
+        profile3 = career_profile_service.get_career_profile(session, user=user_check3)
+        assert profile3 is not None
+        assert profile3.profile_version == 4
 
         # Total active facts remains 4 (3 from imp3 + 1 manual)
         active_facts_v4 = list(
             session.scalars(
                 select(ProfileFact).where(
-                    ProfileFact.user_id == user.id,
+                    ProfileFact.user_id == user_check3.id,
                     ProfileFact.status == FactStatus.ACTIVE,
                 )
             )
@@ -389,7 +393,7 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
         # Manual fact remains active
         manual = session.scalar(
             select(ProfileFact).where(
-                ProfileFact.user_id == user.id,
+                ProfileFact.user_id == user_check3.id,
                 ProfileFact.source_kind == FactSourceKind.USER_DIRECT,
             )
         )
@@ -397,7 +401,7 @@ def test_three_times_same_pdf_idempotency_and_reconciliation() -> None:
         assert manual.status == FactStatus.ACTIVE
 
         # Master resume version is at version 3
-        master = resume_import_service.get_master_resume(session, user=user)
+        master = resume_import_service.get_master_resume(session, user=user_check3)
         assert master is not None
         _resume, resume_version = master
         assert resume_version.version == 3

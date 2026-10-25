@@ -376,13 +376,13 @@ def test_document_native_layout_variant(variant_name: str, fixture_text: str) ->
 
         # 2. Employer is recognized
         assert any(
-            f.fact_type == "experience" and "Inpasa" in f.value.get("employer", "")
+            f.fact_type == "experience" and "Inpasa" in str(f.value.get("employer") or "")
             for f in parsed.facts
         )
 
         # 3. Education is recognized
         assert any(
-            f.fact_type == "education" and "São Paulo" in f.value.get("institution", "")
+            f.fact_type == "education" and "São Paulo" in str(f.value.get("institution") or "")
             for f in parsed.facts
         )
 

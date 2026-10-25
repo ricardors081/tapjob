@@ -19,7 +19,7 @@ from __future__ import annotations
 from tapjob_api.messaging.profile_formatter import (
     _format_education_item,
 )
-from tapjob_api.ports._common import CallContext
+from tapjob_api.ports._common import AdapterHealth, AdapterHealthStatus, CallContext
 from tapjob_api.ports.ai_gateway import (
     AiGateway,
     AiGatewayCapability,
@@ -54,10 +54,8 @@ class MockAiGateway(AiGateway):
             ]
         )
 
-    async def health(self, ctx: CallContext):
+    async def health(self, ctx: CallContext) -> AdapterHealth:
         from datetime import UTC, datetime
-
-        from tapjob_api.ports._common import AdapterHealth, AdapterHealthStatus
 
         return AdapterHealth(status=AdapterHealthStatus.HEALTHY, checked_at=datetime.now(UTC))
 
