@@ -1481,11 +1481,8 @@ def dispatch_inbound_message(
         "atualiza",
         "confirmo",
     )
-    is_potentially_natural_confirm = (
-        lower_text.strip() in natural_confirm_terms
-        or any(
-            p in lower_text for p in ("pode atualizar", "atualiza o perfil", "atualizar meu perfil")
-        )
+    is_potentially_natural_confirm = lower_text.strip() in natural_confirm_terms or any(
+        p in lower_text for p in ("pode atualizar", "atualiza o perfil", "atualizar meu perfil")
     )
 
     has_pending_review = False
