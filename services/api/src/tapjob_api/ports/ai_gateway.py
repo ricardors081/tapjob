@@ -36,6 +36,7 @@ from tapjob_api.ports.capabilities import CapabilityManifest
 
 class AiGatewayCapability(StrEnum):
     STRUCTURED_OUTPUT = "structured_output"
+    FILE_INPUT = "file_input"
 
 
 class AiPurpose(StrEnum):
@@ -65,6 +66,17 @@ class UntrustedContent:
 
 
 @dataclass(frozen=True, slots=True)
+class UntrustedFile:
+    """Document-native hostile input: original PDF, DOCX, or other binary/rich document payload.
+    Enables visual, layout-aware AI parsing without losing multi-column or spatial structure."""
+
+    source_kind: str
+    filename: str
+    media_type: str
+    content: bytes
+
+
+@dataclass(frozen=True, slots=True)
 class FactRef:
     fact_id: str
 
@@ -84,6 +96,7 @@ class AiRequest[OutputT]:
     untrusted: tuple[UntrustedContent, ...]
     grounding: tuple[FactRef, ...]
     validate_output: Callable[[object], OutputT]
+    untrusted_files: tuple[UntrustedFile, ...] = ()
 
 
 class AiSafetyStatus(StrEnum):

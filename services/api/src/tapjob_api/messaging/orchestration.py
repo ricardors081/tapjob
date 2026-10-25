@@ -26,7 +26,7 @@ from typing import Any
 import httpx
 import redis
 from celery.exceptions import SoftTimeLimitExceeded
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from tapjob_api.career_profile.fact_values import SkillFactValue
@@ -234,15 +234,38 @@ def reconcile_reserved_resume_import(
                 "filename": doc_filename,
             },
         )
-        session.commit()
-        response_text = (
-            f"Recebemos seu currículo ({doc_filename}) com sucesso!\n"
-            f"Identificamos {facts_count} competências e experiências preliminares.\n"
-            "Para confirmar e salvar essas informações no seu perfil, envie:\n"
-            "• 'confirmar todos': aceitar todas as sugestões\n"
-            "• 'rejeitar fato <número>': descartar um item específico\n"
-            "• 'editar fato <número>: <novo valor>': corrigir um item"
-        )
+        has_prior_same_checksum = (
+            session.scalar(
+                select(func.count(ResumeImport.id)).where(
+                    ResumeImport.user_id == user.id,
+                    ResumeImport.checksum_sha256 == existing_import.checksum_sha256,
+                    ResumeImport.id != existing_import.id,
+                    ResumeImport.status == ImportStatus.FINALIZED,
+                )
+            )
+            or 0
+        ) > 0
+
+        if has_prior_same_checksum:
+            response_text = (
+                f"Recebemos novamente seu currículo ({doc_filename})!\n"
+                f"Identificamos {facts_count} competências e experiências atualizadas.\n"
+                "Ao confirmar, vou atualizar as informações que vieram desse mesmo arquivo, "
+                "mantendo o que você adicionou manualmente. Deseja continuar? 😊\n\n"
+                "Para confirmar e salvar essas informações no seu perfil, envie:\n"
+                "• 'confirmar todos': aceitar todas as sugestões\n"
+                "• 'rejeitar fato <número>': descartar um item específico\n"
+                "• 'editar fato <número>: <novo valor>': corrigir um item"
+            )
+        else:
+            response_text = (
+                f"Recebemos seu currículo ({doc_filename}) com sucesso!\n"
+                f"Identificamos {facts_count} competências e experiências preliminares.\n"
+                "Para confirmar e salvar essas informações no seu perfil, envie:\n"
+                "• 'confirmar todos': aceitar todas as sugestões\n"
+                "• 'rejeitar fato <número>': descartar um item específico\n"
+                "• 'editar fato <número>: <novo valor>': corrigir um item"
+            )
         return True, response_text
 
     if existing_import.status == ImportStatus.FAILED:

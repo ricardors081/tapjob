@@ -660,6 +660,82 @@ def process_resume_import(
 # -- finalization -------------------------------------------------------------------------------
 
 
+def _is_duplicate_fact(
+    candidate_kind: str,
+    candidate_val: dict[str, Any],
+    existing_fact: ProfileFact,
+) -> bool:
+    """Checks if a candidate fact has an identical semantic value to an existing active fact."""
+    ex_val = existing_fact.value_json if isinstance(existing_fact.value_json, dict) else {}
+    if candidate_kind == FactType.SKILL.value:
+        cand_name = str(candidate_val.get("name") or "").strip().lower()
+        ex_name = str(ex_val.get("name") or "").strip().lower()
+        return cand_name == ex_name and bool(cand_name)
+
+    if candidate_kind == FactType.LANGUAGE.value:
+        cand_lang = str(candidate_val.get("language") or "").strip().lower()
+        ex_lang = str(ex_val.get("language") or "").strip().lower()
+        return cand_lang == ex_lang and bool(cand_lang)
+
+    if candidate_kind == FactType.EDUCATION.value:
+        cand_inst = str(candidate_val.get("institution") or "").strip().lower()
+        ex_inst = str(ex_val.get("institution") or "").strip().lower()
+        cand_deg = str(candidate_val.get("degree") or "").strip().lower()
+        ex_deg = str(ex_val.get("degree") or "").strip().lower()
+        cand_field = (
+            str(candidate_val.get("fieldOfStudy") or candidate_val.get("field_of_study") or "")
+            .strip()
+            .lower()
+        )
+        ex_field = (
+            str(ex_val.get("fieldOfStudy") or ex_val.get("field_of_study") or "").strip().lower()
+        )
+        return (
+            cand_inst == ex_inst
+            and cand_deg == ex_deg
+            and cand_field == ex_field
+            and bool(cand_inst)
+        )
+
+    if candidate_kind == FactType.EXPERIENCE.value:
+        cand_emp = str(candidate_val.get("employer") or "").strip().lower()
+        ex_emp = str(ex_val.get("employer") or "").strip().lower()
+        cand_title = str(candidate_val.get("title") or "").strip().lower()
+        ex_title = str(ex_val.get("title") or "").strip().lower()
+        cand_start = candidate_val.get("start")
+        ex_start = ex_val.get("start")
+        return (
+            cand_emp == ex_emp
+            and cand_title == ex_title
+            and cand_start == ex_start
+            and bool(cand_emp)
+        )
+
+    if candidate_kind == FactType.CERTIFICATION.value:
+        cand_cert = str(candidate_val.get("name") or "").strip().lower()
+        ex_cert = str(ex_val.get("name") or "").strip().lower()
+        cand_iss = str(candidate_val.get("issuer") or "").strip().lower()
+        ex_iss = str(ex_val.get("issuer") or "").strip().lower()
+        return cand_cert == ex_cert and cand_iss == ex_iss and bool(cand_cert)
+
+    if candidate_kind == FactType.PROJECT.value:
+        cand_p = str(candidate_val.get("name") or "").strip().lower()
+        ex_p = str(ex_val.get("name") or "").strip().lower()
+        return cand_p == ex_p and bool(cand_p)
+
+    if candidate_kind == FactType.PUBLICATION.value:
+        cand_pub = str(candidate_val.get("title") or "").strip().lower()
+        ex_pub = str(ex_val.get("title") or "").strip().lower()
+        return cand_pub == ex_pub and bool(cand_pub)
+
+    if candidate_kind == FactType.LINK.value:
+        cand_url = str(candidate_val.get("url") or "").strip().lower()
+        ex_url = str(ex_val.get("url") or "").strip().lower()
+        return cand_url == ex_url and bool(cand_url)
+
+    return False
+
+
 def _revalidate_edited_value(
     candidate_kind: str, edited_value: dict[str, Any]
 ) -> dict[str, Any] | None:
@@ -830,12 +906,74 @@ def finalize_resume_import(
     if headline_decided or summary_decided:
         career_profile_service.record_profile_revision(session, profile=profile)
 
+    # 1. Same-checksum reconciliation:
+    # Query prior finalized imports for the user with the same checksum_sha256
+    prior_same_checksum_import_ids = list(
+        session.scalars(
+            select(ResumeImport.id).where(
+                ResumeImport.user_id == user.id,
+                ResumeImport.checksum_sha256 == locked.checksum_sha256,
+                ResumeImport.id != locked.id,
+                ResumeImport.status == ImportStatus.FINALIZED,
+            )
+        )
+    )
+    superseded_count = 0
+    if prior_same_checksum_import_ids:
+        prior_id_strs = [str(pid) for pid in prior_same_checksum_import_ids]
+        stale_facts = list(
+            session.scalars(
+                select(ProfileFact).where(
+                    ProfileFact.user_id == user.id,
+                    ProfileFact.career_profile_id == profile.id,
+                    ProfileFact.source_kind == FactSourceKind.RESUME_IMPORT,
+                    ProfileFact.source_ref.in_(prior_id_strs),
+                    ProfileFact.status == FactStatus.ACTIVE,
+                )
+            )
+        )
+        for sf in stale_facts:
+            sf.status = FactStatus.SUPERSEDED
+            sf.inactive_from_profile_version = profile.profile_version
+        superseded_count = len(stale_facts)
+
+    # 2. Retrieve remaining active profile facts for deduplication
+    active_profile_facts = list(
+        session.scalars(
+            select(ProfileFact).where(
+                ProfileFact.user_id == user.id,
+                ProfileFact.career_profile_id == profile.id,
+                ProfileFact.status == FactStatus.ACTIVE,
+            )
+        )
+    )
+
     current = datetime.now(UTC)
     fact_ids: list[str] = []
+    new_facts_count = 0
     for candidate, value_json in accepted_fact_candidates:
-        fact_id = uuid.uuid4()
-        session.add(
-            ProfileFact(
+        c_kind = candidate.candidate_kind
+        matched_existing: ProfileFact | None = None
+        for ef in active_profile_facts:
+            if ef.fact_type.value == c_kind and _is_duplicate_fact(c_kind, value_json, ef):
+                matched_existing = ef
+                break
+
+        if matched_existing is not None:
+            fact_ids.append(str(matched_existing.id))
+            logger.info(
+                "resume_import.fact_deduplicated_existing",
+                extra={
+                    "user_id": str(user.id),
+                    "import_id": str(locked.id),
+                    "candidate_id": str(candidate.id),
+                    "existing_fact_id": str(matched_existing.id),
+                    "fact_type": c_kind,
+                },
+            )
+        else:
+            fact_id = uuid.uuid4()
+            new_fact = ProfileFact(
                 id=fact_id,
                 user_id=user.id,
                 career_profile_id=profile.id,
@@ -851,9 +989,25 @@ def finalize_resume_import(
                 lineage_id=fact_id,
                 active_from_profile_version=profile.profile_version,
             )
-        )
-        fact_ids.append(str(fact_id))
+            session.add(new_fact)
+            active_profile_facts.append(new_fact)
+            fact_ids.append(str(fact_id))
+            new_facts_count += 1
     session.flush()
+
+    logger.info(
+        "resume_import.finalized_reconciliation",
+        extra={
+            "import_id": str(locked.id),
+            "user_id": str(user.id),
+            "checksum_sha256": locked.checksum_sha256,
+            "profile_version": profile.profile_version,
+            "superseded_count": superseded_count,
+            "accepted_count": len(accepted_fact_candidates),
+            "new_facts_count": new_facts_count,
+            "total_facts_in_snapshot": len(fact_ids),
+        },
+    )
 
     resume, resume_version = _create_master_resume_version(
         session,
