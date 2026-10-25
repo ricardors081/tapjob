@@ -23,6 +23,7 @@ from typing import Any
 from celery import Task, shared_task
 from sqlalchemy.orm import Session, sessionmaker
 
+from tapjob_api.ports.resume_parser import ResumeParser
 from tapjob_api.resume_import import service
 from tapjob_api.resume_import.errors import ImportLeaseActiveError, TransientProcessingError
 from tapjob_api.resume_import.limits import (
@@ -42,16 +43,22 @@ logger = logging.getLogger(__name__)
 RESUME_IMPORT_PROCESS_TASK_NAME = "resume_import.process"
 RESUME_IMPORT_SWEEP_TASK_NAME = "resume_import.sweep_stale_dispatches"
 
+
 _session_factory: sessionmaker[Session] | None = None
 _storage: ObjectStoragePort | None = None
+_parser: ResumeParser | None = None
 
 
 def configure_resume_import_worker(
-    *, session_factory: sessionmaker[Session], storage: ObjectStoragePort
+    *,
+    session_factory: sessionmaker[Session],
+    storage: ObjectStoragePort,
+    parser: ResumeParser | None = None,
 ) -> None:
-    global _session_factory, _storage
+    global _session_factory, _storage, _parser
     _session_factory = session_factory
     _storage = storage
+    _parser = parser
 
 
 def _require_session_factory() -> sessionmaker[Session]:
@@ -128,7 +135,10 @@ def process_resume_import_task(self: Task[Any, Any], import_id: str) -> None:
     with _require_session_factory()() as session:
         try:
             service.process_resume_import(
-                session, import_id=uuid.UUID(import_id), storage=_require_storage()
+                session,
+                import_id=uuid.UUID(import_id),
+                storage=_require_storage(),
+                parser=_parser,
             )
         except TransientProcessingError as error:
             raise self.retry(exc=error, countdown=TRANSIENT_RETRY_COUNTDOWN_SECONDS) from error

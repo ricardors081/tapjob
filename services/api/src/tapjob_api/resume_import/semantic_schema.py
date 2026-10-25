@@ -26,7 +26,7 @@ class SemanticSummary(BaseModel):
 
 
 class SemanticExperience(BaseModel):
-    model_config = {"extra": "ignore"}
+    model_config = {"extra": "ignore", "populate_by_name": True}
 
     employer: str
     title: str
@@ -35,12 +35,16 @@ class SemanticExperience(BaseModel):
     start_month: int | None = None
     end_year: int | None = None
     end_month: int | None = None
-    is_current: bool = False
+    current: bool = Field(default=False, alias="is_current")
     description: str | None = None
     achievements: list[str] = Field(default_factory=list)
     technologies: list[str] = Field(default_factory=list)
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     source_excerpt: str | None = None
+
+    @property
+    def is_current(self) -> bool:
+        return self.current
 
 
 class SemanticEducation(BaseModel):

@@ -249,3 +249,94 @@ def test_generate_validator_rejection_raises_provider_error() -> None:
         assert exc_info.value.code == PortErrorCode.PROVIDER_ERROR
 
     asyncio.run(scenario())
+
+
+def test_generate_refusal_raises_invalid_request() -> None:
+    async def scenario() -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "status": "refused",
+                    "refusal": "I cannot fulfill this extraction request for safety reasons.",
+                },
+            )
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        gateway = OpenAiGateway(api_key="sk-test", http_client=client)
+        req = AiRequest[DummyOutput](
+            purpose=AiPurpose.RESUME_EXTRACTION,
+            prompt=PromptRef(id="test", version="1.0"),
+            variables={},
+            untrusted=(),
+            grounding=(),
+            validate_output=DummyOutput.model_validate,
+        )
+        with pytest.raises(PortError) as exc_info:
+            await gateway.generate(req, _call_ctx())
+        assert exc_info.value.code == PortErrorCode.INVALID_REQUEST
+        assert "refused" in str(exc_info.value.message).lower()
+
+    asyncio.run(scenario())
+
+
+def test_generate_responses_api_format_successful() -> None:
+    async def scenario() -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            payload = request.read().decode("utf-8")
+            assert "input" in payload
+            assert "text" in payload
+            return httpx.Response(
+                200,
+                json={
+                    "status": "completed",
+                    "output_text": '{"name": "Alice", "score": 95}',
+                    "usage": {"input_tokens": 50, "output_tokens": 20},
+                },
+            )
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        gateway = OpenAiGateway(
+            api_key="sk-test",
+            base_url="https://api.openai.com/v1/responses",
+            http_client=client,
+        )
+        req = AiRequest[DummyOutput](
+            purpose=AiPurpose.RESUME_EXTRACTION,
+            prompt=PromptRef(id="test", version="1.0"),
+            variables={},
+            untrusted=(),
+            grounding=(),
+            validate_output=DummyOutput.model_validate,
+        )
+        result = await gateway.generate(req, _call_ctx())
+        assert result.output.name == "Alice"
+        assert result.output.score == 95
+        assert result.usage.input_tokens == 50
+
+    asyncio.run(scenario())
+
+
+def test_generate_incomplete_raises_provider_error() -> None:
+    async def scenario() -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={"status": "incomplete"},
+            )
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        gateway = OpenAiGateway(api_key="sk-test", http_client=client)
+        req = AiRequest[DummyOutput](
+            purpose=AiPurpose.RESUME_EXTRACTION,
+            prompt=PromptRef(id="test", version="1.0"),
+            variables={},
+            untrusted=(),
+            grounding=(),
+            validate_output=DummyOutput.model_validate,
+        )
+        with pytest.raises(PortError) as exc_info:
+            await gateway.generate(req, _call_ctx())
+        assert exc_info.value.code == PortErrorCode.PROVIDER_ERROR
+
+    asyncio.run(scenario())

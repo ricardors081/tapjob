@@ -73,12 +73,14 @@ class OpenAiGateway:
         api_key: str | None = None,
         model: str = "gpt-4o-mini",
         base_url: str = "https://api.openai.com/v1",
+        endpoint: str | None = None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self.provider = "openai"
         self._api_key = api_key.strip() if api_key and api_key.strip() else None
         self._model = model
         self._base_url = base_url.rstrip("/")
+        self._endpoint = endpoint
         self._http_client = http_client
 
     async def capabilities(self, ctx: CallContext) -> CapabilityManifest[AiGatewayCapability]:
@@ -146,10 +148,22 @@ class OpenAiGateway:
             )
 
         user_content = "\n\n".join(user_content_parts)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
 
-        # Build response_format schema
-        response_format: dict[str, Any] = {"type": "json_object"}
-        # If validator is a Pydantic model class or has model_json_schema
+        # Determine endpoint and API format
+        if self._endpoint:
+            endpoint = self._endpoint
+        elif self._base_url.endswith("/responses") or self._base_url.endswith("/chat/completions"):
+            endpoint = self._base_url
+        else:
+            endpoint = f"{self._base_url}/chat/completions"
+
+        is_responses_api = "responses" in endpoint
+
+        # Extract schema if available
         schema_model: type[BaseModel] | None = None
         bound_self: Any = getattr(request.validate_output, "__self__", None)
         if isinstance(request.validate_output, type) and issubclass(
@@ -159,26 +173,42 @@ class OpenAiGateway:
         elif isinstance(bound_self, type) and issubclass(bound_self, BaseModel):
             schema_model = bound_self
 
+        sanitized_schema: dict[str, Any] | None = None
         if schema_model is not None and hasattr(schema_model, "model_json_schema"):
-            raw_schema = schema_model.model_json_schema()
-            response_format = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": request.purpose.value,
-                    "strict": True,
-                    "schema": _sanitize_json_schema(raw_schema),
-                },
-            }
+            sanitized_schema = _sanitize_json_schema(schema_model.model_json_schema())
 
-        payload: dict[str, Any] = {
-            "model": self._model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-            "response_format": response_format,
-            "temperature": 0.0,
-        }
+        payload: dict[str, Any]
+        if is_responses_api:
+            payload = {
+                "model": self._model,
+                "input": messages,
+            }
+            if sanitized_schema is not None:
+                payload["text"] = {
+                    "format": {
+                        "type": "json_schema",
+                        "name": request.purpose.value,
+                        "strict": True,
+                        "schema": sanitized_schema,
+                    }
+                }
+        else:
+            response_format: dict[str, Any] = {"type": "json_object"}
+            if sanitized_schema is not None:
+                response_format = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": request.purpose.value,
+                        "strict": True,
+                        "schema": sanitized_schema,
+                    },
+                }
+            payload = {
+                "model": self._model,
+                "messages": messages,
+                "response_format": response_format,
+                "temperature": 0.0,
+            }
 
         remaining_timeout = max(0.5, ctx.deadline.remaining_seconds())
         headers = {
@@ -188,7 +218,6 @@ class OpenAiGateway:
         }
 
         start_time = time.perf_counter()
-        endpoint = f"{self._base_url}/chat/completions"
 
         try:
             client = self._http_client or httpx.AsyncClient(timeout=remaining_timeout)
@@ -218,7 +247,7 @@ class OpenAiGateway:
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000.0
 
-        if response.status_code == 401 or response.status_code == 403:
+        if response.status_code in (401, 403):
             raise PortError(
                 PortErrorCode.AUTH_FAILED,
                 provider=self.provider,
@@ -250,13 +279,85 @@ class OpenAiGateway:
 
         try:
             resp_data = response.json()
-            raw_content = resp_data["choices"][0]["message"]["content"]
-            parsed_json = json.loads(raw_content)
         except Exception as exc:
             raise PortError(
                 PortErrorCode.PROVIDER_ERROR,
                 provider=self.provider,
                 message=f"OpenAI malformed JSON response: {exc.__class__.__name__}",
+            ) from exc
+
+        # Check refusal across both Responses API and Chat Completions
+        refusal_reason: str | None = None
+        if resp_data.get("status") == "refused":
+            refusal_reason = str(resp_data.get("refusal") or "Model refused request")
+        elif resp_data.get("refusal"):
+            refusal_reason = str(resp_data["refusal"])
+
+        # Check incomplete status
+        if resp_data.get("status") == "incomplete":
+            raise PortError(
+                PortErrorCode.PROVIDER_ERROR,
+                provider=self.provider,
+                message="OpenAI response incomplete",
+            )
+
+        # Extract text content
+        raw_content: str | None = None
+        output_list = resp_data.get("output")
+        choices_list = resp_data.get("choices")
+        if resp_data.get("output_text"):
+            raw_content = resp_data["output_text"]
+        elif isinstance(output_list, list) and output_list:
+            for item in output_list:
+                if isinstance(item, dict):
+                    if item.get("type") == "refusal":
+                        refusal_reason = str(item.get("refusal") or "Model refused request")
+                    elif item.get("type") == "message":
+                        for part in item.get("content", []):
+                            if isinstance(part, dict):
+                                if part.get("type") == "refusal":
+                                    refusal_reason = str(
+                                        part.get("refusal") or "Model refused request"
+                                    )
+                                elif part.get("type") == "text":
+                                    raw_content = part.get("text")
+        elif isinstance(choices_list, list) and choices_list:
+            choice = choices_list[0]
+            if choice.get("finish_reason") == "refusal":
+                refusal_reason = str(
+                    choice.get("message", {}).get("refusal") or "Model refused request"
+                )
+            elif choice.get("message", {}).get("refusal"):
+                refusal_reason = str(choice["message"]["refusal"])
+            elif choice.get("finish_reason") == "length":
+                raise PortError(
+                    PortErrorCode.PROVIDER_ERROR,
+                    provider=self.provider,
+                    message="OpenAI response incomplete (max tokens reached)",
+                )
+            raw_content = choice.get("message", {}).get("content")
+
+        if refusal_reason:
+            raise PortError(
+                PortErrorCode.INVALID_REQUEST,
+                provider=self.provider,
+                message=f"OpenAI refused request: {refusal_reason}",
+            )
+
+        if raw_content is None or not raw_content.strip():
+            raise PortError(
+                PortErrorCode.PROVIDER_ERROR,
+                provider=self.provider,
+                message="OpenAI response missing text content",
+            )
+
+        try:
+            parsed_json = json.loads(raw_content)
+        except Exception as exc:
+            raise PortError(
+                PortErrorCode.PROVIDER_ERROR,
+                provider=self.provider,
+                message=f"OpenAI response content is not valid JSON: {exc.__class__.__name__}",
             ) from exc
 
         # Strictly validate output via the caller-supplied validator
@@ -272,8 +373,8 @@ class OpenAiGateway:
         # Extract usage
         usage_data = resp_data.get("usage") or {}
         usage = AiUsage(
-            input_tokens=usage_data.get("prompt_tokens"),
-            output_tokens=usage_data.get("completion_tokens"),
+            input_tokens=usage_data.get("input_tokens") or usage_data.get("prompt_tokens"),
+            output_tokens=usage_data.get("output_tokens") or usage_data.get("completion_tokens"),
             latency_ms=elapsed_ms,
             estimated_cost_micros=None,
         )

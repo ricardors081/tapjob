@@ -153,7 +153,7 @@ def test_human_acceptance_sanitized_regression() -> None:
                     employer="Inpasa Brasil",
                     title="Analista de Dados Sênior",
                     start_year=2022,
-                    is_current=True,
+                    current=True,
                     achievements=["Entrega de R$ 7,32 milhões em savings em projetos de analytics"],
                     technologies=["Python", "SQL", "Databricks"],
                     source_excerpt="Inpasa Brasil — Analista de Dados Sênior (2022 - Atual)",
@@ -357,7 +357,7 @@ CANONICAL_TARGET_EXTRACTION = SemanticResumeExtraction(
             employer="Inpasa Brasil",
             title="Senior Backend Engineer",
             start_year=2021,
-            is_current=True,
+            current=True,
             technologies=["Python", "Go", "Kubernetes"],
             source_excerpt="Inpasa Brasil",
         )
@@ -562,7 +562,7 @@ EVAL_FIXTURES: list[tuple[str, str]] = [
 
 
 @pytest.mark.parametrize("variant_name,fixture_text", EVAL_FIXTURES)
-def test_format_independence_eval_variants(variant_name: str, fixture_text: str) -> None:
+def test_deterministic_format_contract_evals(variant_name: str, fixture_text: str) -> None:
     async def scenario() -> None:
         gateway = MockSemanticGateway(CANONICAL_TARGET_EXTRACTION)
         parser = SemanticResumeParser(gateway)

@@ -137,12 +137,13 @@ class ExperienceFactValue(BaseModel):
     kind: Literal["experience"] = "experience"
     employer: str = Field(min_length=1, max_length=_SHORT_TEXT)
     title: str = Field(min_length=1, max_length=_SHORT_TEXT)
-    start: YearMonth
+    start: YearMonth | None = None
     end: YearMonth | None = None
     current: bool = False
     location: str | None = Field(default=None, max_length=_SHORT_TEXT)
     description: str | None = Field(default=None, max_length=_LONG_TEXT)
     achievements: list[str] = Field(default_factory=list, max_length=_MAX_BULLETS)
+    technologies: list[str] = Field(default_factory=list, max_length=_MAX_TECHNOLOGIES)
     employment_type: EmploymentType | None = Field(default=None, alias="employmentType")
 
     @field_validator("employer", "title", "location", mode="after")
@@ -162,6 +163,15 @@ class ExperienceFactValue(BaseModel):
         for item in normalized:
             if len(item) > _BULLET_TEXT:
                 raise ValueError(f"each achievement must be at most {_BULLET_TEXT} characters")
+        return normalized
+
+    @field_validator("technologies", mode="after")
+    @classmethod
+    def _bound_each_technology(cls, value: list[str]) -> list[str]:
+        normalized = [normalize_label_list_item(item, field_name="technology") for item in value]
+        for item in normalized:
+            if len(item) > _LABEL_TEXT:
+                raise ValueError(f"each technology must be at most {_LABEL_TEXT} characters")
         return normalized
 
     @model_validator(mode="after")

@@ -24,10 +24,8 @@ from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from tapjob_api.ai_gateway.openai_gateway import OpenAiGateway
 from tapjob_api.career_profile import service as career_profile_service
 from tapjob_api.career_profile.models import FactSourceKind, FactStatus, FactType, ProfileFact
-from tapjob_api.core.config import RuntimeSettings
 from tapjob_api.identity.models import User
 from tapjob_api.ports._common import CallContext, PortError
 from tapjob_api.ports.resume_parser import ExtractedFact, ResumeDocument, ResumeParser
@@ -80,9 +78,6 @@ from tapjob_api.resume_import.parsing import (
     DeterministicResumeParser,
 )
 from tapjob_api.resume_import.schemas import MasterResumeSnapshot
-from tapjob_api.resume_import.semantic_parser import (
-    SemanticResumeParser,
-)
 from tapjob_api.resume_import.storage import (
     ObjectStorageError,
     ObjectStoragePort,
@@ -101,18 +96,6 @@ def _run_async[T](coro: Coroutine[Any, Any, T]) -> T:
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         return executor.submit(lambda: asyncio.run(coro)).result()
-
-
-def create_default_resume_parser(settings: RuntimeSettings | None = None) -> ResumeParser:
-    current_settings = settings or RuntimeSettings()
-    if current_settings.openai_api_key and current_settings.openai_api_key.strip():
-        ai_gateway = OpenAiGateway(
-            api_key=current_settings.openai_api_key,
-            model=current_settings.ai_resume_extraction_model,
-            base_url=current_settings.openai_base_url,
-        )
-        return SemanticResumeParser(ai_gateway=ai_gateway)
-    return DeterministicResumeParser()
 
 
 _FAILURE_CODE_BY_ERROR: dict[type[Exception], ImportFailureCode] = {
@@ -505,7 +488,7 @@ def process_resume_import(
                 "retrieved object does not match its recorded byte_size/checksum_sha256"
             )
 
-        active_parser = parser or create_default_resume_parser()
+        active_parser = parser or DeterministicResumeParser()
         doc = ResumeDocument(
             content=content,
             media_type=claimed.media_type,
@@ -520,7 +503,7 @@ def process_resume_import(
         try:
             parsed = _run_async(active_parser.parse(doc, ctx))
             active_parser_identity = active_parser.provider
-        except (PortError, Exception) as error:
+        except PortError as error:
             if active_parser.provider != PARSER_IDENTITY:
                 logger.warning(
                     "resume_import.semantic_parser_fallback",
@@ -569,6 +552,12 @@ def process_resume_import(
             values={
                 "status": ImportStatus.READY_FOR_REVIEW,
                 "parser_identity": active_parser_identity,
+                "review_metadata": {
+                    "ambiguities": list(parsed.ambiguities),
+                    "ambiguity_count": len(parsed.ambiguities),
+                }
+                if parsed.ambiguities
+                else None,
                 "processing_lease_expires_at": None,
                 "processing_lease_token": None,
             },

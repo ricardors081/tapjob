@@ -981,7 +981,22 @@
             "title": "Location"
           },
           "start": {
-            "$ref": "#/components/schemas/YearMonth"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/YearMonth"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "technologies": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 30,
+            "title": "Technologies",
+            "type": "array"
           },
           "title": {
             "maxLength": 200,
@@ -992,8 +1007,7 @@
         },
         "required": [
           "employer",
-          "title",
-          "start"
+          "title"
         ],
         "title": "ExperienceFactValue",
         "type": "object"
@@ -2978,6 +2992,17 @@
       },
       "ResumeImportResponse": {
         "properties": {
+          "ambiguitiesCount": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ambiguitiescount"
+          },
           "byteSize": {
             "title": "Bytesize",
             "type": "integer"

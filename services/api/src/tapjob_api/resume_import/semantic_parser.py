@@ -52,9 +52,12 @@ def _is_excerpt_grounded(excerpt: str | None, full_text: str) -> bool:
     if not excerpt or not excerpt.strip():
         return False
     clean_excerpt = _normalize_text_for_search(excerpt)
-    if not clean_excerpt or len(clean_excerpt) < 3:
+    if not clean_excerpt:
         return False
     clean_full = _normalize_text_for_search(full_text)
+    if len(clean_excerpt) <= 3:
+        pattern = rf"(?:\b|\A){re.escape(clean_excerpt)}(?:\b|\Z)"
+        return bool(re.search(pattern, clean_full))
     return clean_excerpt in clean_full
 
 
@@ -112,13 +115,15 @@ class SemanticResumeParser:
         extraction: SemanticResumeExtraction = ai_result.output
 
         facts = self._map_extraction_to_facts(extraction, original_text=text)
-        return ParsedResume(facts=tuple(facts))
+        ambiguities = tuple(a.model_dump(mode="json") for a in extraction.ambiguities)
+        return ParsedResume(facts=tuple(facts), ambiguities=ambiguities)
 
     def _map_extraction_to_facts(
         self, extraction: SemanticResumeExtraction, *, original_text: str
     ) -> list[ExtractedFact]:
         facts: list[ExtractedFact] = []
         candidate_name = extraction.candidate_name.strip() if extraction.candidate_name else None
+        dropped_ungrounded_count = 0
 
         # 1. Headline (ensure distinction from candidate name)
         if extraction.professional_headline and extraction.professional_headline.headline:
@@ -152,30 +157,32 @@ class SemanticResumeParser:
             if not is_name_confusion:
                 excerpt = extraction.professional_headline.source_excerpt
                 if not _is_excerpt_grounded(excerpt, original_text):
-                    excerpt = None
-                facts.append(
-                    ExtractedFact(
-                        fact_type="headline",
-                        value={"kind": "headline", "text": headline_text},
-                        confidence=extraction.professional_headline.confidence,
-                        source_excerpt=(excerpt or "")[:MAX_SOURCE_EXCERPT_CHARS] or None,
+                    dropped_ungrounded_count += 1
+                else:
+                    facts.append(
+                        ExtractedFact(
+                            fact_type="headline",
+                            value={"kind": "headline", "text": headline_text},
+                            confidence=extraction.professional_headline.confidence,
+                            source_excerpt=excerpt[:MAX_SOURCE_EXCERPT_CHARS] if excerpt else None,
+                        )
                     )
-                )
 
         # 2. Professional Summary
         if extraction.professional_summary and extraction.professional_summary.summary:
             summary_text = extraction.professional_summary.summary.strip()
             excerpt = extraction.professional_summary.source_excerpt
             if not _is_excerpt_grounded(excerpt, original_text):
-                excerpt = None
-            facts.append(
-                ExtractedFact(
-                    fact_type="summary",
-                    value={"kind": "summary", "text": summary_text},
-                    confidence=extraction.professional_summary.confidence,
-                    source_excerpt=(excerpt or "")[:MAX_SOURCE_EXCERPT_CHARS] or None,
+                dropped_ungrounded_count += 1
+            else:
+                facts.append(
+                    ExtractedFact(
+                        fact_type="summary",
+                        value={"kind": "summary", "text": summary_text},
+                        confidence=extraction.professional_summary.confidence,
+                        source_excerpt=excerpt[:MAX_SOURCE_EXCERPT_CHARS] if excerpt else None,
+                    )
                 )
-            )
 
         # 3. Experiences
         for exp in extraction.experiences:
@@ -183,13 +190,14 @@ class SemanticResumeParser:
                 continue
             excerpt = exp.source_excerpt
             if not _is_excerpt_grounded(excerpt, original_text):
-                excerpt = None
+                dropped_ungrounded_count += 1
+                continue
 
             val: dict[str, Any] = {
                 "kind": "experience",
                 "employer": exp.employer.strip(),
                 "title": exp.title.strip(),
-                "isCurrent": exp.is_current,
+                "current": exp.current,
             }
             if exp.location:
                 val["location"] = exp.location.strip()
@@ -200,7 +208,7 @@ class SemanticResumeParser:
                     if exp.start_month and 1 <= exp.start_month <= 12
                     else None,
                 }
-            if exp.end_year is not None and not exp.is_current:
+            if exp.end_year is not None and not exp.current:
                 val["end"] = {
                     "year": exp.end_year,
                     "month": exp.end_month if exp.end_month and 1 <= exp.end_month <= 12 else None,
@@ -217,7 +225,7 @@ class SemanticResumeParser:
                     fact_type="experience",
                     value=val,
                     confidence=exp.confidence,
-                    source_excerpt=(excerpt or "")[:MAX_SOURCE_EXCERPT_CHARS] or None,
+                    source_excerpt=excerpt[:MAX_SOURCE_EXCERPT_CHARS] if excerpt else None,
                 )
             )
 
@@ -227,37 +235,38 @@ class SemanticResumeParser:
                 continue
             excerpt = edu.source_excerpt
             if not _is_excerpt_grounded(excerpt, original_text):
-                excerpt = None
+                dropped_ungrounded_count += 1
+                continue
 
-            val = {
+            val_edu: dict[str, Any] = {
                 "kind": "education",
                 "institution": edu.institution.strip(),
             }
             if edu.degree:
-                val["degree"] = edu.degree.strip()
+                val_edu["degree"] = edu.degree.strip()
             if edu.field_of_study:
-                val["fieldOfStudy"] = edu.field_of_study.strip()
+                val_edu["fieldOfStudy"] = edu.field_of_study.strip()
             if edu.start_year is not None:
-                val["start"] = {"year": edu.start_year, "month": None}
+                val_edu["start"] = {"year": edu.start_year, "month": None}
             if edu.end_year is not None:
-                val["end"] = {"year": edu.end_year, "month": None}
+                val_edu["end"] = {"year": edu.end_year, "month": None}
             if edu.status:
                 st = edu.status.strip().lower()
                 if st in ("concluído", "concluido", "completed"):
-                    val["status"] = "completed"
+                    val_edu["status"] = "completed"
                 elif st in ("em andamento", "cursando", "in_progress", "in progress"):
-                    val["status"] = "in_progress"
+                    val_edu["status"] = "in_progress"
                 elif st in ("incompleto", "incomplete"):
-                    val["status"] = "incomplete"
+                    val_edu["status"] = "incomplete"
             if edu.description:
-                val["description"] = edu.description.strip()
+                val_edu["description"] = edu.description.strip()
 
             facts.append(
                 ExtractedFact(
                     fact_type="education",
-                    value=val,
+                    value=val_edu,
                     confidence=edu.confidence,
-                    source_excerpt=(excerpt or "")[:MAX_SOURCE_EXCERPT_CHARS] or None,
+                    source_excerpt=excerpt[:MAX_SOURCE_EXCERPT_CHARS] if excerpt else None,
                 )
             )
 
@@ -273,21 +282,24 @@ class SemanticResumeParser:
             key = normalized_name.lower()
             if key in seen_skills:
                 continue
-            seen_skills.add(key)
             excerpt = sk.source_excerpt
             if not _is_excerpt_grounded(excerpt, original_text):
-                excerpt = None
+                dropped_ungrounded_count += 1
+                continue
+            seen_skills.add(key)
             skill_facts.append(
                 ExtractedFact(
                     fact_type="skill",
                     value={"kind": "skill", "name": normalized_name},
                     confidence=sk.confidence,
-                    source_excerpt=(excerpt or "")[:MAX_SOURCE_EXCERPT_CHARS] or None,
+                    source_excerpt=excerpt[:MAX_SOURCE_EXCERPT_CHARS] if excerpt else None,
                 )
             )
 
         # Also pull technologies from experiences and projects if not already added
         for exp in extraction.experiences:
+            if not _is_excerpt_grounded(exp.source_excerpt, original_text):
+                continue
             for tech in exp.technologies:
                 if not tech or not tech.strip():
                     continue
@@ -295,16 +307,16 @@ class SemanticResumeParser:
                 key = normalized_tech.lower()
                 if key in seen_skills:
                     continue
+                if not _is_excerpt_grounded(normalized_tech, original_text):
+                    dropped_ungrounded_count += 1
+                    continue
                 seen_skills.add(key)
-                excerpt = exp.source_excerpt
-                if not _is_excerpt_grounded(excerpt, original_text):
-                    excerpt = None
                 skill_facts.append(
                     ExtractedFact(
                         fact_type="skill",
                         value={"kind": "skill", "name": normalized_tech},
                         confidence=0.9,
-                        source_excerpt=(excerpt or "")[:MAX_SOURCE_EXCERPT_CHARS] or None,
+                        source_excerpt=normalized_tech[:MAX_SOURCE_EXCERPT_CHARS],
                     )
                 )
 
@@ -316,15 +328,16 @@ class SemanticResumeParser:
                 continue
             excerpt = cert.source_excerpt
             if not _is_excerpt_grounded(excerpt, original_text):
-                excerpt = None
-            val = {
+                dropped_ungrounded_count += 1
+                continue
+            val_cert: dict[str, Any] = {
                 "kind": "certification",
                 "name": cert.name.strip(),
             }
             if cert.issuer:
-                val["issuer"] = cert.issuer.strip()
+                val_cert["issuer"] = cert.issuer.strip()
             if cert.issue_year is not None:
-                val["issued"] = {
+                val_cert["issued"] = {
                     "year": cert.issue_year,
                     "month": cert.issue_month
                     if cert.issue_month and 1 <= cert.issue_month <= 12
@@ -333,9 +346,9 @@ class SemanticResumeParser:
             facts.append(
                 ExtractedFact(
                     fact_type="certification",
-                    value=val,
+                    value=val_cert,
                     confidence=cert.confidence,
-                    source_excerpt=(excerpt or "")[:MAX_SOURCE_EXCERPT_CHARS] or None,
+                    source_excerpt=excerpt[:MAX_SOURCE_EXCERPT_CHARS] if excerpt else None,
                 )
             )
 
@@ -345,19 +358,20 @@ class SemanticResumeParser:
                 continue
             excerpt = lang.source_excerpt
             if not _is_excerpt_grounded(excerpt, original_text):
-                excerpt = None
-            val = {
+                dropped_ungrounded_count += 1
+                continue
+            val_lang: dict[str, Any] = {
                 "kind": "language",
                 "language": lang.language.strip(),
             }
             if lang.proficiency:
-                val["proficiency"] = lang.proficiency.strip()
+                val_lang["proficiency"] = lang.proficiency.strip()
             facts.append(
                 ExtractedFact(
                     fact_type="language",
-                    value=val,
+                    value=val_lang,
                     confidence=lang.confidence,
-                    source_excerpt=(excerpt or "")[:MAX_SOURCE_EXCERPT_CHARS] or None,
+                    source_excerpt=excerpt[:MAX_SOURCE_EXCERPT_CHARS] if excerpt else None,
                 )
             )
 
@@ -367,25 +381,26 @@ class SemanticResumeParser:
                 continue
             excerpt = proj.source_excerpt
             if not _is_excerpt_grounded(excerpt, original_text):
-                excerpt = None
-            val = {
+                dropped_ungrounded_count += 1
+                continue
+            val_proj: dict[str, Any] = {
                 "kind": "project",
                 "name": proj.name.strip(),
             }
             if proj.description:
-                val["description"] = proj.description.strip()
+                val_proj["description"] = proj.description.strip()
             if proj.role:
-                val["role"] = proj.role.strip()
+                val_proj["role"] = proj.role.strip()
             if proj.url:
-                val["url"] = proj.url.strip()
+                val_proj["url"] = proj.url.strip()
             if proj.technologies:
-                val["technologies"] = [t.strip() for t in proj.technologies if t.strip()]
+                val_proj["technologies"] = [t.strip() for t in proj.technologies if t.strip()]
             facts.append(
                 ExtractedFact(
                     fact_type="project",
-                    value=val,
+                    value=val_proj,
                     confidence=proj.confidence,
-                    source_excerpt=(excerpt or "")[:MAX_SOURCE_EXCERPT_CHARS] or None,
+                    source_excerpt=excerpt[:MAX_SOURCE_EXCERPT_CHARS] if excerpt else None,
                 )
             )
 
@@ -395,25 +410,26 @@ class SemanticResumeParser:
                 continue
             excerpt = pub.source_excerpt
             if not _is_excerpt_grounded(excerpt, original_text):
-                excerpt = None
-            val = {
+                dropped_ungrounded_count += 1
+                continue
+            val_pub: dict[str, Any] = {
                 "kind": "publication",
                 "title": pub.title.strip(),
             }
             if pub.publisher:
-                val["publisher"] = pub.publisher.strip()
+                val_pub["publisher"] = pub.publisher.strip()
             if pub.date:
-                val["date"] = pub.date.strip()
+                val_pub["date"] = pub.date.strip()
             if pub.url:
-                val["url"] = pub.url.strip()
+                val_pub["url"] = pub.url.strip()
             if pub.description:
-                val["description"] = pub.description.strip()
+                val_pub["description"] = pub.description.strip()
             facts.append(
                 ExtractedFact(
                     fact_type="publication",
-                    value=val,
+                    value=val_pub,
                     confidence=pub.confidence,
-                    source_excerpt=(excerpt or "")[:MAX_SOURCE_EXCERPT_CHARS] or None,
+                    source_excerpt=excerpt[:MAX_SOURCE_EXCERPT_CHARS] if excerpt else None,
                 )
             )
 
@@ -423,8 +439,9 @@ class SemanticResumeParser:
                 continue
             excerpt = link.source_excerpt
             if not _is_excerpt_grounded(excerpt, original_text):
-                excerpt = None
-            val = {
+                dropped_ungrounded_count += 1
+                continue
+            val_link: dict[str, Any] = {
                 "kind": "link",
                 "url": link.url.strip(),
                 "linkType": "portfolio",
@@ -433,10 +450,16 @@ class SemanticResumeParser:
             facts.append(
                 ExtractedFact(
                     fact_type="link",
-                    value=val,
+                    value=val_link,
                     confidence=link.confidence,
-                    source_excerpt=(excerpt or "")[:MAX_SOURCE_EXCERPT_CHARS] or None,
+                    source_excerpt=excerpt[:MAX_SOURCE_EXCERPT_CHARS] if excerpt else None,
                 )
+            )
+
+        if dropped_ungrounded_count > 0:
+            logger.info(
+                "Dropped %d ungrounded candidates during resume extraction",
+                dropped_ungrounded_count,
             )
 
         return facts[:MAX_CANDIDATES_PER_IMPORT]

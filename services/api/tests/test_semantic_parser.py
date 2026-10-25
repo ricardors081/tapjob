@@ -145,8 +145,8 @@ def test_grounding_validation_strips_hallucinated_excerpt() -> None:
         skills = {f.value["name"]: f for f in parsed.facts if f.fact_type == "skill"}
 
         assert skills["Python"].source_excerpt == "Python e SQL"
-        # Hallucinated excerpt was stripped:
-        assert skills["Kubernetes"].source_excerpt is None
+        # Hallucinated excerpt causes item to be dropped (fail-closed grounding):
+        assert "Kubernetes" not in skills
 
     asyncio.run(scenario())
 
@@ -265,17 +265,17 @@ def test_full_extraction_mapping() -> None:
     asyncio.run(scenario())
 
 
-def test_create_default_resume_parser() -> None:
+def test_create_resume_parser_bootstrap() -> None:
+    from tapjob_api.bootstrap import create_resume_parser
     from tapjob_api.core.config import Environment, RuntimeSettings
     from tapjob_api.resume_import.parsing import DeterministicResumeParser
-    from tapjob_api.resume_import.service import create_default_resume_parser
 
     # Unset OpenAI key -> Deterministic parser
     settings_no_ai = RuntimeSettings(app_env=Environment.LOCAL, openai_api_key=None)
-    parser_default = create_default_resume_parser(settings_no_ai)
+    parser_default = create_resume_parser(settings_no_ai)
     assert isinstance(parser_default, DeterministicResumeParser)
 
     # Set OpenAI key -> Semantic parser
     settings_with_ai = RuntimeSettings(app_env=Environment.LOCAL, openai_api_key="sk-test-fake-key")
-    parser_ai = create_default_resume_parser(settings_with_ai)
+    parser_ai = create_resume_parser(settings_with_ai)
     assert isinstance(parser_ai, SemanticResumeParser)

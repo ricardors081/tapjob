@@ -732,7 +732,7 @@ def derive_candidate_match_signals(
 
         elif isinstance(val, ExperienceFactValue):
             exp_months = 0
-            if val.start.month is not None:
+            if val.start is not None and val.start.month is not None:
                 start_year = val.start.year
                 start_month = val.start.month
                 if val.current:

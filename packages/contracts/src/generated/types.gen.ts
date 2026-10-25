@@ -491,7 +491,11 @@ export type ExperienceFactValue = {
      * Location
      */
     location?: string | null;
-    start: YearMonth;
+    start?: YearMonth | null;
+    /**
+     * Technologies
+     */
+    technologies?: Array<string>;
     /**
      * Title
      */
@@ -1642,6 +1646,10 @@ export type ResumeImportCandidateResponse = {
  * ResumeImportResponse
  */
 export type ResumeImportResponse = {
+    /**
+     * Ambiguitiescount
+     */
+    ambiguitiesCount?: number | null;
     /**
      * Bytesize
      */

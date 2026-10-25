@@ -18,7 +18,7 @@ from tapjob_api.career_profile.service import TruthSnapshot
 def _format_experience_item(v: dict[str, Any]) -> str:
     title = v.get("title") or "Experiência Profissional"
     employer = v.get("employer")
-    is_current = v.get("isCurrent", False)
+    is_current = v.get("current", v.get("isCurrent", False))
 
     base = f"{title} — {employer}" if employer else title
     if is_current:
