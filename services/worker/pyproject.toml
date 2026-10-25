@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 # rather than duplicating configuration/logging foundations.
 dependencies = [
   "celery[redis]>=5.6.3",
-  "pydantic>=2.13.5",
+  "pydantic>=2.14.1",
   "sentry-sdk[celery]>=2.71.0",
   "tapjob-api",
 ]
