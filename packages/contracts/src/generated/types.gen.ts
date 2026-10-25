@@ -39,7 +39,9 @@ export type AddProfileFactRequest = {
         kind: 'preference';
     } & PreferenceFactValue) | ({
         kind: 'work_authorization';
-    } & WorkAuthorizationFactValue);
+    } & WorkAuthorizationFactValue) | ({
+        kind: 'publication';
+    } & PublicationFactValue);
 };
 
 /**
@@ -513,7 +515,7 @@ export type FactStatus = 'active' | 'superseded' | 'retracted';
  * out of scope here -- that concept belongs to the future `ApplicationAnswer` entity
  * (docs/DATA_MODEL.md), not this Truth Store.
  */
-export type FactType = 'experience' | 'education' | 'skill' | 'certification' | 'language' | 'project' | 'link' | 'preference' | 'work_authorization';
+export type FactType = 'experience' | 'education' | 'skill' | 'certification' | 'language' | 'project' | 'link' | 'preference' | 'work_authorization' | 'publication';
 
 /**
  * FeedItemResponse
@@ -1448,7 +1450,9 @@ export type ProfileFactResponse = {
         kind: 'preference';
     } & PreferenceFactValue) | ({
         kind: 'work_authorization';
-    } & WorkAuthorizationFactValue);
+    } & WorkAuthorizationFactValue) | ({
+        kind: 'publication';
+    } & PublicationFactValue);
 };
 
 /**
@@ -1489,6 +1493,36 @@ export type ProjectFactValue = {
  * Origin category of a normalized field value.
  */
 export type ProvenanceFieldSource = 'source_declared' | 'heuristic_extracted' | 'user_direct';
+
+/**
+ * PublicationFactValue
+ */
+export type PublicationFactValue = {
+    /**
+     * Date
+     */
+    date?: string | null;
+    /**
+     * Description
+     */
+    description?: string | null;
+    /**
+     * Kind
+     */
+    kind?: 'publication';
+    /**
+     * Publisher
+     */
+    publisher?: string | null;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Url
+     */
+    url?: string | null;
+};
 
 /**
  * ReadinessResponse
@@ -1544,7 +1578,9 @@ export type ReplaceProfileFactRequest = {
         kind: 'preference';
     } & PreferenceFactValue) | ({
         kind: 'work_authorization';
-    } & WorkAuthorizationFactValue);
+    } & WorkAuthorizationFactValue) | ({
+        kind: 'publication';
+    } & PublicationFactValue);
 };
 
 /**
@@ -1594,6 +1630,8 @@ export type ResumeImportCandidateResponse = {
     } & PreferenceFactValue) | ({
         kind: 'work_authorization';
     } & WorkAuthorizationFactValue) | ({
+        kind: 'publication';
+    } & PublicationFactValue) | ({
         kind: 'headline';
     } & HeadlineCandidateValue) | ({
         kind: 'summary';

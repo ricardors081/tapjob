@@ -22,6 +22,7 @@
                 "link": "#/components/schemas/LinkFactValue",
                 "preference": "#/components/schemas/PreferenceFactValue",
                 "project": "#/components/schemas/ProjectFactValue",
+                "publication": "#/components/schemas/PublicationFactValue",
                 "skill": "#/components/schemas/SkillFactValue",
                 "work_authorization": "#/components/schemas/WorkAuthorizationFactValue"
               },
@@ -54,6 +55,9 @@
               },
               {
                 "$ref": "#/components/schemas/WorkAuthorizationFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/PublicationFactValue"
               }
             ],
             "title": "Value"
@@ -1015,7 +1019,8 @@
           "project",
           "link",
           "preference",
-          "work_authorization"
+          "work_authorization",
+          "publication"
         ],
         "title": "FactType",
         "type": "string"
@@ -2542,6 +2547,7 @@
                 "link": "#/components/schemas/LinkFactValue",
                 "preference": "#/components/schemas/PreferenceFactValue",
                 "project": "#/components/schemas/ProjectFactValue",
+                "publication": "#/components/schemas/PublicationFactValue",
                 "skill": "#/components/schemas/SkillFactValue",
                 "work_authorization": "#/components/schemas/WorkAuthorizationFactValue"
               },
@@ -2574,6 +2580,9 @@
               },
               {
                 "$ref": "#/components/schemas/WorkAuthorizationFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/PublicationFactValue"
               }
             ],
             "title": "Value"
@@ -2690,6 +2699,77 @@
         "title": "ProvenanceFieldSource",
         "type": "string"
       },
+      "PublicationFactValue": {
+        "properties": {
+          "date": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "kind": {
+            "const": "publication",
+            "default": "publication",
+            "title": "Kind",
+            "type": "string"
+          },
+          "publisher": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Publisher"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "title": "PublicationFactValue",
+        "type": "object"
+      },
       "ReadinessResponse": {
         "properties": {
           "dependencies": {
@@ -2744,6 +2824,7 @@
                 "link": "#/components/schemas/LinkFactValue",
                 "preference": "#/components/schemas/PreferenceFactValue",
                 "project": "#/components/schemas/ProjectFactValue",
+                "publication": "#/components/schemas/PublicationFactValue",
                 "skill": "#/components/schemas/SkillFactValue",
                 "work_authorization": "#/components/schemas/WorkAuthorizationFactValue"
               },
@@ -2776,6 +2857,9 @@
               },
               {
                 "$ref": "#/components/schemas/WorkAuthorizationFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/PublicationFactValue"
               }
             ],
             "title": "Value"
@@ -2833,6 +2917,7 @@
                 "link": "#/components/schemas/LinkFactValue",
                 "preference": "#/components/schemas/PreferenceFactValue",
                 "project": "#/components/schemas/ProjectFactValue",
+                "publication": "#/components/schemas/PublicationFactValue",
                 "skill": "#/components/schemas/SkillFactValue",
                 "summary": "#/components/schemas/SummaryCandidateValue",
                 "work_authorization": "#/components/schemas/WorkAuthorizationFactValue"
@@ -2866,6 +2951,9 @@
               },
               {
                 "$ref": "#/components/schemas/WorkAuthorizationFactValue"
+              },
+              {
+                "$ref": "#/components/schemas/PublicationFactValue"
               },
               {
                 "$ref": "#/components/schemas/HeadlineCandidateValue"

@@ -24,7 +24,15 @@ scope for this module.
 import re
 from dataclasses import dataclass
 
-from tapjob_api.ports.resume_parser import ExtractedFact, JsonValue
+from tapjob_api.ports._common import AdapterHealth, CallContext
+from tapjob_api.ports.capabilities import CapabilityManifest, CapabilityReport, CapabilityStatus
+from tapjob_api.ports.resume_parser import (
+    ExtractedFact,
+    JsonValue,
+    ParsedResume,
+    ResumeDocument,
+    ResumeParserCapability,
+)
 from tapjob_api.resume_import.limits import MAX_CANDIDATES_PER_IMPORT
 
 PARSER_IDENTITY = "deterministic-heuristic-v1"
@@ -489,3 +497,42 @@ def parse_resume_text(
     if remaining > 0:
         _add(_parse_links(text, remaining_budget=remaining))
     return facts
+
+
+class DeterministicResumeParser:
+    """Deterministic, heuristic-based resume parser implementing the ResumeParser protocol.
+
+    Retained as an observable, reliable fallback and non-AI contingency.
+    """
+
+    provider: str = PARSER_IDENTITY
+
+    async def capabilities(self, ctx: CallContext) -> CapabilityManifest[ResumeParserCapability]:
+        return CapabilityManifest(
+            [
+                CapabilityReport(
+                    capability=ResumeParserCapability.STRUCTURED_EXTRACTION,
+                    status=CapabilityStatus.SUPPORTED,
+                )
+            ]
+        )
+
+    async def health(self, ctx: CallContext) -> AdapterHealth:
+        from datetime import UTC, datetime
+
+        from tapjob_api.ports._common import AdapterHealthStatus
+
+        return AdapterHealth(status=AdapterHealthStatus.HEALTHY, checked_at=datetime.now(UTC))
+
+    async def parse(self, document: ResumeDocument, ctx: CallContext) -> ParsedResume:
+        from tapjob_api.resume_import.extraction import extract_docx_text, extract_pdf_text
+        from tapjob_api.resume_import.file_validation import PDF_MEDIA_TYPE
+
+        if document.media_type == PDF_MEDIA_TYPE:
+            text = extract_pdf_text(document.content)
+        elif document.media_type.startswith("text/") or document.media_type == "text/plain":
+            text = document.content.decode("utf-8", errors="replace")
+        else:
+            text = extract_docx_text(document.content)
+        facts = parse_resume_text(text)
+        return ParsedResume(facts=tuple(facts))

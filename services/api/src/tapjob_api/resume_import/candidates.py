@@ -23,6 +23,7 @@ from tapjob_api.career_profile.fact_values import (
     LinkFactValue,
     PreferenceFactValue,
     ProjectFactValue,
+    PublicationFactValue,
     SkillFactValue,
     WorkAuthorizationFactValue,
     normalize_description,
@@ -33,7 +34,7 @@ from tapjob_api.resume_import.limits import MAX_SOURCE_EXCERPT_CHARS
 
 
 class CandidateKind(StrEnum):
-    """The nine canonical `FactType` values, PLUS two WP1.3-only top-level candidate kinds
+    """The ten canonical `FactType` values, PLUS two WP1.3-only top-level candidate kinds
     (`HEADLINE`/`SUMMARY`) that never become a `ProfileFact` -- they map to `CareerProfile`'s own
     top-level fields instead (docs/adr/0011-...md "career profile top-level fields"). Deliberately a
     SEPARATE enum from `career_profile.models.FactType`, not a reuse/extension of it: mixing "a kind
@@ -50,6 +51,7 @@ class CandidateKind(StrEnum):
     LINK = "link"
     PREFERENCE = "preference"
     WORK_AUTHORIZATION = "work_authorization"
+    PUBLICATION = "publication"
     HEADLINE = "headline"
     SUMMARY = "summary"
 
@@ -99,6 +101,7 @@ CandidateValue = Annotated[
     | LinkFactValue
     | PreferenceFactValue
     | WorkAuthorizationFactValue
+    | PublicationFactValue
     | HeadlineCandidateValue
     | SummaryCandidateValue,
     Field(discriminator="kind"),
