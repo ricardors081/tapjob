@@ -65,6 +65,7 @@ class ResumeImportResponse(BaseModel):
     candidates: list[ResumeImportCandidateResponse] | None = None
     finalized_resume_id: UUID | None = Field(default=None, alias="finalizedResumeId")
     finalized_resume_version_id: UUID | None = Field(default=None, alias="finalizedResumeVersionId")
+    ambiguities_count: int | None = Field(default=None, alias="ambiguitiesCount")
     created_at: datetime = Field(alias="createdAt")
     updated_at: datetime = Field(alias="updatedAt")
 

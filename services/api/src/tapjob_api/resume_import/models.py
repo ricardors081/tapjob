@@ -7,6 +7,7 @@ Postgres `ENUM`.
 import uuid
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
@@ -147,6 +148,9 @@ class ResumeImport(Base):
     finalized_resume_version_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True), sa.ForeignKey("resume_versions.id"), nullable=True
     )
+    review_metadata: Mapped[dict[str, Any] | None] = mapped_column(
+        "review_metadata", JSONB, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
     )
@@ -158,6 +162,18 @@ class ResumeImport(Base):
     )
 
     candidates: Mapped[list["ResumeImportCandidate"]] = relationship(back_populates="resume_import")
+
+    @property
+    def ambiguities_count(self) -> int:
+        if not self.review_metadata:
+            return 0
+        return int(self.review_metadata.get("ambiguity_count", 0))
+
+    @property
+    def ambiguities(self) -> list[dict[str, Any]]:
+        if not self.review_metadata:
+            return []
+        return list(self.review_metadata.get("ambiguities", []))
 
 
 class ResumeImportCandidate(Base):

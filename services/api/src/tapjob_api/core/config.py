@@ -76,6 +76,12 @@ class RuntimeSettings(BaseSettings):
     evolution_api_key: str = "test-key"
     evolution_instance_name: str = "tapjob"
 
+    # AI Gateway provider settings
+    ai_provider: str = "openai"
+    ai_resume_extraction_model: str = "gpt-4o-mini"
+    openai_api_key: str | None = None
+    openai_base_url: str = "https://api.openai.com/v1"
+
 
 def validate_evolution_settings_production_like(
     *,

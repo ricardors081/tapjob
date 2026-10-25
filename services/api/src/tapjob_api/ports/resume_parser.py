@@ -64,6 +64,7 @@ class ExtractedFact:
 @dataclass(frozen=True, slots=True)
 class ParsedResume:
     facts: tuple[ExtractedFact, ...]
+    ambiguities: tuple[Mapping[str, JsonValue], ...] = ()
 
 
 class ResumeParser(Protocol):

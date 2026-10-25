@@ -68,3 +68,28 @@ def test_no_port_module_imports_outside_the_stdlib_and_this_package() -> None:
             violations.append(f"{path.name}: {sorted(disallowed)}")
 
     assert violations == [], f"port modules importing outside stdlib/tapjob_api: {violations}"
+
+
+def test_domains_never_import_concrete_ai_gateway_providers() -> None:
+    api_dir = _PORTS_DIR.parent
+    target_domains = ["career_profile", "resume_import", "messaging"]
+    violations: list[str] = []
+
+    for domain in target_domains:
+        domain_dir = api_dir / domain
+        for path in sorted(domain_dir.glob("**/*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if "openai_gateway" in alias.name or alias.name.endswith(".openai_gateway"):
+                            violations.append(f"{path.relative_to(api_dir)}: import {alias.name}")
+                elif (
+                    isinstance(node, ast.ImportFrom)
+                    and node.module
+                    and ("openai_gateway" in node.module or node.module.endswith(".openai_gateway"))
+                ):
+                    rel = path.relative_to(api_dir)
+                    violations.append(f"{rel}: from {node.module} import ...")
+
+    assert violations == [], f"Domain modules importing concrete AI providers: {violations}"

@@ -9,6 +9,7 @@ from typing import Any
 import redis
 from celery import Celery, signals
 
+from tapjob_api.bootstrap import create_resume_parser
 from tapjob_api.core.database import create_database_engine
 from tapjob_api.core.logging import configure_logging
 from tapjob_api.core.observability import init_sentry
@@ -84,7 +85,8 @@ def create_celery_app(
     engine = create_database_engine(str(settings.database_url), connect_timeout_seconds=5.0)
     session_factory = create_session_factory(engine)
     storage = create_storage_adapter(settings)
-    configure_resume_import_worker(session_factory=session_factory, storage=storage)
+    parser = create_resume_parser(settings)
+    configure_resume_import_worker(session_factory=session_factory, storage=storage, parser=parser)
 
     if registry is None:
         registry = load_job_source_registry(settings.hosted_ats_sources)

@@ -34,6 +34,7 @@ class FactType(StrEnum):
     LINK = "link"
     PREFERENCE = "preference"
     WORK_AUTHORIZATION = "work_authorization"
+    PUBLICATION = "publication"
 
 
 class FactSourceKind(StrEnum):

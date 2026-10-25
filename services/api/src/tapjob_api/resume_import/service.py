@@ -11,8 +11,12 @@ each represents a single atomic unit of work a caller (the Celery task, the HTTP
 know succeeded or failed as a whole.
 """
 
+import asyncio
+import concurrent.futures
 import contextlib
+import logging
 import uuid
+from collections.abc import Coroutine
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -23,7 +27,8 @@ from sqlalchemy.orm import Session
 from tapjob_api.career_profile import service as career_profile_service
 from tapjob_api.career_profile.models import FactSourceKind, FactStatus, FactType, ProfileFact
 from tapjob_api.identity.models import User
-from tapjob_api.ports.resume_parser import ExtractedFact
+from tapjob_api.ports._common import CallContext, PortError, PortErrorCode
+from tapjob_api.ports.resume_parser import ExtractedFact, ResumeDocument, ResumeParser
 from tapjob_api.resume_import.candidates import (
     CandidateKind,
     ValidatedCandidate,
@@ -45,8 +50,13 @@ from tapjob_api.resume_import.errors import (
     TransientProcessingError,
     UnsupportedDocumentTypeError,
 )
-from tapjob_api.resume_import.extraction import extract_docx_text, extract_pdf_text
-from tapjob_api.resume_import.file_validation import PDF_MEDIA_TYPE, DocumentKind, validate_upload
+from tapjob_api.resume_import.extraction import (
+    extract_docx_text as extract_docx_text,
+)
+from tapjob_api.resume_import.extraction import (
+    extract_pdf_text as extract_pdf_text,
+)
+from tapjob_api.resume_import.file_validation import DocumentKind, validate_upload
 from tapjob_api.resume_import.limits import (
     DISPATCH_RECOVERY_THRESHOLD_SECONDS,
     MAX_CANDIDATES_PER_IMPORT,
@@ -63,7 +73,10 @@ from tapjob_api.resume_import.models import (
     ResumeImportCandidate,
     ResumeVersion,
 )
-from tapjob_api.resume_import.parsing import PARSER_IDENTITY, parse_resume_text
+from tapjob_api.resume_import.parsing import (
+    PARSER_IDENTITY,
+    DeterministicResumeParser,
+)
 from tapjob_api.resume_import.schemas import MasterResumeSnapshot
 from tapjob_api.resume_import.storage import (
     ObjectStorageError,
@@ -71,6 +84,38 @@ from tapjob_api.resume_import.storage import (
     compute_checksum,
     new_storage_key,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _run_async[T](coro: Coroutine[Any, Any, T]) -> T:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(lambda: asyncio.run(coro)).result()
+
+
+DEGRADABLE_FALLBACK_PORT_ERROR_CODES: frozenset[PortErrorCode] = frozenset(
+    {
+        PortErrorCode.TIMEOUT,
+        PortErrorCode.UNAVAILABLE,
+        PortErrorCode.RATE_LIMITED,
+        PortErrorCode.PROVIDER_ERROR,
+    }
+)
+
+
+def is_degradable_parser_error(error: PortError) -> bool:
+    """True if PortError represents a transient or degradable provider issue eligible
+
+    for deterministic fallback. Non-degradable errors (AUTH_FAILED, INVALID_REQUEST,
+    UNSUPPORTED_CAPABILITY, safety/refusal) must fail fast without fallback.
+    """
+    return error.code in DEGRADABLE_FALLBACK_PORT_ERROR_CODES
+
 
 _FAILURE_CODE_BY_ERROR: dict[type[Exception], ImportFailureCode] = {
     UnsupportedDocumentTypeError: ImportFailureCode.UNSUPPORTED_DOCUMENT_TYPE,
@@ -367,7 +412,11 @@ def _fail_exhausted(
 
 
 def process_resume_import(
-    session: Session, *, import_id: uuid.UUID, storage: ObjectStoragePort
+    session: Session,
+    *,
+    import_id: uuid.UUID,
+    storage: ObjectStoragePort,
+    parser: ResumeParser | None = None,
 ) -> None:
     """Retry-safe via a processing LEASE, not a one-way latch (docs/adr/0011-...md "worker
     idempotency", round-1 independent review "Finding 2", round-2 independent review "Finding 2").
@@ -457,14 +506,41 @@ def process_resume_import(
             raise TransientProcessingError(
                 "retrieved object does not match its recorded byte_size/checksum_sha256"
             )
-        text = (
-            extract_pdf_text(content)
-            if claimed.media_type == PDF_MEDIA_TYPE
-            else extract_docx_text(content)
+
+        active_parser = parser or DeterministicResumeParser()
+        doc = ResumeDocument(
+            content=content,
+            media_type=claimed.media_type,
+            filename=claimed.original_filename,
         )
-        extracted = parse_resume_text(text)
+        ctx = CallContext.with_timeout(
+            correlation_id=f"resume-import-{claimed.id}",
+            timeout_seconds=float(PROCESSING_LEASE_SECONDS - 5),
+        )
+
+        active_parser_identity: str
+        try:
+            parsed = _run_async(active_parser.parse(doc, ctx))
+            active_parser_identity = active_parser.provider
+        except PortError as error:
+            if active_parser.provider != PARSER_IDENTITY and is_degradable_parser_error(error):
+                logger.warning(
+                    "resume_import.semantic_parser_fallback",
+                    extra={
+                        "import_id": str(claimed.id),
+                        "primary_parser": active_parser.provider,
+                        "error_class": error.__class__.__name__,
+                        "error_code": getattr(error, "code", None),
+                    },
+                )
+                fallback_parser = DeterministicResumeParser()
+                parsed = _run_async(fallback_parser.parse(doc, ctx))
+                active_parser_identity = fallback_parser.provider
+            else:
+                raise
+
         validated: list[ValidatedCandidate] = []
-        for fact in extracted:
+        for fact in parsed.facts:
             candidate = validate_candidate(fact)
             if candidate is not None:
                 validated.append(candidate)
@@ -494,7 +570,13 @@ def process_resume_import(
             fencing_token=fencing_token,
             values={
                 "status": ImportStatus.READY_FOR_REVIEW,
-                "parser_identity": PARSER_IDENTITY,
+                "parser_identity": active_parser_identity,
+                "review_metadata": {
+                    "ambiguities": list(parsed.ambiguities),
+                    "ambiguity_count": len(parsed.ambiguities),
+                }
+                if parsed.ambiguities
+                else None,
                 "processing_lease_expires_at": None,
                 "processing_lease_token": None,
             },

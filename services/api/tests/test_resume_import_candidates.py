@@ -95,3 +95,39 @@ def test_source_excerpt_is_hard_truncated_regardless_of_input_length() -> None:
     candidate = validate_candidate(fact)
     assert candidate is not None
     assert len(candidate.source_excerpt or "") <= MAX_SOURCE_EXCERPT_CHARS
+
+
+def test_experience_candidate_with_current_and_technologies_and_no_start() -> None:
+    fact = ExtractedFact(
+        fact_type="experience",
+        value={
+            "kind": "experience",
+            "employer": "Inpasa Brasil",
+            "title": "Senior Backend Engineer",
+            "current": True,
+            "technologies": ["Python", "Go", "Kubernetes"],
+        },
+        confidence=0.9,
+    )
+    candidate = validate_candidate(fact)
+    assert candidate is not None
+    assert candidate.value_json["employer"] == "Inpasa Brasil"
+    assert candidate.value_json["title"] == "Senior Backend Engineer"
+    assert candidate.value_json["current"] is True
+    assert candidate.value_json["start"] is None
+    assert candidate.value_json["technologies"] == ["Python", "Go", "Kubernetes"]
+
+
+def test_experience_candidate_current_with_end_date_is_rejected() -> None:
+    fact = ExtractedFact(
+        fact_type="experience",
+        value={
+            "kind": "experience",
+            "employer": "Inpasa Brasil",
+            "title": "Senior Backend Engineer",
+            "current": True,
+            "end": {"year": 2024, "month": 5},
+        },
+        confidence=0.9,
+    )
+    assert validate_candidate(fact) is None

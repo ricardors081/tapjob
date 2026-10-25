@@ -134,6 +134,9 @@ def _import_response(
         ),
         finalized_resume_id=resume_import.finalized_resume_id,
         finalized_resume_version_id=resume_import.finalized_resume_version_id,
+        ambiguities_count=(
+            resume_import.ambiguities_count if resume_import.review_metadata else None
+        ),
         created_at=resume_import.created_at,
         updated_at=resume_import.updated_at,
     )

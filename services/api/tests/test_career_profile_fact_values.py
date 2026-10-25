@@ -64,7 +64,7 @@ def test_start_year_only_vs_end_same_year_january_is_accepted() -> None:
         start=YearMonth(year=2024),
         end=YearMonth(year=2024, month=1),
     )
-    assert fact.start.month is None
+    assert fact.start is not None and fact.start.month is None
 
 
 def test_start_year_after_end_year_is_rejected() -> None:
@@ -88,7 +88,7 @@ def test_same_year_no_months_known_at_all_is_accepted() -> None:
     fact = ExperienceFactValue(
         employer="Acme", title="Engineer", start=YearMonth(year=2024), end=YearMonth(year=2024)
     )
-    assert fact.start.month is None
+    assert fact.start is not None and fact.start.month is None
     assert fact.end is not None and fact.end.month is None
 
 
@@ -97,7 +97,7 @@ def test_same_year_no_months_known_at_all_is_accepted() -> None:
 
 def test_experience_accepts_year_only_start() -> None:
     fact = ExperienceFactValue(employer="Acme", title="Engineer", start=YearMonth(year=2022))
-    assert fact.start.month is None
+    assert fact.start is not None and fact.start.month is None
 
 
 def test_experience_rejects_start_after_end() -> None:

@@ -74,6 +74,7 @@ from tapjob_api.messaging.natural_language import (
     parse_natural_reminder_time,
 )
 from tapjob_api.messaging.outbox import OutboundMessageQueue
+from tapjob_api.messaging.profile_formatter import format_profile_query_summary
 from tapjob_api.messaging.service import (
     get_user_profile_status,
     link_or_create_identity,
@@ -2508,53 +2509,12 @@ def dispatch_inbound_message(
         snapshot = get_truth_snapshot(session, user=user)
         status = get_user_profile_status(session, user_id=user.id)
 
-        blocks = ["👤 *Seu Perfil Profissional*", ""]
-        if snapshot.headline:
-            blocks.append(f"*{HUMAN_PROFILE_FIELD_LABELS['headline']}:* {snapshot.headline}")
-            blocks.append("")
-        if snapshot.summary:
-            blocks.append(f"*{HUMAN_PROFILE_FIELD_LABELS['summary']}:* {snapshot.summary}")
-            blocks.append("")
-        if snapshot.target_roles:
-            roles_str = ", ".join(snapshot.target_roles)
-            blocks.append(f"*{HUMAN_PROFILE_FIELD_LABELS['target_roles']}:* {roles_str}")
-            blocks.append("")
-
-        if snapshot.facts:
-            blocks.append(f"*{HUMAN_PROFILE_FIELD_LABELS['profile_facts']}:*")
-            for f in snapshot.facts:
-                v = f.value_json if isinstance(f.value_json, dict) else {}
-                item_name = (
-                    v.get("name")
-                    or v.get("title")
-                    or (f"{v.get('title')} na {v.get('employer')}" if v.get("employer") else None)
-                    or f.fact_type.value
-                )
-                blocks.append(f"- {item_name}")
-            blocks.append("")
-        else:
-            blocks.append("_Ainda não há competências ou experiências confirmadas no seu perfil._")
-            blocks.append("")
-
+        response_text = format_profile_query_summary(snapshot)
         if not status["has_facts"] or not snapshot.summary or not snapshot.target_roles:
-            missing_items = []
-            if not snapshot.headline:
-                missing_items.append(HUMAN_PROFILE_FIELD_LABELS["headline"])
-            if not snapshot.summary:
-                missing_items.append(HUMAN_PROFILE_FIELD_LABELS["summary"])
-            if not snapshot.target_roles:
-                missing_items.append(HUMAN_PROFILE_FIELD_LABELS["target_roles"])
-            if not snapshot.facts:
-                missing_items.append(HUMAN_PROFILE_FIELD_LABELS["profile_facts"])
-            blocks.append(
-                f"💡 *Para completar seu perfil, ainda faltam:* {', '.join(missing_items)}."
-            )
-            blocks.append(
-                "Você pode enviar seu currículo em PDF ou escrever suas "
+            response_text += (
+                "\n\nVocê pode enviar seu currículo em PDF ou escrever suas "
                 "experiências aqui no chat! 😊"
             )
-
-        response_text = "\n".join(blocks).strip()
         msg = queue_response_message(
             session,
             channel_identity_link_id=link_id,
