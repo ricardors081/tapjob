@@ -1,6 +1,7 @@
 """Unit tests for OpenAiGateway adapter implementing AiGateway."""
 
 import asyncio
+import json
 from datetime import UTC, datetime
 
 import httpx
@@ -280,27 +281,38 @@ def test_generate_refusal_raises_invalid_request() -> None:
     asyncio.run(scenario())
 
 
-def test_generate_responses_api_format_successful() -> None:
+def test_generate_responses_api_canonical_rest_shape() -> None:
+    """Requirement 2: Proves canonical Responses API REST shape
+    with output[].content[].type == 'output_text'."""
+
     async def scenario() -> None:
         def handler(request: httpx.Request) -> httpx.Response:
-            payload = request.read().decode("utf-8")
+            assert request.url.path.endswith("/responses")
+            payload = json.loads(request.read().decode("utf-8"))
             assert "input" in payload
-            assert "text" in payload
-            return httpx.Response(
-                200,
-                json={
-                    "status": "completed",
-                    "output_text": '{"name": "Alice", "score": 95}',
-                    "usage": {"input_tokens": 50, "output_tokens": 20},
-                },
-            )
+            assert payload.get("text", {}).get("format", {}).get("type") == "json_schema"
+            assert payload.get("text", {}).get("format", {}).get("strict") is True
+            canonical_body = {
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": '{"name": "Alice", "score": 95}',
+                            }
+                        ],
+                    }
+                ],
+                "usage": {"input_tokens": 50, "output_tokens": 20},
+            }
+            return httpx.Response(200, json=canonical_body)
 
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        gateway = OpenAiGateway(
-            api_key="sk-test",
-            base_url="https://api.openai.com/v1/responses",
-            http_client=client,
-        )
+        # Default base_url https://api.openai.com/v1 resolves to /responses automatically
+        gateway = OpenAiGateway(api_key="sk-test", http_client=client)
         req = AiRequest[DummyOutput](
             purpose=AiPurpose.RESUME_EXTRACTION,
             prompt=PromptRef(id="test", version="1.0"),
@@ -313,6 +325,93 @@ def test_generate_responses_api_format_successful() -> None:
         assert result.output.name == "Alice"
         assert result.output.score == 95
         assert result.usage.input_tokens == 50
+        assert result.usage.output_tokens == 20
+
+    asyncio.run(scenario())
+
+
+def test_generate_responses_api_refusal_in_output_content() -> None:
+    """Requirement 2: Proves refusal extraction when output[].content[].type == 'refusal'."""
+
+    async def scenario() -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path.endswith("/responses")
+            return httpx.Response(
+                200,
+                json={
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "refusal",
+                                    "refusal": "Refusal from message content",
+                                }
+                            ],
+                        }
+                    ],
+                },
+            )
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        gateway = OpenAiGateway(api_key="sk-test", http_client=client)
+        req = AiRequest[DummyOutput](
+            purpose=AiPurpose.RESUME_EXTRACTION,
+            prompt=PromptRef(id="test", version="1.0"),
+            variables={},
+            untrusted=(),
+            grounding=(),
+            validate_output=DummyOutput.model_validate,
+        )
+        with pytest.raises(PortError) as exc_info:
+            await gateway.generate(req, _call_ctx())
+        assert exc_info.value.code == PortErrorCode.INVALID_REQUEST
+        assert "refused" in str(exc_info.value.message).lower()
+
+    asyncio.run(scenario())
+
+
+def test_generate_chat_completions_compatibility() -> None:
+    """Requirement 1: Chat Completions functions as explicit compatibility option."""
+
+    async def scenario() -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path.endswith("/chat/completions")
+            payload = json.loads(request.read().decode("utf-8"))
+            assert "messages" in payload
+            assert "response_format" in payload
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {"content": '{"name": "Bob", "score": 88}'},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 30, "completion_tokens": 15},
+                },
+            )
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        gateway = OpenAiGateway(
+            api_key="sk-test",
+            endpoint="/chat/completions",
+            http_client=client,
+        )
+        req = AiRequest[DummyOutput](
+            purpose=AiPurpose.RESUME_EXTRACTION,
+            prompt=PromptRef(id="test", version="1.0"),
+            variables={},
+            untrusted=(),
+            grounding=(),
+            validate_output=DummyOutput.model_validate,
+        )
+        result = await gateway.generate(req, _call_ctx())
+        assert result.output.name == "Bob"
+        assert result.output.score == 88
 
     asyncio.run(scenario())
 

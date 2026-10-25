@@ -270,12 +270,34 @@ def test_create_resume_parser_bootstrap() -> None:
     from tapjob_api.core.config import Environment, RuntimeSettings
     from tapjob_api.resume_import.parsing import DeterministicResumeParser
 
-    # Unset OpenAI key -> Deterministic parser
-    settings_no_ai = RuntimeSettings(app_env=Environment.LOCAL, openai_api_key=None)
-    parser_default = create_resume_parser(settings_no_ai)
-    assert isinstance(parser_default, DeterministicResumeParser)
+    # 1. ai_provider="openai" but unset key -> Deterministic parser
+    settings_no_key = RuntimeSettings(
+        app_env=Environment.LOCAL,
+        ai_provider="openai",
+        openai_api_key=None,
+    )
+    assert isinstance(create_resume_parser(settings_no_key), DeterministicResumeParser)
 
-    # Set OpenAI key -> Semantic parser
-    settings_with_ai = RuntimeSettings(app_env=Environment.LOCAL, openai_api_key="sk-test-fake-key")
-    parser_ai = create_resume_parser(settings_with_ai)
-    assert isinstance(parser_ai, SemanticResumeParser)
+    # 2. ai_provider="openai" and key present -> Semantic parser
+    settings_openai = RuntimeSettings(
+        app_env=Environment.LOCAL,
+        ai_provider="openai",
+        openai_api_key="sk-test-fake-key",
+    )
+    assert isinstance(create_resume_parser(settings_openai), SemanticResumeParser)
+
+    # 3. ai_provider="deterministic" even with openai_api_key set -> Deterministic parser
+    settings_det = RuntimeSettings(
+        app_env=Environment.LOCAL,
+        ai_provider="deterministic",
+        openai_api_key="sk-test-fake-key",
+    )
+    assert isinstance(create_resume_parser(settings_det), DeterministicResumeParser)
+
+    # 4. ai_provider="unknown" -> ValueError
+    settings_unknown = RuntimeSettings(
+        app_env=Environment.LOCAL,
+        ai_provider="unsupported_provider",
+    )
+    with pytest.raises(ValueError, match="Unsupported AI provider"):
+        create_resume_parser(settings_unknown)

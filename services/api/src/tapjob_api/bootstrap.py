@@ -16,11 +16,20 @@ from tapjob_api.resume_import.semantic_parser import SemanticResumeParser
 def create_resume_parser(settings: RuntimeSettings | None = None) -> ResumeParser:
     """Composes provider-neutral ResumeParser implementation from runtime configuration."""
     current_settings = settings or RuntimeSettings()
-    if current_settings.openai_api_key and current_settings.openai_api_key.strip():
-        ai_gateway = OpenAiGateway(
-            api_key=current_settings.openai_api_key,
-            model=current_settings.ai_resume_extraction_model,
-            base_url=current_settings.openai_base_url,
-        )
-        return SemanticResumeParser(ai_gateway=ai_gateway)
-    return DeterministicResumeParser()
+    provider = (current_settings.ai_provider or "").strip().lower()
+
+    if provider == "openai":
+        if current_settings.openai_api_key and current_settings.openai_api_key.strip():
+            ai_gateway = OpenAiGateway(
+                api_key=current_settings.openai_api_key,
+                model=current_settings.ai_resume_extraction_model,
+                base_url=current_settings.openai_base_url,
+                endpoint="/responses",
+            )
+            return SemanticResumeParser(ai_gateway=ai_gateway)
+        return DeterministicResumeParser()
+
+    if provider in ("deterministic", "none", ""):
+        return DeterministicResumeParser()
+
+    raise ValueError(f"Unsupported AI provider: {current_settings.ai_provider}")

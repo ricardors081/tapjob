@@ -80,7 +80,8 @@ class OpenAiGateway:
         self._api_key = api_key.strip() if api_key and api_key.strip() else None
         self._model = model
         self._base_url = base_url.rstrip("/")
-        self._endpoint = endpoint
+        # Responses API is the default primary path; /chat/completions is compatibility only
+        self._endpoint = endpoint or "/responses"
         self._http_client = http_client
 
     async def capabilities(self, ctx: CallContext) -> CapabilityManifest[AiGatewayCapability]:
@@ -153,13 +154,14 @@ class OpenAiGateway:
             {"role": "user", "content": user_content},
         ]
 
-        # Determine endpoint and API format
-        if self._endpoint:
+        # Determine endpoint and API format: Responses API (/v1/responses) is primary
+        if self._endpoint.startswith(("http://", "https://")):
             endpoint = self._endpoint
         elif self._base_url.endswith("/responses") or self._base_url.endswith("/chat/completions"):
             endpoint = self._base_url
         else:
-            endpoint = f"{self._base_url}/chat/completions"
+            rel = self._endpoint.lstrip("/")
+            endpoint = f"{self._base_url}/{rel}"
 
         is_responses_api = "responses" in endpoint
 
@@ -301,13 +303,11 @@ class OpenAiGateway:
                 message="OpenAI response incomplete",
             )
 
-        # Extract text content
+        # Extract text content: Responses API output message is primary
         raw_content: str | None = None
         output_list = resp_data.get("output")
         choices_list = resp_data.get("choices")
-        if resp_data.get("output_text"):
-            raw_content = resp_data["output_text"]
-        elif isinstance(output_list, list) and output_list:
+        if isinstance(output_list, list) and output_list:
             for item in output_list:
                 if isinstance(item, dict):
                     if item.get("type") == "refusal":
@@ -319,7 +319,7 @@ class OpenAiGateway:
                                     refusal_reason = str(
                                         part.get("refusal") or "Model refused request"
                                     )
-                                elif part.get("type") == "text":
+                                elif part.get("type") in ("output_text", "text"):
                                     raw_content = part.get("text")
         elif isinstance(choices_list, list) and choices_list:
             choice = choices_list[0]

@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 from tapjob_api.career_profile import service as career_profile_service
 from tapjob_api.career_profile.models import FactSourceKind, FactStatus, FactType, ProfileFact
 from tapjob_api.identity.models import User
-from tapjob_api.ports._common import CallContext, PortError
+from tapjob_api.ports._common import CallContext, PortError, PortErrorCode
 from tapjob_api.ports.resume_parser import ExtractedFact, ResumeDocument, ResumeParser
 from tapjob_api.resume_import.candidates import (
     CandidateKind,
@@ -96,6 +96,25 @@ def _run_async[T](coro: Coroutine[Any, Any, T]) -> T:
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         return executor.submit(lambda: asyncio.run(coro)).result()
+
+
+DEGRADABLE_FALLBACK_PORT_ERROR_CODES: frozenset[PortErrorCode] = frozenset(
+    {
+        PortErrorCode.TIMEOUT,
+        PortErrorCode.UNAVAILABLE,
+        PortErrorCode.RATE_LIMITED,
+        PortErrorCode.PROVIDER_ERROR,
+    }
+)
+
+
+def is_degradable_parser_error(error: PortError) -> bool:
+    """True if PortError represents a transient or degradable provider issue eligible
+
+    for deterministic fallback. Non-degradable errors (AUTH_FAILED, INVALID_REQUEST,
+    UNSUPPORTED_CAPABILITY, safety/refusal) must fail fast without fallback.
+    """
+    return error.code in DEGRADABLE_FALLBACK_PORT_ERROR_CODES
 
 
 _FAILURE_CODE_BY_ERROR: dict[type[Exception], ImportFailureCode] = {
@@ -504,7 +523,7 @@ def process_resume_import(
             parsed = _run_async(active_parser.parse(doc, ctx))
             active_parser_identity = active_parser.provider
         except PortError as error:
-            if active_parser.provider != PARSER_IDENTITY:
+            if active_parser.provider != PARSER_IDENTITY and is_degradable_parser_error(error):
                 logger.warning(
                     "resume_import.semantic_parser_fallback",
                     extra={

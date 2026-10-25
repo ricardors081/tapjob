@@ -6,7 +6,7 @@ from typing import Any
 
 import docx
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
 from tapjob_api.core.config import ApiSettings
@@ -46,9 +46,15 @@ pytestmark = pytest.mark.integration
 
 
 class FlakyAiGateway:
-    def __init__(self, *, should_fail: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        should_fail: bool = False,
+        failure_code: PortErrorCode = PortErrorCode.UNAVAILABLE,
+    ) -> None:
         self.provider = "flaky-openai"
         self.should_fail = should_fail
+        self.failure_code = failure_code
 
     async def capabilities(self, ctx: CallContext) -> CapabilityManifest[AiGatewayCapability]:
         return CapabilityManifest(
@@ -68,9 +74,9 @@ class FlakyAiGateway:
     ) -> AiResult[OutputT]:
         if self.should_fail:
             raise PortError(
-                PortErrorCode.UNAVAILABLE,
+                self.failure_code,
                 provider=self.provider,
-                message="OpenAI model endpoint is down",
+                message=f"Simulated error with code {self.failure_code}",
             )
         extraction = SemanticResumeExtraction(
             candidate_name="Julia Teste",
@@ -113,13 +119,20 @@ def _make_valid_docx() -> bytes:
 
 
 @pytest.fixture
-def db_session() -> Iterator[Session]:
+def db_session(_identity_schema_ready: None) -> Iterator[Session]:
     settings = ApiSettings()
     engine = create_engine(str(settings.database_url))
     factory = create_session_factory(engine)
     session = factory()
-    yield session
-    session.close()
+    try:
+        yield session
+    finally:
+        session.close()
+        with engine.begin() as connection:
+            connection.execute(
+                text("TRUNCATE TABLE resume_import_candidates, resume_imports, users CASCADE")
+            )
+        engine.dispose()
 
 
 def test_process_resume_import_success_with_semantic_parser(db_session: Session) -> None:
@@ -153,7 +166,8 @@ def test_process_resume_import_success_with_semantic_parser(db_session: Session)
     assert len(imp.candidates) > 0
 
 
-def test_process_resume_import_fallback_when_semantic_fails(db_session: Session) -> None:
+def test_process_resume_import_refusal_does_not_trigger_fallback(db_session: Session) -> None:
+    """Requirement 3: Model refusal (INVALID_REQUEST) must NOT trigger deterministic fallback."""
     user = User(id=uuid.uuid4(), locale="pt-BR")
     db_session.add(user)
     db_session.commit()
@@ -168,15 +182,112 @@ def test_process_resume_import_fallback_when_semantic_fails(db_session: Session)
         storage=storage,
     )
 
-    gateway = FlakyAiGateway(should_fail=True)
-    failing_semantic_parser = SemanticResumeParser(gateway)
+    gateway = FlakyAiGateway(should_fail=True, failure_code=PortErrorCode.INVALID_REQUEST)
+    parser = SemanticResumeParser(gateway)
 
-    # When failing semantic parser is passed, it should automatically fallback to deterministic
+    with pytest.raises(PortError) as exc_info:
+        process_resume_import(
+            db_session,
+            import_id=imp.id,
+            storage=storage,
+            parser=parser,
+        )
+    assert exc_info.value.code == PortErrorCode.INVALID_REQUEST
+
+    db_session.refresh(imp)
+    assert imp.status == ImportStatus.FAILED
+    assert len(imp.candidates) == 0
+
+
+def test_process_resume_import_auth_failure_does_not_trigger_fallback(db_session: Session) -> None:
+    """Requirement 3: Auth failure (AUTH_FAILED) must NOT trigger deterministic fallback."""
+    user = User(id=uuid.uuid4(), locale="pt-BR")
+    db_session.add(user)
+    db_session.commit()
+
+    storage = InMemoryObjectStorage()
+    imp = create_resume_import(
+        db_session,
+        user=user,
+        content=_make_valid_docx(),
+        original_filename="curriculo.docx",
+        declared_content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        storage=storage,
+    )
+
+    gateway = FlakyAiGateway(should_fail=True, failure_code=PortErrorCode.AUTH_FAILED)
+    parser = SemanticResumeParser(gateway)
+
+    with pytest.raises(PortError) as exc_info:
+        process_resume_import(
+            db_session,
+            import_id=imp.id,
+            storage=storage,
+            parser=parser,
+        )
+    assert exc_info.value.code == PortErrorCode.AUTH_FAILED
+
+    db_session.refresh(imp)
+    assert imp.status == ImportStatus.FAILED
+    assert len(imp.candidates) == 0
+
+
+def test_process_resume_import_timeout_triggers_fallback(db_session: Session) -> None:
+    """Requirement 3: Transient timeout (TIMEOUT) triggers deterministic fallback."""
+    user = User(id=uuid.uuid4(), locale="pt-BR")
+    db_session.add(user)
+    db_session.commit()
+
+    storage = InMemoryObjectStorage()
+    imp = create_resume_import(
+        db_session,
+        user=user,
+        content=_make_valid_docx(),
+        original_filename="curriculo.docx",
+        declared_content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        storage=storage,
+    )
+
+    gateway = FlakyAiGateway(should_fail=True, failure_code=PortErrorCode.TIMEOUT)
+    parser = SemanticResumeParser(gateway)
+
     process_resume_import(
         db_session,
         import_id=imp.id,
         storage=storage,
-        parser=failing_semantic_parser,
+        parser=parser,
+    )
+
+    db_session.refresh(imp)
+    assert imp.status == ImportStatus.READY_FOR_REVIEW
+    assert imp.parser_identity == PARSER_IDENTITY
+    assert len(imp.candidates) > 0
+
+
+def test_process_resume_import_unavailable_triggers_fallback(db_session: Session) -> None:
+    """Requirement 3: Transient unavailability (UNAVAILABLE) triggers deterministic fallback."""
+    user = User(id=uuid.uuid4(), locale="pt-BR")
+    db_session.add(user)
+    db_session.commit()
+
+    storage = InMemoryObjectStorage()
+    imp = create_resume_import(
+        db_session,
+        user=user,
+        content=_make_valid_docx(),
+        original_filename="curriculo.docx",
+        declared_content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        storage=storage,
+    )
+
+    gateway = FlakyAiGateway(should_fail=True, failure_code=PortErrorCode.UNAVAILABLE)
+    parser = SemanticResumeParser(gateway)
+
+    process_resume_import(
+        db_session,
+        import_id=imp.id,
+        storage=storage,
+        parser=parser,
     )
 
     db_session.refresh(imp)
