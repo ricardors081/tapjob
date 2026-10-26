@@ -36,6 +36,7 @@ def _settings() -> WorkerSettings:
         # `create_storage_adapter` fails fast in local/development with neither R2 nor a shared
         # local directory configured (round-2 independent review "Finding 5").
         resume_import_local_storage_dir="/tmp/resume-imports-test",  # noqa: S108 -- never touched
+        ai_provider="deterministic",
     )
 
 

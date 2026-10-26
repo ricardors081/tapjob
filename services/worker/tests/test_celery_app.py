@@ -19,6 +19,7 @@ def _settings() -> WorkerSettings:
         # exercise `create_celery_app`'s own Celery config, not real storage I/O, so a dummy
         # directory value is enough to satisfy the config gate.
         resume_import_local_storage_dir="/tmp/resume-imports-test",  # noqa: S108 -- never touched
+        ai_provider="deterministic",
     )
 
 
@@ -85,6 +86,7 @@ def test_celery_app_loads_real_registry_from_worker_settings() -> None:
         database_url=DATABASE_URL,  # type: ignore[arg-type]
         resume_import_local_storage_dir="/tmp/resume-imports-test",  # noqa: S108
         hosted_ats_sources=sources_json,
+        ai_provider="deterministic",
     )
 
     with patch("tapjob_worker.celery_app.configure_jobs_worker") as mock_configure:
@@ -107,6 +109,7 @@ def test_celery_app_fails_closed_on_invalid_hosted_ats_sources() -> None:
         database_url=DATABASE_URL,  # type: ignore[arg-type]
         resume_import_local_storage_dir="/tmp/resume-imports-test",  # noqa: S108
         hosted_ats_sources='[{"provider": "invalid_ats", "token": "foo", "company_name": "Bar"}]',
+        ai_provider="deterministic",
     )
     with pytest.raises(JobSourceConfigError):
         create_celery_app(bad_settings)
