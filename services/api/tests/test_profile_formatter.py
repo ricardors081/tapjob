@@ -139,3 +139,97 @@ def test_format_full_profile_no_raw_enum_leaks() -> None:
         assert trimmed != "- project", f"Found raw enum leak: {line}"
         assert trimmed != "- skill", f"Found raw enum leak: {line}"
         assert trimmed != "- publication", f"Found raw enum leak: {line}"
+
+
+def test_education_status_ptbr_localization() -> None:
+    """Verifies canonical education statuses are mapped to Portuguese:
+    - completed -> Concluído
+    - in_progress -> Em andamento
+    - incomplete -> Incompleto
+    """
+    facts = [
+        _make_fact(
+            FactType.EDUCATION,
+            {
+                "kind": "education",
+                "institution": "Universidade de São Paulo",
+                "degree": "Bacharelado",
+                "fieldOfStudy": "Ciência da Computação",
+                "status": "completed",
+            },
+        ),
+        _make_fact(
+            FactType.EDUCATION,
+            {
+                "kind": "education",
+                "institution": "Unicamp",
+                "degree": "Mestrado",
+                "fieldOfStudy": "Engenharia de Software",
+                "status": "in_progress",
+            },
+        ),
+        _make_fact(
+            FactType.EDUCATION,
+            {
+                "kind": "education",
+                "institution": "UFMG",
+                "degree": "Especialização",
+                "fieldOfStudy": "Inteligência Artificial",
+                "status": "incomplete",
+            },
+        ),
+    ]
+
+    snapshot = TruthSnapshot(
+        user_id=uuid.uuid4(),
+        profile_version=1,
+        headline="Engenheiro de Software",
+        summary="Desenvolvedor com foco em IA.",
+        target_roles=["Engenheiro de Software"],
+        facts=facts,
+    )
+
+    rendered = format_profile_query_summary(snapshot)
+
+    assert (
+        "- Bacharelado em Ciência da Computação — Universidade de São Paulo — Concluído" in rendered
+    )
+    assert "- Mestrado em Engenharia de Software — Unicamp — Em andamento" in rendered
+    assert "- Especialização em Inteligência Artificial — UFMG — Incompleto" in rendered
+
+    # Strict negative check: raw technical enums MUST NOT appear
+    assert "completed" not in rendered.lower() or "concluído" in rendered.lower()
+    assert "in_progress" not in rendered
+    assert "In_progress" not in rendered
+    assert "Completed" not in rendered
+
+
+def test_education_status_unknown_fail_safe_no_leak() -> None:
+    """Verifies unknown/unrecognized status values fail-safe without leaking technical strings."""
+    facts = [
+        _make_fact(
+            FactType.EDUCATION,
+            {
+                "kind": "education",
+                "institution": "MIT",
+                "degree": "Graduação",
+                "fieldOfStudy": "Robótica",
+                "status": "dropped_out_unknown_enum_value",
+            },
+        ),
+    ]
+
+    snapshot = TruthSnapshot(
+        user_id=uuid.uuid4(),
+        profile_version=1,
+        headline="Pesquisador",
+        summary=None,
+        target_roles=[],
+        facts=facts,
+    )
+
+    rendered = format_profile_query_summary(snapshot)
+
+    assert "- Graduação em Robótica — MIT" in rendered
+    assert "dropped_out_unknown_enum_value" not in rendered
+    assert "Dropped_out_unknown_enum_value" not in rendered

@@ -320,7 +320,7 @@ def reconcile_reserved_resume_import(
         if has_prior_same_checksum:
             response_text = (
                 f"Recebemos novamente seu currículo ({doc_filename})!\n"
-                f"Identificamos {facts_count} competências e experiências atualizadas.\n\n"
+                f"Identificamos {facts_count} informações profissionais atualizadas.\n\n"
                 "Reanalisei este currículo e encontrei informações atualizadas. "
                 "Deseja atualizar seu perfil com elas? 😊"
             )
@@ -1435,8 +1435,8 @@ def dispatch_inbound_message(
                     if has_prior_same_checksum:
                         response_text = (
                             f"Recebemos novamente seu currículo ({doc_filename})!\n"
-                            f"Identificamos {facts_count} competências e "
-                            "experiências atualizadas.\n\n"
+                            f"Identificamos {facts_count} informações "
+                            "profissionais atualizadas.\n\n"
                             "Reanalisei este currículo e encontrei informações atualizadas. "
                             "Deseja atualizar seu perfil com elas? 😊"
                         )

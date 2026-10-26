@@ -1700,3 +1700,100 @@ def test_dispatch_contextual_sim_finalizes_prompt_linked_import_with_two_pending
 
     # Invariant 2: Import B remained strictly READY_FOR_REVIEW
     assert import_b.status == ImportStatus.READY_FOR_REVIEW
+
+
+def test_resume_reanalysis_copy_81_candidates() -> None:
+    """Verifies that when a resume is reanalyzed (same checksum as a prior import)
+    with 81 candidates:
+    1. Output message says 'Identificamos 81 informações profissionais atualizadas.'
+    2. Output message does NOT say '81 competências e experiências'.
+    3. Confirmation prompt at the end is preserved.
+    """
+    from tapjob_api.messaging.orchestration import reconcile_reserved_resume_import
+
+    session = MagicMock(spec=Session)
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    import_id = uuid.uuid4()
+
+    mock_candidates = [MagicMock() for _ in range(81)]
+    target_import = ResumeImport(
+        id=import_id,
+        user_id=user.id,
+        status=ImportStatus.READY_FOR_REVIEW,
+        original_filename="curriculo - ricardo.pdf",
+        media_type="application/pdf",
+        byte_size=12345,
+        checksum_sha256="4b7c1b9fb23f0000000000000000000000000000000000000000000000000000",
+        storage_key="dummy_key",
+    )
+    target_import.candidates = mock_candidates
+
+    session.get.return_value = target_import
+    session.scalar.return_value = 1
+
+    with (
+        patch("tapjob_api.resume_import.service.process_resume_import"),
+        patch("tapjob_api.messaging.orchestration.complete_inbound_effect"),
+    ):
+        success, response_text = reconcile_reserved_resume_import(
+            session,
+            user=user,
+            envelope_id=202,
+            target_import_uuid=import_id,
+            storage=MagicMock(),
+            parser=MagicMock(spec=ResumeParser),
+            doc_filename="curriculo - ricardo.pdf",
+        )
+
+    assert success is True
+    assert "Identificamos 81 informações profissionais atualizadas." in response_text
+    assert "Recebemos novamente seu currículo (curriculo - ricardo.pdf)!" in response_text
+    assert (
+        "Reanalisei este currículo e encontrei informações atualizadas. "
+        "Deseja atualizar seu perfil com elas? 😊"
+    ) in response_text
+    assert "81 competências e experiências" not in response_text
+    assert "competências e experiências" not in response_text
+
+
+def test_resume_first_time_copy_81_candidates() -> None:
+    """Verifies first-time import message format with 81 candidates."""
+    from tapjob_api.messaging.orchestration import reconcile_reserved_resume_import
+
+    session = MagicMock(spec=Session)
+    user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
+    import_id = uuid.uuid4()
+
+    mock_candidates = [MagicMock() for _ in range(81)]
+    target_import = ResumeImport(
+        id=import_id,
+        user_id=user.id,
+        status=ImportStatus.READY_FOR_REVIEW,
+        original_filename="curriculo - ricardo.pdf",
+        media_type="application/pdf",
+        byte_size=12345,
+        checksum_sha256="4b7c1b9fb23f0000000000000000000000000000000000000000000000000000",
+        storage_key="dummy_key",
+    )
+    target_import.candidates = mock_candidates
+
+    session.get.return_value = target_import
+    session.scalar.return_value = 0
+
+    with (
+        patch("tapjob_api.resume_import.service.process_resume_import"),
+        patch("tapjob_api.messaging.orchestration.complete_inbound_effect"),
+    ):
+        success, response_text = reconcile_reserved_resume_import(
+            session,
+            user=user,
+            envelope_id=202,
+            target_import_uuid=import_id,
+            storage=MagicMock(),
+            parser=MagicMock(spec=ResumeParser),
+            doc_filename="curriculo - ricardo.pdf",
+        )
+
+    assert success is True
+    assert "Identifiquei 81 informações profissionais." in response_text
+    assert "81 competências e experiências" not in response_text
