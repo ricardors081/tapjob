@@ -116,6 +116,7 @@ from tapjob_api.resume_import.models import (
     ResumeImportCandidate,
     ResumeVersion,
 )
+from tapjob_api.resume_import.parsing import DeterministicResumeParser
 from tapjob_api.resume_import.storage import InMemoryObjectStorage
 
 from .fake_channel import _VALID_TEST_PDF_BYTES, FakeMessagingChannel
@@ -144,6 +145,7 @@ def test_real_ingress_e2e_canary_vertical_slice(_identity_schema_ready: None) ->
         redis_client=redis_client,
         channel_adapter=fake_channel,
         storage=storage,
+        resume_parser=DeterministicResumeParser(),
     )
 
     app = create_app(settings, resume_storage_override=storage)
@@ -431,6 +433,7 @@ def test_conversational_e2e_canary_vertical_slice(_identity_schema_ready: None) 
         redis_client=redis_client,
         channel_adapter=fake_channel,
         storage=storage,
+        resume_parser=DeterministicResumeParser(),
     )
 
     app = create_app(settings, resume_storage_override=storage)
@@ -701,6 +704,7 @@ def test_multiuser_job_isolation_vertical_slice(_identity_schema_ready: None) ->
         redis_client=redis_client,
         channel_adapter=fake_channel,
         storage=storage,
+        resume_parser=DeterministicResumeParser(),
     )
 
     app = create_app(settings, resume_storage_override=storage)
@@ -836,6 +840,7 @@ def test_first_contact_document_and_echo_filtered_vertical_slice(
         redis_client=redis_client,
         channel_adapter=fake_channel,
         storage=storage,
+        resume_parser=DeterministicResumeParser(),
     )
 
     app = create_app(settings, resume_storage_override=storage)
@@ -1008,6 +1013,7 @@ def test_first_contact_job_url_and_replays_vertical_slice(_identity_schema_ready
         redis_client=redis_client,
         channel_adapter=fake_channel,
         storage=storage,
+        resume_parser=DeterministicResumeParser(),
     )
 
     app = create_app(settings, resume_storage_override=storage)
@@ -1468,6 +1474,7 @@ def test_document_hard_crash_recovery_postgres(_identity_schema_ready: None) -> 
                 redis_client,
                 inbound=inbound_msg,
                 provider_id=provider_id,
+                resume_parser=DeterministicResumeParser(),
                 channel_adapter=fake_channel,
                 storage=storage,
                 envelope_id=envelope_id,
@@ -1523,6 +1530,7 @@ def test_document_hard_crash_recovery_postgres(_identity_schema_ready: None) -> 
             redis_client,
             inbound=inbound_msg,
             provider_id=provider_id,
+            resume_parser=DeterministicResumeParser(),
             channel_adapter=fake_channel,
             storage=storage,
             envelope_id=envelope_id,
@@ -1872,6 +1880,7 @@ def test_document_pending_effect_processing_import_does_not_complete_success(
         redis_client=redis_client,
         channel_adapter=fake_channel,
         storage=storage,
+        resume_parser=DeterministicResumeParser(),
     )
 
     try:
@@ -2080,6 +2089,7 @@ def test_document_failed_resume_import_does_not_return_success(
         redis_client=redis_client,
         channel_adapter=fake_channel,
         storage=storage,
+        resume_parser=DeterministicResumeParser(),
     )
 
     try:

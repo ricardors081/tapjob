@@ -25,6 +25,7 @@ from tapjob_api.messaging.document_intake import (
     handle_profile_text_patch,
     handle_text_fact_intake,
 )
+from tapjob_api.ports.resume_parser import ResumeParser
 from tapjob_api.resume_import.models import ResumeImport
 from tapjob_api.resume_import.storage import ObjectStoragePort
 
@@ -51,6 +52,9 @@ def test_attachment_intake_delegates_to_canonical_wp13() -> None:
     fake_import.candidates = []
     fake_import.parser_identity = "pymupdf_v1"
 
+    fake_parser = MagicMock(spec=ResumeParser)
+    fake_parser.provider = "fake_v1"
+
     with (
         patch(
             "tapjob_api.messaging.document_intake.resume_import_service.create_resume_import",
@@ -68,6 +72,7 @@ def test_attachment_intake_delegates_to_canonical_wp13() -> None:
             original_filename="cv.pdf",
             declared_content_type="application/pdf",
             storage=storage,
+            parser=fake_parser,
         )
 
         assert result is fake_import
@@ -83,6 +88,7 @@ def test_attachment_intake_delegates_to_canonical_wp13() -> None:
             session,
             import_id=fake_import.id,
             storage=storage,
+            parser=fake_parser,
         )
 
 

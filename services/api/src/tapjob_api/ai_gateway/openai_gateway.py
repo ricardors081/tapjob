@@ -85,6 +85,10 @@ class OpenAiGateway:
         self._endpoint = endpoint or "/responses"
         self._http_client = http_client
 
+    @property
+    def model(self) -> str:
+        return self._model
+
     async def capabilities(self, ctx: CallContext) -> CapabilityManifest[AiGatewayCapability]:
         return CapabilityManifest(
             [

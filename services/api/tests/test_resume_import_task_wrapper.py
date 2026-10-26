@@ -39,6 +39,7 @@ from tapjob_api.resume_import.limits import (
     TRANSIENT_RETRY_COUNTDOWN_SECONDS,
 )
 from tapjob_api.resume_import.models import ImportStatus, ResumeImport
+from tapjob_api.resume_import.parsing import DeterministicResumeParser
 from tapjob_api.resume_import.storage import ObjectStoragePort
 
 pytestmark = pytest.mark.integration
@@ -146,7 +147,9 @@ def test_a_soft_time_limit_during_processing_fails_the_row_terminally_without_a_
     monkeypatch.setattr(service, "extract_pdf_text", _raise_soft_time_limit)
 
     with session_factory() as session, pytest.raises(SoftTimeLimitExceeded):
-        service.process_resume_import(session, import_id=import_id, storage=storage)
+        service.process_resume_import(
+            session, import_id=import_id, storage=storage, parser=DeterministicResumeParser()
+        )
 
     with session_factory() as session:
         resume_import = session.get(ResumeImport, import_id)
@@ -166,6 +169,7 @@ def test_task_wrapper_retries_a_transient_failure_with_the_tasks_own_default_bud
     monkeypatch.setattr(tasks.process_resume_import_task, "retry", _fake_retry)
     monkeypatch.setattr(tasks, "_session_factory", lambda: _NullSession())
     monkeypatch.setattr(tasks, "_storage", object())
+    monkeypatch.setattr(tasks, "_parser", DeterministicResumeParser())
 
     def _raise_transient(session: Any, *, import_id: Any, storage: Any, **kwargs: Any) -> None:
         raise TransientProcessingError("boom")
@@ -190,6 +194,7 @@ def test_task_wrapper_retries_an_active_lease_with_a_countdown_past_expiry_and_a
     monkeypatch.setattr(tasks.process_resume_import_task, "retry", _fake_retry)
     monkeypatch.setattr(tasks, "_session_factory", lambda: _NullSession())
     monkeypatch.setattr(tasks, "_storage", object())
+    monkeypatch.setattr(tasks, "_parser", DeterministicResumeParser())
 
     retry_at = datetime.now(UTC) + timedelta(seconds=250)
 
@@ -276,6 +281,7 @@ def test_worker_crash_after_claim_schedules_a_retry_past_the_leases_expiry_and_r
     monkeypatch.setattr(tasks.process_resume_import_task, "retry", _fake_retry)
     monkeypatch.setattr(tasks, "_session_factory", lambda: session_factory())
     monkeypatch.setattr(tasks, "_storage", storage)
+    monkeypatch.setattr(tasks, "_parser", DeterministicResumeParser())
 
     with pytest.raises(_RetrySentinelError) as exc_info:
         tasks.process_resume_import_task.run(str(import_id))
@@ -301,7 +307,9 @@ def test_worker_crash_after_claim_schedules_a_retry_past_the_leases_expiry_and_r
         )
         session.commit()
     with session_factory() as session:
-        service.process_resume_import(session, import_id=import_id, storage=storage)
+        service.process_resume_import(
+            session, import_id=import_id, storage=storage, parser=DeterministicResumeParser()
+        )
 
     with session_factory() as session:
         resume_import = session.get(ResumeImport, import_id)

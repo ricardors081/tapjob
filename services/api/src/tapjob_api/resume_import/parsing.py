@@ -507,6 +507,10 @@ class DeterministicResumeParser:
 
     provider: str = PARSER_IDENTITY
 
+    @property
+    def model(self) -> str | None:
+        return None
+
     async def capabilities(self, ctx: CallContext) -> CapabilityManifest[ResumeParserCapability]:
         return CapabilityManifest(
             [

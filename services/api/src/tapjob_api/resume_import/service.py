@@ -75,10 +75,6 @@ from tapjob_api.resume_import.models import (
     ResumeImportCandidate,
     ResumeVersion,
 )
-from tapjob_api.resume_import.parsing import (
-    PARSER_IDENTITY,
-    DeterministicResumeParser,
-)
 from tapjob_api.resume_import.schemas import MasterResumeSnapshot
 from tapjob_api.resume_import.storage import (
     ObjectStorageError,
@@ -111,10 +107,9 @@ DEGRADABLE_FALLBACK_PORT_ERROR_CODES: frozenset[PortErrorCode] = frozenset(
 
 
 def is_degradable_parser_error(error: PortError) -> bool:
-    """True if PortError represents a transient or degradable provider issue eligible
-
-    for deterministic fallback. Non-degradable errors (AUTH_FAILED, INVALID_REQUEST,
-    UNSUPPORTED_CAPABILITY, safety/refusal) must fail fast without fallback.
+    """True if PortError represents a transient provider issue eligible
+    for bounded retry as TransientProcessingError. Non-transient errors (AUTH_FAILED,
+    INVALID_REQUEST, UNSUPPORTED_CAPABILITY, safety/refusal) fail closed without retry.
     """
     return error.code in DEGRADABLE_FALLBACK_PORT_ERROR_CODES
 
@@ -418,7 +413,7 @@ def process_resume_import(
     *,
     import_id: uuid.UUID,
     storage: ObjectStoragePort,
-    parser: ResumeParser | None = None,
+    parser: ResumeParser,
 ) -> None:
     """Retry-safe via a processing LEASE, not a one-way latch (docs/adr/0011-...md "worker
     idempotency", round-1 independent review "Finding 2", round-2 independent review "Finding 2").
@@ -509,7 +504,6 @@ def process_resume_import(
                 "retrieved object does not match its recorded byte_size/checksum_sha256"
             )
 
-        active_parser = parser or DeterministicResumeParser()
         doc = ResumeDocument(
             content=content,
             media_type=claimed.media_type,
@@ -522,24 +516,24 @@ def process_resume_import(
 
         active_parser_identity: str
         try:
-            parsed = _run_async(active_parser.parse(doc, ctx))
-            active_parser_identity = active_parser.provider
+            parsed = _run_async(parser.parse(doc, ctx))
+            active_parser_identity = parser.provider
         except PortError as error:
-            if active_parser.provider != PARSER_IDENTITY and is_degradable_parser_error(error):
+            if is_degradable_parser_error(error):
                 logger.warning(
-                    "resume_import.semantic_parser_fallback",
+                    "resume_import.transient_parser_error",
                     extra={
                         "import_id": str(claimed.id),
-                        "primary_parser": active_parser.provider,
+                        "primary_parser": parser.provider,
                         "error_class": error.__class__.__name__,
                         "error_code": getattr(error, "code", None),
                     },
                 )
-                fallback_parser = DeterministicResumeParser()
-                parsed = _run_async(fallback_parser.parse(doc, ctx))
-                active_parser_identity = fallback_parser.provider
-            else:
-                raise
+                raise TransientProcessingError(
+                    f"Transient provider error from {parser.provider}: "
+                    f"{error.code.value} - {error.message}"
+                ) from error
+            raise
 
         validated: list[ValidatedCandidate] = []
         for fact in parsed.facts:

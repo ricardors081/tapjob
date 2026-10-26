@@ -37,6 +37,7 @@ x-database-env: &database-env
   EVOLUTION_API_URL: ${EVOLUTION_API_URL:-http://localhost:8080}
   EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-test-key}
   EVOLUTION_INSTANCE_NAME: ${EVOLUTION_INSTANCE_NAME:-tapjob}
+  AI_PROVIDER: ${AI_PROVIDER:-deterministic}
 
 x-resume-storage-volume: &resume-storage-volume
   - resume-storage-data:/data/resume-imports

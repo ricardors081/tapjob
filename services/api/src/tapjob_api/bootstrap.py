@@ -13,23 +13,23 @@ from tapjob_api.resume_import.parsing import DeterministicResumeParser
 from tapjob_api.resume_import.semantic_parser import SemanticResumeParser
 
 
-def create_resume_parser(settings: RuntimeSettings | None = None) -> ResumeParser:
+def create_resume_parser(settings: RuntimeSettings) -> ResumeParser:
     """Composes provider-neutral ResumeParser implementation from runtime configuration."""
-    current_settings = settings or RuntimeSettings()
-    provider = (current_settings.ai_provider or "").strip().lower()
+    target_provider = (settings.ai_provider or "").strip().lower()
 
-    if provider == "openai":
-        if current_settings.openai_api_key and current_settings.openai_api_key.strip():
-            ai_gateway = OpenAiGateway(
-                api_key=current_settings.openai_api_key,
-                model=current_settings.ai_resume_extraction_model,
-                base_url=current_settings.openai_base_url,
-                endpoint="/responses",
-            )
-            return SemanticResumeParser(ai_gateway=ai_gateway)
+    if target_provider == "openai":
+        target_api_key = settings.openai_api_key
+        if not target_api_key or not target_api_key.strip():
+            raise ValueError("OpenAI API key is required when AI_PROVIDER=openai")
+        ai_gateway = OpenAiGateway(
+            api_key=target_api_key,
+            model=settings.ai_resume_extraction_model,
+            base_url=settings.openai_base_url,
+            endpoint="/responses",
+        )
+        return SemanticResumeParser(ai_gateway=ai_gateway)
+
+    if target_provider == "deterministic":
         return DeterministicResumeParser()
 
-    if provider in ("deterministic", "none", ""):
-        return DeterministicResumeParser()
-
-    raise ValueError(f"Unsupported AI provider: {current_settings.ai_provider}")
+    raise ValueError(f"Unsupported AI provider: {target_provider}")

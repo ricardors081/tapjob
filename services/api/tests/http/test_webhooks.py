@@ -390,7 +390,7 @@ def test_recover_unprocessed_inbound_envelopes_sweep() -> None:
     session.execute.return_value = mock_res
     session_factory = MagicMock(return_value=session)
 
-    configure_messaging_worker(session_factory=session_factory)
+    configure_messaging_worker(session_factory=session_factory, resume_parser=MagicMock())
 
     with patch("tapjob_api.messaging.tasks.process_inbound_envelope_task") as mock_task:
         dispatched = recover_unprocessed_inbound_envelopes_task(stale_seconds=0.0)

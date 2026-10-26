@@ -21,6 +21,7 @@ from tapjob_api.career_profile.fact_values import FactValue
 from tapjob_api.career_profile.models import FactType, ProfileFact
 from tapjob_api.career_profile.service import ProfileUpdateResult
 from tapjob_api.identity.models import User
+from tapjob_api.ports.resume_parser import ResumeParser
 from tapjob_api.resume_import import service as resume_import_service
 from tapjob_api.resume_import.commands import (
     CandidateReviewDecision,
@@ -48,13 +49,14 @@ def handle_attachment_intake(
     original_filename: str,
     declared_content_type: str,
     storage: ObjectStoragePort,
+    parser: ResumeParser,
     import_id: uuid.UUID | None = None,
 ) -> ResumeImport:
     """Delegates incoming WhatsApp document attachments to canonical Resume Import (WP1.3).
 
     Workflow:
     1. Upload validation & secure object storage via create_resume_import.
-    2. Extraction & candidate proposal via process_resume_import.
+    2. Extraction & candidate proposal via process_resume_import with injected parser.
     Returns the ready-for-review ResumeImport record.
     """
     kwargs: dict[str, Any] = {}
@@ -75,16 +77,38 @@ def handle_attachment_intake(
         session,
         import_id=resume_import.id,
         storage=storage,
+        parser=parser,
     )
     session.refresh(resume_import)
+
+    parser_model = getattr(parser, "model", None)
+    parser_provider = getattr(parser, "provider", None)
+    input_mode = "input_file" if resume_import.media_type == "application/pdf" else "document"
 
     logger.info(
         "document_intake.attachment_processed_via_wp13",
         extra={
             "user_id": str(user.id),
             "resume_import_id": str(resume_import.id),
+            "parser_identity": resume_import.parser_identity,
+            "input_mode": input_mode,
+            "provider": parser_provider,
+            "model": parser_model,
         },
     )
+
+    if parser_provider is not None and resume_import.parser_identity != parser_provider:
+        logger.error(
+            "document_intake.invariant_violation: processed import parser_identity "
+            "does not match injected parser provider",
+            extra={
+                "user_id": str(user.id),
+                "resume_import_id": str(resume_import.id),
+                "persisted_parser_identity": resume_import.parser_identity,
+                "injected_parser_provider": parser_provider,
+            },
+        )
+
     return resume_import
 
 
@@ -107,12 +131,15 @@ def confirm_candidates_and_finalize(
         import_id=resume_import_id,
         command=command,
     )
+    import_rec = session.get(ResumeImport, resume_import_id)
+    parser_identity = import_rec.parser_identity if import_rec else None
     logger.info(
         "document_intake.finalized_via_wp13",
         extra={
             "user_id": str(user.id),
             "resume_import_id": str(resume_import_id),
             "profile_version": result.resume_version.profile_version,
+            "parser_identity": parser_identity,
         },
     )
     return result
