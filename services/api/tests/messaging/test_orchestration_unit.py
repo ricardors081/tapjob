@@ -1715,7 +1715,16 @@ def test_resume_reanalysis_copy_81_candidates() -> None:
     user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
     import_id = uuid.uuid4()
 
-    mock_candidates = [MagicMock() for _ in range(81)]
+    mock_candidates = [
+        ResumeImportCandidate(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            resume_import_id=import_id,
+            candidate_kind="skill",
+            value_json={"name": f"Skill {i}"},
+        )
+        for i in range(81)
+    ]
     target_import = ResumeImport(
         id=import_id,
         user_id=user.id,
@@ -1725,8 +1734,8 @@ def test_resume_reanalysis_copy_81_candidates() -> None:
         byte_size=12345,
         checksum_sha256="4b7c1b9fb23f0000000000000000000000000000000000000000000000000000",
         storage_key="dummy_key",
+        candidates=mock_candidates,
     )
-    target_import.candidates = mock_candidates
 
     session.get.return_value = target_import
     session.scalar.return_value = 1
@@ -1764,7 +1773,16 @@ def test_resume_first_time_copy_81_candidates() -> None:
     user = User(id=uuid.uuid4(), status=UserStatus.ACTIVE)
     import_id = uuid.uuid4()
 
-    mock_candidates = [MagicMock() for _ in range(81)]
+    mock_candidates = [
+        ResumeImportCandidate(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            resume_import_id=import_id,
+            candidate_kind="skill",
+            value_json={"name": f"Skill {i}"},
+        )
+        for i in range(81)
+    ]
     target_import = ResumeImport(
         id=import_id,
         user_id=user.id,
@@ -1774,8 +1792,8 @@ def test_resume_first_time_copy_81_candidates() -> None:
         byte_size=12345,
         checksum_sha256="4b7c1b9fb23f0000000000000000000000000000000000000000000000000000",
         storage_key="dummy_key",
+        candidates=mock_candidates,
     )
-    target_import.candidates = mock_candidates
 
     session.get.return_value = target_import
     session.scalar.return_value = 0
