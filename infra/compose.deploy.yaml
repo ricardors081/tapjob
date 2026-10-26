@@ -71,7 +71,7 @@ services:
   # points DATABASE_URL/REDIS_URL at an externally managed instance simply omits these two services
   # from its env/override; nothing else in this file assumes they are local.
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
