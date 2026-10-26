@@ -55,10 +55,13 @@ class ExtractedFact:
     value: Mapping[str, JsonValue]
     confidence: float
     source_excerpt: str | None = None
+    source_page: int | None = None
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.confidence <= 1.0:
             raise ValueError("ExtractedFact.confidence must be between 0.0 and 1.0")
+        if self.source_page is not None and self.source_page < 1:
+            raise ValueError("ExtractedFact.source_page must be >= 1")
 
 
 @dataclass(frozen=True, slots=True)

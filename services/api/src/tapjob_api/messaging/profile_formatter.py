@@ -27,9 +27,9 @@ def _format_experience_item(v: dict[str, Any]) -> str:
 
 
 def _format_education_item(v: dict[str, Any]) -> str:
-    institution = v.get("institution") or "Instituição"
-    degree = v.get("degree")
-    field = v.get("fieldOfStudy")
+    institution = (v.get("institution") or "").strip()
+    degree = (v.get("degree") or "").strip()
+    field = (v.get("fieldOfStudy") or v.get("field_of_study") or "").strip()
 
     title_part = ""
     if degree and field:
@@ -38,13 +38,29 @@ def _format_education_item(v: dict[str, Any]) -> str:
         title_part = degree
     elif field:
         title_part = field
-    else:
-        title_part = "Formação Acadêmica"
 
-    desc = f"{title_part} — {institution}"
-    status = v.get("status")
+    if title_part and institution and institution != "Instituição":
+        desc = f"{title_part} — {institution}"
+    elif title_part:
+        desc = title_part
+    elif institution and institution != "Instituição":
+        desc = institution
+    else:
+        desc = "Formação Acadêmica"
+
+    status = (v.get("status") or "").strip()
     if status:
         desc += f" — {status.capitalize()}"
+
+    start_year = v.get("start", {}).get("year") if isinstance(v.get("start"), dict) else None
+    end_year = v.get("end", {}).get("year") if isinstance(v.get("end"), dict) else None
+    if start_year and end_year:
+        desc += f" ({start_year} - {end_year})"
+    elif end_year:
+        desc += f" ({end_year})"
+    elif start_year:
+        desc += f" ({start_year} - Presente)"
+
     return f"- {desc}"
 
 

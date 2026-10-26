@@ -163,6 +163,7 @@ class ProfileFact(Base):
             "lineage_id",
             unique=True,
             postgresql_where=sa.text("status = 'active'"),
+            sqlite_where=sa.text("status = 'active'"),
         ),
         # Referential consistency (docs/adr/0010-...md "referential consistency", round-1
         # independent review "BLOCKER 2"): `user_id` and `career_profile_id` were previously two

@@ -418,3 +418,90 @@ def test_fact_confirm_all_vs_privacy_inquiry_with_context() -> None:
     res_exp = interpret_conversational_message(exp_text, context=None)
     assert res_exp.intent == ConversationalIntent.TEXT_EXPERIENCE
     assert res_exp.confidence == IntentConfidence.HIGH
+
+
+def test_reimport_whatsapp_accepts_natural_sim() -> None:
+    """Verifies that natural affirmative replies ("sim", "pode atualizar", "atualiza", "confirmo")
+
+    are recognized as FACT_CONFIRM_ALL when there is an active pending review context,
+    and are NOT treated as confirmation when there is no pending review.
+    """
+    ctx_pending = ConversationContext(has_pending_fact_review=True, pending_facts_count=3)
+    ctx_none = ConversationContext(has_pending_fact_review=False)
+
+    for affirmative in ("sim", "sim.", "sim!", "pode atualizar", "atualiza", "confirmo"):
+        res_with_ctx = interpret_conversational_message(affirmative, context=ctx_pending)
+        assert res_with_ctx.intent == ConversationalIntent.FACT_CONFIRM_ALL, (
+            f"Failed for {affirmative} with context"
+        )
+        assert res_with_ctx.confidence == IntentConfidence.HIGH
+
+    # Without pending review context, bare "sim" must NOT be FACT_CONFIRM_ALL
+    for ctx in (None, ctx_none):
+        res_no_ctx = interpret_conversational_message("sim", context=ctx)
+        assert res_no_ctx.intent != ConversationalIntent.FACT_CONFIRM_ALL
+
+
+def test_first_import_copy_has_no_magic_commands() -> None:
+    """Verifies that the first resume import response message contains NO magic commands
+
+    (such as 'confirmar todos', 'rejeitar fato', 'editar fato') and follows the natural prompt copy.
+    """
+    doc_filename = "curriculo_ricardo.pdf"
+    facts_count = 5
+    expected_message = (
+        f"📄 Recebemos seu currículo ({doc_filename}) com sucesso!\n\n"
+        f"Identifiquei {facts_count} informações profissionais.\n\n"
+        "Deseja adicionar essas informações ao seu perfil? 😊"
+    )
+
+    # Check that forbidden bureaucratic magic commands are strictly absent
+    for forbidden in ("confirmar todos", "rejeitar fato", "editar fato", "aceitar fato"):
+        assert forbidden not in expected_message.lower()
+
+    assert f"({doc_filename})" in expected_message
+    assert f"{facts_count} informações profissionais" in expected_message
+    assert "Deseja adicionar essas informações ao seu perfil? 😊" in expected_message
+
+
+def test_unrelated_sim_does_not_finalize_stale_review() -> None:
+    """Verifies that when the last assistant prompt was an unrelated question
+
+    (e.g., about job recommendations or general assistance), an affirmative reply ('sim')
+    is NOT classified as FACT_CONFIRM_ALL even if has_pending_fact_review is True.
+    """
+    ctx_unrelated_prompt = ConversationContext(
+        has_pending_fact_review=True,
+        pending_facts_count=4,
+        last_assistant_prompt="Gostaria de ver vagas recomendadas para o seu perfil?",
+    )
+    for affirmative in ("sim", "sim por favor", "claro", "bora"):
+        interp = interpret_conversational_message(affirmative, context=ctx_unrelated_prompt)
+        assert interp.intent != ConversationalIntent.FACT_CONFIRM_ALL
+
+
+def test_contextual_sim_finalizes_current_resume_review() -> None:
+    """Verifies that when the active review prompt is present, natural affirmative
+
+    replies ('sim', 'pode adicionar', 'pode salvar', 'confirmo') classify as FACT_CONFIRM_ALL.
+    """
+    first_import_prompt = (
+        "📄 Recebemos seu currículo (meu_curriculo.pdf) com sucesso!\n\n"
+        "Identifiquei 5 informações profissionais.\n\n"
+        "Deseja adicionar essas informações ao seu perfil? 😊"
+    )
+    ctx_active_review = ConversationContext(
+        has_pending_fact_review=True,
+        pending_facts_count=5,
+        last_assistant_prompt=first_import_prompt,
+    )
+    for affirmative in (
+        "sim",
+        "pode adicionar",
+        "pode salvar",
+        "confirmo",
+        "pode salvar meus dados",
+    ):
+        interp = interpret_conversational_message(affirmative, context=ctx_active_review)
+        assert interp.intent == ConversationalIntent.FACT_CONFIRM_ALL
+        assert interp.confidence == IntentConfidence.HIGH

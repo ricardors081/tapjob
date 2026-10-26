@@ -3,6 +3,7 @@
 import asyncio
 import json
 from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 import pytest
@@ -16,6 +17,7 @@ from tapjob_api.ports.ai_gateway import (
     AiRequest,
     PromptRef,
     UntrustedContent,
+    UntrustedFile,
 )
 
 
@@ -437,5 +439,175 @@ def test_generate_incomplete_raises_provider_error() -> None:
         with pytest.raises(PortError) as exc_info:
             await gateway.generate(req, _call_ctx())
         assert exc_info.value.code == PortErrorCode.PROVIDER_ERROR
+
+    asyncio.run(scenario())
+
+
+def test_openai_pdf_file_input_payload(caplog: pytest.LogCaptureFixture) -> None:
+    """Proves that for PDF:
+    - endpoint = /v1/responses
+    - content contains type='input_file'
+    - filename is correct
+    - file_data starts with data:application/pdf;base64,
+    - detail='auto'
+    - Structured Output continues present
+    - Base64 does not appear in logs
+    """
+
+    async def scenario() -> None:
+        captured_request: dict[str, Any] = {}
+        pdf_bytes = b"%PDF-1.4 Fake PDF Content for Unit Test"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path.endswith("/responses")
+            payload = json.loads(request.read().decode("utf-8"))
+            captured_request.update(payload)
+            return httpx.Response(
+                200,
+                json={
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": '{"name": "Alice", "score": 95}',
+                                }
+                            ],
+                        }
+                    ],
+                    "usage": {"input_tokens": 120, "output_tokens": 40},
+                },
+            )
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        gateway = OpenAiGateway(
+            api_key="sk-test-secret-key-12345",
+            base_url="https://api.openai.com/v1",
+            endpoint="/responses",
+            http_client=client,
+        )
+
+        req = AiRequest[DummyOutput](
+            purpose=AiPurpose.RESUME_EXTRACTION,
+            prompt=PromptRef(id="test", version="1.0"),
+            variables={"var1": "value1"},
+            untrusted=(UntrustedContent(content="Some context", source_kind="document_text"),),
+            untrusted_files=(
+                UntrustedFile(
+                    source_kind="resume_document",
+                    filename="curriculo.pdf",
+                    media_type="application/pdf",
+                    content=pdf_bytes,
+                ),
+            ),
+            grounding=(),
+            validate_output=DummyOutput.model_validate,
+        )
+
+        with caplog.at_level("DEBUG"):
+            result = await gateway.generate(req, _call_ctx())
+
+        assert result.output.name == "Alice"
+        assert result.output.score == 95
+
+        # 1. Endpoint and structured output format verification
+        assert "input" in captured_request
+        assert "text" in captured_request
+        assert captured_request["text"]["format"]["type"] == "json_schema"
+        assert captured_request["text"]["format"]["name"] == "resume_extraction"
+
+        # 2. Input content verification
+        messages = captured_request["input"]
+        user_msg = next(m for m in messages if m["role"] == "user")
+        content_items = user_msg["content"]
+        assert isinstance(content_items, list)
+
+        file_item = next(item for item in content_items if item.get("type") == "input_file")
+        assert file_item["filename"] == "curriculo.pdf"
+        assert file_item["detail"] == "auto"
+        assert file_item["file_data"].startswith("data:application/pdf;base64,")
+
+        # 3. Base64 must NOT appear in logs
+        raw_b64 = file_item["file_data"].split(",", 1)[1]
+        for record in caplog.records:
+            assert raw_b64 not in record.message
+            assert "sk-test-secret-key-12345" not in record.message
+
+    asyncio.run(scenario())
+
+
+def test_openai_docx_file_input_payload(caplog: pytest.LogCaptureFixture) -> None:
+    """Proves that for DOCX:
+    - input_file is also used
+    - MIME is correct
+    - does not assume DOCX has page-image semantics equivalent to PDF
+    """
+
+    async def scenario() -> None:
+        captured_request: dict[str, Any] = {}
+        docx_bytes = b"Fake PK DOCX binary content for test"
+        docx_mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path.endswith("/responses")
+            payload = json.loads(request.read().decode("utf-8"))
+            captured_request.update(payload)
+            return httpx.Response(
+                200,
+                json={
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": '{"name": "Carol", "score": 90}',
+                                }
+                            ],
+                        }
+                    ],
+                },
+            )
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        gateway = OpenAiGateway(
+            api_key="sk-test-secret-key-docx",
+            base_url="https://api.openai.com/v1",
+            endpoint="/responses",
+            http_client=client,
+        )
+
+        req = AiRequest[DummyOutput](
+            purpose=AiPurpose.RESUME_EXTRACTION,
+            prompt=PromptRef(id="test", version="1.0"),
+            variables={},
+            untrusted=(),
+            untrusted_files=(
+                UntrustedFile(
+                    source_kind="resume_document",
+                    filename="curriculo.docx",
+                    media_type=docx_mime,
+                    content=docx_bytes,
+                ),
+            ),
+            grounding=(),
+            validate_output=DummyOutput.model_validate,
+        )
+
+        with caplog.at_level("DEBUG"):
+            result = await gateway.generate(req, _call_ctx())
+
+        assert result.output.name == "Carol"
+        assert result.output.score == 90
+
+        messages = captured_request["input"]
+        user_msg = next(m for m in messages if m["role"] == "user")
+        content_items = user_msg["content"]
+        file_item = next(item for item in content_items if item.get("type") == "input_file")
+        assert file_item["filename"] == "curriculo.docx"
+        assert file_item["file_data"].startswith(f"data:{docx_mime};base64,")
 
     asyncio.run(scenario())

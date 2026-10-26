@@ -114,7 +114,7 @@ class ValidatedCandidate:
     shape `ProfileFact.value_json` uses for a fact-kind candidate (so accepting it later is a
     straight copy, never a re-shape)."""
 
-    __slots__ = ("confidence", "kind", "source_excerpt", "value_json")
+    __slots__ = ("confidence", "kind", "source_excerpt", "source_page", "value_json")
 
     def __init__(
         self,
@@ -123,11 +123,15 @@ class ValidatedCandidate:
         value_json: dict[str, Any],
         confidence: float,
         source_excerpt: str | None,
+        source_page: int | None = None,
     ) -> None:
         self.kind = kind
         self.value_json = value_json
         self.confidence = confidence
         self.source_excerpt = (source_excerpt or "")[:MAX_SOURCE_EXCERPT_CHARS] or None
+        if source_page is not None and source_page < 1:
+            raise ValueError("source_page must be >= 1")
+        self.source_page = source_page
 
 
 def _validate_top_level_text(kind: str, value: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -165,6 +169,7 @@ def validate_candidate(fact: ExtractedFact) -> ValidatedCandidate | None:
             value_json=normalized,
             confidence=fact.confidence,
             source_excerpt=fact.source_excerpt,
+            source_page=fact.source_page,
         )
 
     model = _FACT_VALUE_MODEL_BY_KIND.get(kind)
@@ -179,4 +184,5 @@ def validate_candidate(fact: ExtractedFact) -> ValidatedCandidate | None:
         value_json=validated.model_dump(mode="json", by_alias=True),
         confidence=fact.confidence,
         source_excerpt=fact.source_excerpt,
+        source_page=fact.source_page,
     )
