@@ -73,6 +73,9 @@ class ParsedResume:
 class ResumeParser(Protocol):
     provider: str
 
+    @property
+    def model(self) -> str | None: ...
+
     async def capabilities(
         self, ctx: CallContext
     ) -> CapabilityManifest[ResumeParserCapability]: ...

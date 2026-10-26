@@ -127,6 +127,10 @@ class SemanticResumeParser:
         self.provider = provider_identity
         self._ai_gateway = ai_gateway
 
+    @property
+    def model(self) -> str | None:
+        return getattr(self._ai_gateway, "model", None)
+
     async def capabilities(self, ctx: CallContext) -> CapabilityManifest[ResumeParserCapability]:
         return CapabilityManifest(
             [

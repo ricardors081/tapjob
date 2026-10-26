@@ -112,6 +112,10 @@ class FakeJobSource:
 class FakeResumeParser:
     provider = "fake-parser"
 
+    @property
+    def model(self) -> str | None:
+        return None
+
     async def capabilities(self, ctx: CallContext) -> CapabilityManifest[ResumeParserCapability]:
         return CapabilityManifest(
             [

@@ -10,7 +10,6 @@ Textual onboarding delegates exclusively to canonical WP1.2 Career Profile servi
 from __future__ import annotations
 
 import logging
-import os
 import uuid
 from typing import Any
 
@@ -82,9 +81,8 @@ def handle_attachment_intake(
     )
     session.refresh(resume_import)
 
-    ai_gw = getattr(parser, "_ai_gateway", None)
-    parser_model = getattr(ai_gw, "model", None) or getattr(parser, "model", None)
-    parser_provider = getattr(ai_gw, "provider", None) or getattr(parser, "provider", None)
+    parser_model = getattr(parser, "model", None)
+    parser_provider = getattr(parser, "provider", None)
     input_mode = "input_file" if resume_import.media_type == "application/pdf" else "document"
 
     logger.info(
@@ -99,17 +97,15 @@ def handle_attachment_intake(
         },
     )
 
-    if (
-        os.getenv("AI_PROVIDER", "").strip().lower() == "openai"
-        and resume_import.parser_identity == "deterministic-heuristic-v1"
-    ):
+    if parser_provider is not None and resume_import.parser_identity != parser_provider:
         logger.error(
-            "document_intake.invariant_violation: deterministic parser used "
-            "when AI_PROVIDER=openai",
+            "document_intake.invariant_violation: processed import parser_identity "
+            "does not match injected parser provider",
             extra={
                 "user_id": str(user.id),
                 "resume_import_id": str(resume_import.id),
-                "parser_identity": resume_import.parser_identity,
+                "persisted_parser_identity": resume_import.parser_identity,
+                "injected_parser_provider": parser_provider,
             },
         )
 
@@ -146,19 +142,6 @@ def confirm_candidates_and_finalize(
             "parser_identity": parser_identity,
         },
     )
-    if (
-        os.getenv("AI_PROVIDER", "").strip().lower() == "openai"
-        and parser_identity == "deterministic-heuristic-v1"
-    ):
-        logger.error(
-            "document_intake.invariant_violation: deterministic parser finalized "
-            "when AI_PROVIDER=openai",
-            extra={
-                "user_id": str(user.id),
-                "resume_import_id": str(resume_import_id),
-                "parser_identity": parser_identity,
-            },
-        )
     return result
 
 
