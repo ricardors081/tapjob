@@ -29,6 +29,7 @@ from tapjob_api.resume_import.models import (
     ResumeImport,
     ResumeImportCandidate,
 )
+from tapjob_api.resume_import.parsing import DeterministicResumeParser
 from tapjob_api.resume_import.storage import ObjectStorageError, ObjectStoragePort, StoredObject
 
 pytestmark = pytest.mark.integration
@@ -124,7 +125,9 @@ def test_redelivery_while_lease_is_active_raises_for_a_bounded_retry_never_a_sil
         expected_lease_expiry = claim_result[0].processing_lease_expires_at
 
     with session_factory() as session, pytest.raises(ImportLeaseActiveError) as exc_info:
-        service.process_resume_import(session, import_id=import_id, storage=storage)
+        service.process_resume_import(
+            session, import_id=import_id, storage=storage, parser=DeterministicResumeParser()
+        )
     assert exc_info.value.retry_at == expected_lease_expiry
 
     with session_factory() as session:
@@ -172,7 +175,9 @@ def test_a_duplicate_delivery_with_exhausted_attempts_and_an_active_owner_never_
     # A duplicate delivery of the SAME (now attempt-exhausted) import, while the final attempt's
     # own lease is still genuinely active -- must raise, never silently fail the row.
     with session_factory() as session, pytest.raises(ImportLeaseActiveError):
-        service.process_resume_import(session, import_id=import_id, storage=storage)
+        service.process_resume_import(
+            session, import_id=import_id, storage=storage, parser=DeterministicResumeParser()
+        )
 
     with session_factory() as session:
         resume_import = session.get(ResumeImport, import_id)
@@ -239,7 +244,9 @@ def test_transient_storage_failure_releases_the_row_for_a_bounded_retry(
     flaky_storage: ObjectStoragePort = _AlwaysFailingStorage()
 
     with session_factory() as session, pytest.raises(TransientProcessingError):
-        service.process_resume_import(session, import_id=import_id, storage=flaky_storage)
+        service.process_resume_import(
+            session, import_id=import_id, storage=flaky_storage, parser=DeterministicResumeParser()
+        )
 
     with session_factory() as session:
         resume_import = session.get(ResumeImport, import_id)
@@ -272,13 +279,21 @@ def test_a_persistently_failing_storage_eventually_fails_terminally_without_an_i
             if attempt < MAX_PROCESSING_ATTEMPTS:
                 with pytest.raises(TransientProcessingError):
                     service.process_resume_import(
-                        session, import_id=import_id, storage=flaky_storage
+                        session,
+                        import_id=import_id,
+                        storage=flaky_storage,
+                        parser=DeterministicResumeParser(),
                     )
             else:
                 # The FINAL attempt: claim succeeds (attempts still < MAX at claim time), the
                 # storage failure is transient, but releasing-for-retry would exceed the bound --
                 # this call marks the row terminally FAILED instead of raising.
-                service.process_resume_import(session, import_id=import_id, storage=flaky_storage)
+                service.process_resume_import(
+                    session,
+                    import_id=import_id,
+                    storage=flaky_storage,
+                    parser=DeterministicResumeParser(),
+                )
 
     with session_factory() as session:
         resume_import = session.get(ResumeImport, import_id)
@@ -343,7 +358,9 @@ def test_recovery_after_a_reclaimed_lease_never_duplicates_candidates(
 
     with session_factory() as session:
         # Recovery: `process_resume_import` reclaims the expired lease and completes normally.
-        service.process_resume_import(session, import_id=import_id, storage=storage)
+        service.process_resume_import(
+            session, import_id=import_id, storage=storage, parser=DeterministicResumeParser()
+        )
 
     with session_factory() as session:
         resume_import = session.get(ResumeImport, import_id)
@@ -496,9 +513,13 @@ def test_exhausted_attempts_with_no_active_owner_fails_terminally_once(
     # Attempts are now exhausted and the lease is expired -- no active owner. Two duplicate
     # deliveries in a row must both resolve safely to the SAME terminal outcome.
     with session_factory() as session:
-        service.process_resume_import(session, import_id=import_id, storage=storage)
+        service.process_resume_import(
+            session, import_id=import_id, storage=storage, parser=DeterministicResumeParser()
+        )
     with session_factory() as session:
-        service.process_resume_import(session, import_id=import_id, storage=storage)
+        service.process_resume_import(
+            session, import_id=import_id, storage=storage, parser=DeterministicResumeParser()
+        )
 
     with session_factory() as session:
         resume_import = session.get(ResumeImport, import_id)
@@ -536,7 +557,12 @@ def test_an_object_that_does_not_match_its_recorded_checksum_is_treated_as_trans
 
     corrupting_storage: ObjectStoragePort = _CorruptingStorage()
     with session_factory() as session, pytest.raises(TransientProcessingError):
-        service.process_resume_import(session, import_id=import_id, storage=corrupting_storage)
+        service.process_resume_import(
+            session,
+            import_id=import_id,
+            storage=corrupting_storage,
+            parser=DeterministicResumeParser(),
+        )
 
     with session_factory() as session:
         resume_import = session.get(ResumeImport, import_id)

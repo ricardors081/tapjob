@@ -53,7 +53,7 @@ def configure_resume_import_worker(
     *,
     session_factory: sessionmaker[Session],
     storage: ObjectStoragePort,
-    parser: ResumeParser | None = None,
+    parser: ResumeParser,
 ) -> None:
     global _session_factory, _storage, _parser
     _session_factory = session_factory
@@ -77,6 +77,15 @@ def _require_storage() -> ObjectStoragePort:
             "call configure_resume_import_worker() at process start"
         )
     return _storage
+
+
+def _require_parser() -> ResumeParser:
+    if _parser is None:
+        raise RuntimeError(
+            "resume_import worker not configured -- "
+            "call configure_resume_import_worker() at process start"
+        )
+    return _parser
 
 
 def lease_wait_retry_countdown(retry_at: datetime, *, now: datetime | None = None) -> float:
@@ -138,7 +147,7 @@ def process_resume_import_task(self: Task[Any, Any], import_id: str) -> None:
                 session,
                 import_id=uuid.UUID(import_id),
                 storage=_require_storage(),
-                parser=_parser,
+                parser=_require_parser(),
             )
         except TransientProcessingError as error:
             raise self.retry(exc=error, countdown=TRANSIENT_RETRY_COUNTDOWN_SECONDS) from error

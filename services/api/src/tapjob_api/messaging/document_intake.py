@@ -10,6 +10,7 @@ Textual onboarding delegates exclusively to canonical WP1.2 Career Profile servi
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from typing import Any
 
@@ -21,6 +22,7 @@ from tapjob_api.career_profile.fact_values import FactValue
 from tapjob_api.career_profile.models import FactType, ProfileFact
 from tapjob_api.career_profile.service import ProfileUpdateResult
 from tapjob_api.identity.models import User
+from tapjob_api.ports.resume_parser import ResumeParser
 from tapjob_api.resume_import import service as resume_import_service
 from tapjob_api.resume_import.commands import (
     CandidateReviewDecision,
@@ -48,13 +50,14 @@ def handle_attachment_intake(
     original_filename: str,
     declared_content_type: str,
     storage: ObjectStoragePort,
+    parser: ResumeParser,
     import_id: uuid.UUID | None = None,
 ) -> ResumeImport:
     """Delegates incoming WhatsApp document attachments to canonical Resume Import (WP1.3).
 
     Workflow:
     1. Upload validation & secure object storage via create_resume_import.
-    2. Extraction & candidate proposal via process_resume_import.
+    2. Extraction & candidate proposal via process_resume_import with injected parser.
     Returns the ready-for-review ResumeImport record.
     """
     kwargs: dict[str, Any] = {}
@@ -75,16 +78,41 @@ def handle_attachment_intake(
         session,
         import_id=resume_import.id,
         storage=storage,
+        parser=parser,
     )
     session.refresh(resume_import)
+
+    ai_gw = getattr(parser, "_ai_gateway", None)
+    parser_model = getattr(ai_gw, "model", None) or getattr(parser, "model", None)
+    parser_provider = getattr(ai_gw, "provider", None) or getattr(parser, "provider", None)
+    input_mode = "input_file" if resume_import.media_type == "application/pdf" else "document"
 
     logger.info(
         "document_intake.attachment_processed_via_wp13",
         extra={
             "user_id": str(user.id),
             "resume_import_id": str(resume_import.id),
+            "parser_identity": resume_import.parser_identity,
+            "input_mode": input_mode,
+            "provider": parser_provider,
+            "model": parser_model,
         },
     )
+
+    if (
+        os.getenv("AI_PROVIDER", "").strip().lower() == "openai"
+        and resume_import.parser_identity == "deterministic-heuristic-v1"
+    ):
+        logger.error(
+            "document_intake.invariant_violation: deterministic parser used "
+            "when AI_PROVIDER=openai",
+            extra={
+                "user_id": str(user.id),
+                "resume_import_id": str(resume_import.id),
+                "parser_identity": resume_import.parser_identity,
+            },
+        )
+
     return resume_import
 
 
@@ -107,14 +135,30 @@ def confirm_candidates_and_finalize(
         import_id=resume_import_id,
         command=command,
     )
+    import_rec = session.get(ResumeImport, resume_import_id)
+    parser_identity = import_rec.parser_identity if import_rec else None
     logger.info(
         "document_intake.finalized_via_wp13",
         extra={
             "user_id": str(user.id),
             "resume_import_id": str(resume_import_id),
             "profile_version": result.resume_version.profile_version,
+            "parser_identity": parser_identity,
         },
     )
+    if (
+        os.getenv("AI_PROVIDER", "").strip().lower() == "openai"
+        and parser_identity == "deterministic-heuristic-v1"
+    ):
+        logger.error(
+            "document_intake.invariant_violation: deterministic parser finalized "
+            "when AI_PROVIDER=openai",
+            extra={
+                "user_id": str(user.id),
+                "resume_import_id": str(resume_import_id),
+                "parser_identity": parser_identity,
+            },
+        )
     return result
 
 

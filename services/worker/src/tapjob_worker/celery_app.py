@@ -103,6 +103,7 @@ def create_celery_app(
         redis_client=redis_client,
         channel_adapter=channel_adapter,
         storage=storage,
+        resume_parser=parser,
     )
 
     app.conf.update(

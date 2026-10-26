@@ -46,6 +46,7 @@ from tapjob_api.ports.messaging_channel import (
     InboundMessage,
     MessagingChannel,
 )
+from tapjob_api.ports.resume_parser import ResumeParser
 from tapjob_api.resume_import.errors import ImportLeaseActiveError
 from tapjob_api.resume_import.storage import ObjectStoragePort
 
@@ -60,29 +61,41 @@ _session_factory: sessionmaker[Session] | None = None
 _redis_client: redis.Redis | None = None
 _channel_adapter: MessagingChannel | None = None
 _storage: ObjectStoragePort | None = None
+_resume_parser: ResumeParser | None = None
 
 
 def configure_messaging_worker(
     *,
     session_factory: sessionmaker[Session],
+    resume_parser: ResumeParser,
     redis_client: redis.Redis | None = None,
     channel_adapter: MessagingChannel | None = None,
     storage: ObjectStoragePort | None = None,
 ) -> None:
-    """Configures database session factory, redis, adapter, and storage for messaging worker
+    """Configures database session factory, redis, adapter, storage, and parser for messaging worker
     tasks.
     """
-    global _session_factory, _redis_client, _channel_adapter, _storage
+    global _session_factory, _redis_client, _channel_adapter, _storage, _resume_parser
     _session_factory = session_factory
     _redis_client = redis_client
     _channel_adapter = channel_adapter
     _storage = storage
+    _resume_parser = resume_parser
 
 
 def _require_session_factory() -> sessionmaker[Session]:
     if _session_factory is None:
         raise RuntimeError("Messaging worker session factory not configured")
     return _session_factory
+
+
+def _require_resume_parser() -> ResumeParser:
+    if _resume_parser is None:
+        raise RuntimeError(
+            "Messaging worker resume parser not configured -- "
+            "call configure_messaging_worker(..., resume_parser=...) at process start"
+        )
+    return _resume_parser
 
 
 BASE_INBOUND_BACKOFF_SECONDS = 2.0
@@ -175,12 +188,13 @@ def process_inbound_envelope_task(envelope_id: int) -> None:
             provider_config_key=f"{envelope.provider}_{envelope.provider_instance}",
         )
 
-        # Run orchestration with injected adapter and storage
+        # Run orchestration with injected adapter, storage, and parser
         dispatch_inbound_message(
             session,
             _redis_client,
             inbound=inbound_msg,
             provider_id=provider.id,
+            resume_parser=_require_resume_parser(),
             channel_adapter=_channel_adapter,
             storage=_storage,
             envelope_id=envelope.id,

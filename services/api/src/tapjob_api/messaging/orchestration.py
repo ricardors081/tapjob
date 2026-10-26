@@ -85,6 +85,7 @@ from tapjob_api.messaging.service import (
 )
 from tapjob_api.ports._common import CallContext, PortError
 from tapjob_api.ports.messaging_channel import InboundMessage, MessagingChannel
+from tapjob_api.ports.resume_parser import ResumeParser
 from tapjob_api.resume_import import service as resume_import_service
 from tapjob_api.resume_import.candidates import CandidateKind
 from tapjob_api.resume_import.commands import CandidateReviewDecision, ReviewDecisionKind
@@ -247,6 +248,7 @@ def reconcile_reserved_resume_import(
     envelope_id: int,
     target_import_uuid: uuid.UUID,
     storage: ObjectStoragePort,
+    parser: ResumeParser,
     doc_filename: str,
 ) -> tuple[bool, str]:
     """Reconciles a PENDING RESUME_IMPORT effect against canonical domain state (Finding 1).
@@ -280,13 +282,13 @@ def reconcile_reserved_resume_import(
             raise ImportLeaseActiveError(retry_at=active_lease_expiry)
         # Lease expired - reclaim via canonical pipeline
         resume_import_service.process_resume_import(
-            session, import_id=existing_import.id, storage=storage
+            session, import_id=existing_import.id, storage=storage, parser=parser
         )
         session.refresh(existing_import)
 
     elif existing_import.status == ImportStatus.QUEUED:
         resume_import_service.process_resume_import(
-            session, import_id=existing_import.id, storage=storage
+            session, import_id=existing_import.id, storage=storage, parser=parser
         )
         session.refresh(existing_import)
 
@@ -1020,6 +1022,7 @@ def dispatch_inbound_message(
     *,
     inbound: InboundMessage,
     provider_id: uuid.UUID,
+    resume_parser: ResumeParser | None = None,
     channel_adapter: MessagingChannel | None = None,
     storage: ObjectStoragePort | None = None,
     envelope_id: int | None = None,
@@ -1189,12 +1192,15 @@ def dispatch_inbound_message(
                 ):
                     target_import_uuid = uuid.UUID(existing_import_effect.resource_id)
                     doc_filename = doc_att.filename or "curriculo.pdf"
+                    if resume_parser is None:
+                        raise RuntimeError("resume_parser is required for resume reconciliation")
                     is_reconciled, reconciled_response = reconcile_reserved_resume_import(
                         session,
                         user=user,
                         envelope_id=envelope_id,
                         target_import_uuid=target_import_uuid,
                         storage=storage,
+                        parser=resume_parser,
                         doc_filename=doc_filename,
                     )
                     if is_reconciled:
@@ -1295,6 +1301,8 @@ def dispatch_inbound_message(
 
             import_res: dict[str, Any] | None = None
             try:
+                if resume_parser is None:
+                    raise RuntimeError("resume_parser is required for document intake")
                 import_res = tool_ingest_resume(
                     session,
                     user=user,
@@ -1302,6 +1310,7 @@ def dispatch_inbound_message(
                     filename=doc_att.filename or "curriculo.pdf",
                     content_type=doc_att.mime_type,
                     storage=storage,
+                    parser=resume_parser,
                     import_id=target_import_uuid,
                 )
             except SoftTimeLimitExceeded:

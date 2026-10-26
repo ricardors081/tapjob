@@ -250,6 +250,7 @@ def test_dispatch_outbox_task_runtime_driver() -> None:
     configure_messaging_worker(
         session_factory=session_factory,
         channel_adapter=adapter,
+        resume_parser=MagicMock(),
     )
 
     count = dispatch_outbox_task(limit=10)
@@ -268,7 +269,7 @@ def test_dispatch_due_reminders_task_runtime_driver() -> None:
     session.execute.return_value = mock_res
 
     session_factory = MagicMock(return_value=session)
-    configure_messaging_worker(session_factory=session_factory)
+    configure_messaging_worker(session_factory=session_factory, resume_parser=MagicMock())
 
     count = dispatch_due_reminders_task(limit=25)
     assert count == 0

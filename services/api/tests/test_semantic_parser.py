@@ -271,13 +271,14 @@ def test_create_resume_parser_bootstrap() -> None:
     from tapjob_api.core.config import Environment, RuntimeSettings
     from tapjob_api.resume_import.parsing import DeterministicResumeParser
 
-    # 1. ai_provider="openai" but unset key -> Deterministic parser
+    # 1. ai_provider="openai" but unset key -> ValueError (fail-fast, no silent fallback)
     settings_no_key = RuntimeSettings(
         app_env=Environment.LOCAL,
         ai_provider="openai",
         openai_api_key=None,
     )
-    assert isinstance(create_resume_parser(settings_no_key), DeterministicResumeParser)
+    with pytest.raises(ValueError, match="OpenAI API key is required when AI_PROVIDER=openai"):
+        create_resume_parser(settings_no_key)
 
     # 2. ai_provider="openai" and key present -> Semantic parser
     settings_openai = RuntimeSettings(

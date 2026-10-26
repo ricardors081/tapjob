@@ -33,6 +33,7 @@ from tapjob_api.resume_import.models import (
     ResumeImportCandidate,
     ResumeVersion,
 )
+from tapjob_api.resume_import.parsing import DeterministicResumeParser
 from tapjob_api.resume_import.storage import ObjectStoragePort
 
 pytestmark = pytest.mark.integration
@@ -127,7 +128,9 @@ def test_full_lifecycle_upload_review_finalize_creates_master_resume(
     # `app.state`), proving the real end-to-end object-storage round trip.
     storage = _resume_storage(identity_client)
     with session_factory() as session:
-        service.process_resume_import(session, import_id=import_id, storage=storage)
+        service.process_resume_import(
+            session, import_id=import_id, storage=storage, parser=DeterministicResumeParser()
+        )
 
     with session_factory() as session:
         resume_import = session.get(ResumeImport, import_id)
@@ -235,7 +238,9 @@ def test_finalize_is_idempotent_on_retry(
     )
     storage = _resume_storage(identity_client)
     with session_factory() as session:
-        service.process_resume_import(session, import_id=import_id, storage=storage)
+        service.process_resume_import(
+            session, import_id=import_id, storage=storage, parser=DeterministicResumeParser()
+        )
 
     get_response = identity_client.get(
         f"{IMPORTS_PATH}/{import_id}", headers=bearer_header("token-2")
@@ -287,12 +292,16 @@ def test_worker_redelivery_of_an_already_processed_import_never_duplicates_candi
     storage = _resume_storage(identity_client)
 
     with session_factory() as session:
-        service.process_resume_import(session, import_id=import_id, storage=storage)
+        service.process_resume_import(
+            session, import_id=import_id, storage=storage, parser=DeterministicResumeParser()
+        )
     with session_factory() as session:
         # Simulates Celery redelivering the exact same task message after the first delivery
         # already completed -- `claim_import_for_processing`'s conditional UPDATE finds the row no
         # longer `QUEUED` and this call returns immediately without touching candidates at all.
-        service.process_resume_import(session, import_id=import_id, storage=storage)
+        service.process_resume_import(
+            session, import_id=import_id, storage=storage, parser=DeterministicResumeParser()
+        )
 
     with session_factory() as session:
         resume_import = session.get(ResumeImport, import_id)
@@ -328,7 +337,9 @@ def test_concurrent_finalizations_of_the_same_import_produce_exactly_one_logical
     )
     storage = _resume_storage(identity_client)
     with session_factory() as session:
-        service.process_resume_import(session, import_id=import_id, storage=storage)
+        service.process_resume_import(
+            session, import_id=import_id, storage=storage, parser=DeterministicResumeParser()
+        )
 
     get_response = identity_client.get(
         f"{IMPORTS_PATH}/{import_id}", headers=bearer_header("token-concurrent")
@@ -384,7 +395,9 @@ def test_stale_profile_version_at_finalize_is_a_clean_conflict_with_zero_partial
     )
     storage = _resume_storage(identity_client)
     with session_factory() as session:
-        service.process_resume_import(session, import_id=import_id, storage=storage)
+        service.process_resume_import(
+            session, import_id=import_id, storage=storage, parser=DeterministicResumeParser()
+        )
 
     # The profile changes BETWEEN parsing and finalization.
     patch_response = identity_client.patch(
@@ -509,7 +522,9 @@ def test_a_malformed_document_fails_processing_with_a_deterministic_failed_state
 
     storage = _resume_storage(identity_client)
     with session_factory() as session:
-        service.process_resume_import(session, import_id=import_id, storage=storage)
+        service.process_resume_import(
+            session, import_id=import_id, storage=storage, parser=DeterministicResumeParser()
+        )
 
     with session_factory() as session:
         resume_import = session.get(ResumeImport, import_id)
@@ -565,7 +580,9 @@ def test_a_document_with_meaningful_text_but_no_recognizable_candidates_fails_cl
 
     storage = _resume_storage(identity_client)
     with session_factory() as session:
-        service.process_resume_import(session, import_id=import_id, storage=storage)
+        service.process_resume_import(
+            session, import_id=import_id, storage=storage, parser=DeterministicResumeParser()
+        )
 
     with session_factory() as session:
         resume_import = session.get(ResumeImport, import_id)

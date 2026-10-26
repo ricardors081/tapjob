@@ -39,6 +39,7 @@ from tapjob_api.ports.messaging_channel import (
     InboundAttachment,
     InboundMessage,
 )
+from tapjob_api.ports.resume_parser import ResumeParser
 from tapjob_api.resume_import.commands import CandidateReviewDecision, ReviewDecisionKind
 from tapjob_api.resume_import.errors import (
     MalformedDocumentError,
@@ -105,6 +106,7 @@ def test_resume_ingest_storage_transient_failure_propagates() -> None:
             provider_id=uuid.uuid4(),
             channel_adapter=fake_channel,
             storage=storage,
+            resume_parser=MagicMock(spec=ResumeParser),
         )
 
 
@@ -155,6 +157,7 @@ def test_resume_ingest_malformed_document_fails_closed_terminal() -> None:
             provider_id=uuid.uuid4(),
             channel_adapter=fake_channel,
             storage=storage,
+            resume_parser=MagicMock(spec=ResumeParser),
         )
 
     assert len(keys) == 1
@@ -819,6 +822,7 @@ def test_first_contact_with_document_processes_in_same_inbound() -> None:
             provider_id=uuid.uuid4(),
             channel_adapter=fake_channel,
             storage=storage,
+            resume_parser=MagicMock(spec=ResumeParser),
         )
 
     # Greeting queued AND document processed
@@ -1197,6 +1201,7 @@ def test_sanitized_real_fixture_media_pipeline_integration() -> None:
             channel_adapter=fake_channel,
             storage=storage,
             envelope_id=101,
+            resume_parser=MagicMock(spec=ResumeParser),
         )
 
     assert len(keys) == 1

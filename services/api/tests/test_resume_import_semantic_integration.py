@@ -27,8 +27,8 @@ from tapjob_api.ports.ai_gateway import (
     AiUsage,
 )
 from tapjob_api.ports.capabilities import CapabilityManifest, CapabilityReport, CapabilityStatus
+from tapjob_api.resume_import.errors import TransientProcessingError
 from tapjob_api.resume_import.models import ImportStatus
-from tapjob_api.resume_import.parsing import PARSER_IDENTITY
 from tapjob_api.resume_import.semantic_parser import SEMANTIC_PARSER_IDENTITY, SemanticResumeParser
 from tapjob_api.resume_import.semantic_schema import (
     SemanticExperience,
@@ -232,8 +232,11 @@ def test_process_resume_import_auth_failure_does_not_trigger_fallback(db_session
     assert len(imp.candidates) == 0
 
 
-def test_process_resume_import_timeout_triggers_fallback(db_session: Session) -> None:
-    """Requirement 3: Transient timeout (TIMEOUT) triggers deterministic fallback."""
+def test_process_resume_import_timeout_raises_transient_error_without_fallback(
+    db_session: Session,
+) -> None:
+    """Transient timeout (TIMEOUT) raises TransientProcessingError and does NOT
+    fallback to deterministic."""
     user = User(id=uuid.uuid4(), locale="pt-BR")
     db_session.add(user)
     db_session.commit()
@@ -251,21 +254,25 @@ def test_process_resume_import_timeout_triggers_fallback(db_session: Session) ->
     gateway = FlakyAiGateway(should_fail=True, failure_code=PortErrorCode.TIMEOUT)
     parser = SemanticResumeParser(gateway)
 
-    process_resume_import(
-        db_session,
-        import_id=imp.id,
-        storage=storage,
-        parser=parser,
-    )
+    with pytest.raises(TransientProcessingError):
+        process_resume_import(
+            db_session,
+            import_id=imp.id,
+            storage=storage,
+            parser=parser,
+        )
 
     db_session.refresh(imp)
-    assert imp.status == ImportStatus.READY_FOR_REVIEW
-    assert imp.parser_identity == PARSER_IDENTITY
-    assert len(imp.candidates) > 0
+    assert imp.status == ImportStatus.QUEUED
+    assert imp.parser_identity is None
+    assert len(imp.candidates) == 0
 
 
-def test_process_resume_import_unavailable_triggers_fallback(db_session: Session) -> None:
-    """Requirement 3: Transient unavailability (UNAVAILABLE) triggers deterministic fallback."""
+def test_process_resume_import_unavailable_raises_transient_error_without_fallback(
+    db_session: Session,
+) -> None:
+    """Transient unavailability (UNAVAILABLE) raises TransientProcessingError
+    and does NOT fallback to deterministic."""
     user = User(id=uuid.uuid4(), locale="pt-BR")
     db_session.add(user)
     db_session.commit()
@@ -283,17 +290,18 @@ def test_process_resume_import_unavailable_triggers_fallback(db_session: Session
     gateway = FlakyAiGateway(should_fail=True, failure_code=PortErrorCode.UNAVAILABLE)
     parser = SemanticResumeParser(gateway)
 
-    process_resume_import(
-        db_session,
-        import_id=imp.id,
-        storage=storage,
-        parser=parser,
-    )
+    with pytest.raises(TransientProcessingError):
+        process_resume_import(
+            db_session,
+            import_id=imp.id,
+            storage=storage,
+            parser=parser,
+        )
 
     db_session.refresh(imp)
-    assert imp.status == ImportStatus.READY_FOR_REVIEW
-    assert imp.parser_identity == PARSER_IDENTITY
-    assert len(imp.candidates) > 0
+    assert imp.status == ImportStatus.QUEUED
+    assert imp.parser_identity is None
+    assert len(imp.candidates) == 0
 
 
 def test_process_resume_import_does_not_catch_type_error(db_session: Session) -> None:

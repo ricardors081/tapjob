@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from typing import cast
 from unittest.mock import MagicMock, patch
 
+import pytest
 from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import Table, create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -35,6 +36,11 @@ from tapjob_api.messaging.tasks import (
     recover_unprocessed_inbound_envelopes_task,
 )
 from tapjob_api.ports._common import PortError, PortErrorCode
+
+
+@pytest.fixture(autouse=True)
+def _configure_test_resume_parser(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("tapjob_api.messaging.tasks._resume_parser", MagicMock())
 
 
 def test_is_transient_inbound_error_classification() -> None:

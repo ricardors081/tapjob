@@ -40,6 +40,7 @@ from tapjob_api.messaging.document_intake import (
 from tapjob_api.messaging.job_matching import explain_match, find_matching_jobs
 from tapjob_api.messaging.reminders_service import create_reminder
 from tapjob_api.messaging.resume_tailoring import generate_grounded_tailored_resume
+from tapjob_api.ports.resume_parser import ResumeParser
 from tapjob_api.resume_import.commands import CandidateReviewDecision
 from tapjob_api.resume_import.storage import ObjectStoragePort
 
@@ -95,6 +96,7 @@ def tool_ingest_resume(
     filename: str,
     content_type: str,
     storage: ObjectStoragePort,
+    parser: ResumeParser,
     import_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """3. Tool: ingest_resume."""
@@ -105,6 +107,7 @@ def tool_ingest_resume(
         original_filename=filename,
         declared_content_type=content_type,
         storage=storage,
+        parser=parser,
         import_id=import_id,
     )
     return {
