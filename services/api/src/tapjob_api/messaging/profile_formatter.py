@@ -14,6 +14,17 @@ from typing import Any
 from tapjob_api.career_profile.models import FactType
 from tapjob_api.career_profile.service import TruthSnapshot
 
+_EDUCATION_STATUS_LABELS: dict[str, str] = {
+    "completed": "Concluído",
+    "concluído": "Concluído",
+    "concluido": "Concluído",
+    "in_progress": "Em andamento",
+    "em_andamento": "Em andamento",
+    "em andamento": "Em andamento",
+    "incomplete": "Incompleto",
+    "incompleto": "Incompleto",
+}
+
 
 def _format_experience_item(v: dict[str, Any]) -> str:
     title = v.get("title") or "Experiência Profissional"
@@ -48,9 +59,11 @@ def _format_education_item(v: dict[str, Any]) -> str:
     else:
         desc = "Formação Acadêmica"
 
-    status = (v.get("status") or "").strip()
-    if status:
-        desc += f" — {status.capitalize()}"
+    raw_status = (v.get("status") or "").strip().lower()
+    if raw_status:
+        status_label = _EDUCATION_STATUS_LABELS.get(raw_status)
+        if status_label:
+            desc += f" — {status_label}"
 
     start_year = v.get("start", {}).get("year") if isinstance(v.get("start"), dict) else None
     end_year = v.get("end", {}).get("year") if isinstance(v.get("end"), dict) else None
