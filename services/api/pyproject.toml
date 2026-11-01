@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Career Core backend: FastAPI HTTP service, shared runtime foundations and database migrations."
 requires-python = ">=3.12"
 dependencies = [
-  "alembic>=1.20.0",
+  "alembic>=1.20.1",
   "boto3>=1.43.108",
   "celery[redis]>=5.6.3",
   "fastapi>=0.142.2",
